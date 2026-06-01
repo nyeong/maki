@@ -96,19 +96,12 @@ fn run_command(command: Command) -> Result<(), RunError> {
 enum CliError {
     MissingCommand,
     UnknownCommand(String),
-    MissingArgument {
-        command: &'static str,
-        argument: &'static str,
-    },
 }
 
 impl Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CliError::UnknownCommand(s) => write!(f, "Unknown command: {}", s),
-            CliError::MissingArgument { command, argument } => {
-                write!(f, "Missing argument: {} for command: {}", argument, command)
-            }
             CliError::MissingCommand => write!(f, "Missing command"),
         }
     }
@@ -120,10 +113,7 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
 
     match command.as_str() {
         "serve" => {
-            let root = args.get(2).ok_or(CliError::MissingArgument {
-                command: "serve",
-                argument: "markdown-directory",
-            })?;
+            let root = args.get(2).map_or(".", String::as_str);
 
             Ok(Command::Serve {
                 root: PathBuf::from(root),
@@ -199,12 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_missing_argument() {
+    fn test_parse_serve_defaults_to_current_directory() {
         assert_eq!(
             parse_args(&args(&["maki", "serve"])),
-            Err(CliError::MissingArgument {
-                command: "serve",
-                argument: "markdown-directory",
+            Ok(Command::Serve {
+                root: PathBuf::from(".")
             })
         )
     }
