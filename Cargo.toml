@@ -1,0 +1,7 @@
+[package]
+name = "maki"
+version = "0.1.0"
+authors = ["An Nyeong <me@annyeong.me>"]
+edition = "2024"
+description = "File based markdown wiki"
+readme = "README.md"
