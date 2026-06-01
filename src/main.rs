@@ -28,6 +28,10 @@ enum RunError {
         path: PathBuf,
         source: std::io::Error,
     },
+    InvalidMarkdownPath {
+        path: PathBuf,
+        source: std::path::StripPrefixError,
+    },
 }
 
 impl Display for RunError {
@@ -37,7 +41,9 @@ impl Display for RunError {
             RunError::RootNotDirectory(path) => {
                 write!(f, "Root not a directory: {}", path.display())
             }
-
+            RunError::InvalidMarkdownPath { path, source } => {
+                write!(f, "Invalid markdown path {}: {}", path.display(), source)
+            }
             RunError::ReadDirectoryFailed { path, source } => {
                 write!(f, "Failed to read directory {}: {}", path.display(), source)
             }
@@ -83,9 +89,29 @@ fn run_serve(root: PathBuf) -> Result<(), RunError> {
 
     let files = list_markdown_files(&root)?;
     println!("Found {} markdown files", files.len());
-    println!("{:?}", files);
+    let relative_files = relative_markdown_paths(&root, &files)?;
+    for file in &relative_files {
+        println!("- {}", file.display());
+    }
 
     Ok(())
+}
+
+fn relative_markdown_paths(root: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>, RunError> {
+    let mut vec = Vec::new();
+
+    for file in files {
+        let relative = file
+            .strip_prefix(root)
+            .map_err(|source| RunError::InvalidMarkdownPath {
+                path: file.to_path_buf(),
+                source,
+            })?
+            .to_path_buf();
+        vec.push(relative);
+    }
+
+    Ok(vec)
 }
 
 fn run_command(command: Command) -> Result<(), RunError> {
@@ -210,6 +236,17 @@ mod tests {
                 PathBuf::from("./tests/fixtures/basic-maki-project/README.md"),
                 PathBuf::from("./tests/fixtures/basic-maki-project/daily.md"),
             ]
+        );
+    }
+
+    #[test]
+    fn test_relative_markdown_paths() {
+        let root = PathBuf::from("./tests/fixtures/basic-maki-project");
+        let files = list_markdown_files(&root).unwrap();
+        let relative = relative_markdown_paths(&root, &files).unwrap();
+        assert_eq!(
+            relative,
+            vec![PathBuf::from("README.md"), PathBuf::from("daily.md"),]
         );
     }
 }
