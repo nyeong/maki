@@ -45,6 +45,8 @@ impl Display for RunError {
     }
 }
 
+/// Lists all markdown files in the given directory.
+/// Currently, it does not recursively search subdirectories.
 fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, RunError> {
     let entries = std::fs::read_dir(root).map_err(|source| RunError::ReadDirectoryFailed {
         path: root.to_path_buf(),
@@ -53,7 +55,6 @@ fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, RunError> {
 
     let mut files = Vec::new();
 
-    println!("Markdown files:");
     for entry in entries {
         let entry = entry.map_err(|source| RunError::ReadDirectoryFailed {
             path: root.to_path_buf(),
@@ -67,6 +68,7 @@ fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, RunError> {
         }
     }
 
+    files.sort();
     Ok(files)
 }
 
@@ -202,10 +204,12 @@ mod tests {
     fn test_list_markdown_files() {
         let path = PathBuf::from("./tests/fixtures/basic-maki-project");
         let files = list_markdown_files(&path).unwrap();
-        assert_eq!(files.len(), 1);
         assert_eq!(
-            files[0],
-            PathBuf::from("./tests/fixtures/basic-maki-project/README.md")
+            files,
+            vec![
+                PathBuf::from("./tests/fixtures/basic-maki-project/README.md"),
+                PathBuf::from("./tests/fixtures/basic-maki-project/daily.md"),
+            ]
         );
     }
 }
