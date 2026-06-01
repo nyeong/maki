@@ -1,0 +1,7 @@
+[
+  {
+    "label": "cargo run",
+    "command": "echo $ZED_FILE",
+    "tags": ["rustc-main"],
+  },
+]
