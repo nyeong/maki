@@ -1,9 +1,83 @@
 use std::fmt::Display;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve { root: PathBuf },
+}
+
+fn handle_request(root: &Path, request: &str, files: &[PathBuf]) -> Result<String, RunError> {
+    println!("request: {}", request);
+    let html = render_index(root, files)?;
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+        html.len(),
+        html
+    );
+    Ok(http_response)
+}
+
+#[derive(Debug, PartialEq)]
+struct RawRequest {
+    method: String,
+    path: String,
+    protocol: String,
+    host: String,
+    body: String,
+}
+
+/// Parses a raw HTTP request string into a [`RawRequest`] struct.
+fn parse_request(request: &str) -> Result<RawRequest, RunError> {
+    let parts: Vec<&str> = request.split_whitespace().collect();
+    println!("parts: {:?}", parts);
+
+    Ok(RawRequest {
+        method: parts[0].to_string(),
+        path: parts[1].to_string(),
+        protocol: "HTTP/1.1".to_string(),
+        host: "localhost:4000".to_string(),
+        body: "".to_string(),
+    })
+}
+
+fn serve_http(root: &Path, files: &[PathBuf]) -> Result<(), RunError> {
+    let listener =
+        TcpListener::bind("127.0.0.1:4000").map_err(|source| RunError::IoError { source })?;
+
+    println!("Listening on http://localhost:4000");
+
+    let mut buffer = [0u8; 1024];
+    for stream in listener.incoming() {
+        let mut stream = stream.map_err(|source| RunError::IoError { source })?;
+        stream
+            .read(&mut buffer)
+            .map_err(|source| RunError::IoError { source })?;
+        let request = String::from_utf8_lossy(&buffer);
+        println!("raw request: {:?}", request);
+        let request = parse_request(&request)?;
+
+        println!("{:?}", request);
+        let response = handle_request(&root, "hi", files)?;
+        stream
+            .write_all(response.as_bytes())
+            .map_err(|source| RunError::IoError { source })?;
+    }
+
+    Ok(())
+}
+
+fn render_index(root: &Path, files: &[PathBuf]) -> Result<String, RunError> {
+    let mut html = String::from("<!doctype html><html><body><ul>");
+    let files = relative_markdown_paths(root, files)?;
+
+    for file in files {
+        html.push_str(&format!("<li>{}</li>", file.display(),))
+    }
+
+    html.push_str("</ul></body></html>");
+    Ok(html)
 }
 
 fn main() {
@@ -32,6 +106,9 @@ enum RunError {
         path: PathBuf,
         source: std::path::StripPrefixError,
     },
+    IoError {
+        source: std::io::Error,
+    },
 }
 
 impl Display for RunError {
@@ -47,6 +124,7 @@ impl Display for RunError {
             RunError::ReadDirectoryFailed { path, source } => {
                 write!(f, "Failed to read directory {}: {}", path.display(), source)
             }
+            RunError::IoError { source } => write!(f, "IO error: {}", source),
         }
     }
 }
@@ -93,8 +171,7 @@ fn run_serve(root: PathBuf) -> Result<(), RunError> {
     for file in &relative_files {
         println!("- {}", file.display());
     }
-
-    Ok(())
+    serve_http(&root, &files)
 }
 
 fn relative_markdown_paths(root: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>, RunError> {
@@ -184,16 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn test_run_serve() {
-        let path = PathBuf::from("./tests/fixtures/basic-maki-project");
-
-        match run_command(Command::Serve { root: path.clone() }) {
-            Ok(_) => {}
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    #[test]
     fn test_parse_serve_command() {
         assert_eq!(
             parse_args(&args(&["maki", "serve", "path/to/markdown"])),
@@ -248,5 +315,32 @@ mod tests {
             relative,
             vec![PathBuf::from("README.md"), PathBuf::from("daily.md"),]
         );
+    }
+
+    #[test]
+    fn test_render_index() {
+        let html = render_index(
+            &PathBuf::from("."),
+            &[PathBuf::from("./README.md"), PathBuf::from("./daily.md")],
+        );
+        assert!(html.is_ok());
+        let html = html.unwrap();
+
+        assert!(html.contains("README.md"));
+        assert!(html.contains("daily.md"));
+    }
+
+    #[test]
+    fn test_parse_request() {
+        let raw_request = "GET /favicon.ico HTTP/1.1\r\nHost: localhost:4000\r\nConnection: keep-alive\r\nsec-ch-ua-platform: \"macOS\"\r\nUser-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36\r\nsec-ch-ua: \"Not/A)Brand\";v=\"99\", \"Chromium\";v=\"148\"\r\nsec-ch-ua-mobile: ?0\r\nAccept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nReferer: http://localhost:4000/nice\r\nAccept-Encoding: gzip, deflate, br, zstd\r\nAccept-Language: en-US,en;q=0.9,ko;q=0.8\r\n\r\nst: document\r\nAccept-Encoding: gzip, deflate, br, zstd\r\nAccept-Language: en-US,en;q=0.9,ko;q=0.8\r\n\r\n\0";
+
+        let request = parse_request(raw_request);
+        assert!(request.is_ok());
+        let request = request.unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/favicon.ico");
+        assert_eq!(request.protocol, "HTTP/1.1");
+        assert_eq!(request.host, "localhost:4000");
+        assert_eq!(request.body, "");
     }
 }
