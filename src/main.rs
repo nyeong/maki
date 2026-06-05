@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -35,9 +36,9 @@ fn parse_method(method: &str) -> Result<HttpMethod, RunError> {
     }
 }
 
-fn parse_protocol(protocol: &str) -> Result<HttpProtocol, RunError> {
+fn parse_protocol(protocol: &str) -> Result<HttpVersion, RunError> {
     match protocol {
-        "HTTP/1.1" => Ok(HttpProtocol::Http1_1),
+        "HTTP/1.1" => Ok(HttpVersion::Http1_1),
         _ => Err(RunError::RequestParseError),
     }
 }
@@ -49,7 +50,7 @@ struct HttpResponse {
     body: String,
 }
 
-impl FromStr for HttpProtocol {
+impl FromStr for HttpVersion {
     type Err = RunError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -62,7 +63,7 @@ fn handle_request(
     request: &HttpRequest,
     files: &[PathBuf],
 ) -> Result<HttpResponse, RunError> {
-    let response = match request.path.as_str() {
+    let response = match request.target.as_str() {
         "/" => {
             let body = render_index(root, files)?;
             HttpResponse {
@@ -82,49 +83,110 @@ fn handle_request(
 }
 
 #[derive(Debug, PartialEq)]
-enum HttpProtocol {
+enum HttpVersion {
     Http1_1,
 }
+
+type HttpHeaders = HashMap<String, String>;
 
 #[derive(Debug, PartialEq)]
 struct HttpRequest {
     method: HttpMethod,
-    path: String,
-    protocol: HttpProtocol,
-    host: String,
+    target: String,
+    version: HttpVersion,
+    headers: HttpHeaders,
     body: Option<String>,
+}
+
+/// Parses an HTTP request-line.
+fn parse_request_line(line: &str) -> Result<(HttpMethod, String, HttpVersion), RunError> {
+    let mut parts = line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or(RunError::RequestParseError)?
+        .parse::<HttpMethod>()?;
+    let target = parts.next().ok_or(RunError::RequestParseError)?.to_string();
+    let version = parts
+        .next()
+        .ok_or(RunError::RequestParseError)?
+        .parse::<HttpVersion>()?;
+    if parts.next().is_some() {
+        return Err(RunError::RequestParseError);
+    }
+    Ok((method, target, version))
+}
+
+fn parse_request_headers<'a>(
+    lines: &mut impl Iterator<Item = &'a str>,
+) -> Result<HttpHeaders, RunError> {
+    let mut headers = HttpHeaders::new();
+
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        let (key, value) = line.split_once(':').ok_or(RunError::RequestParseError)?;
+
+        if key.trim() != key || key.is_empty() {
+            return Err(RunError::RequestParseError);
+        }
+
+        let key = key.to_ascii_lowercase();
+        let value = value.trim().to_string();
+        headers.insert(key, value);
+    }
+
+    Ok(headers)
 }
 
 /// Parses a raw HTTP request string into a [`HttpRequest`] struct.
 fn parse_request(request: &str) -> Result<HttpRequest, RunError> {
-    let mut first_line = request
-        .lines()
-        .next()
-        .ok_or(RunError::RequestParseError)?
-        .split_whitespace();
-    let method = first_line
-        .next()
-        .ok_or(RunError::RequestParseError)?
-        .parse::<HttpMethod>()?;
-    let path = first_line
-        .next()
-        .ok_or(RunError::RequestParseError)?
-        .to_string();
-    let protocol = first_line
-        .next()
-        .ok_or(RunError::RequestParseError)?
-        .parse::<HttpProtocol>()?;
-    if first_line.next().is_some() {
-        return Err(RunError::RequestParseError);
-    }
+    let mut lines = request.lines();
+    let first_line = lines.next().ok_or(RunError::RequestParseError)?;
+
+    let (method, target, version) = parse_request_line(first_line)?;
+
+    let headers = parse_request_headers(&mut lines)?;
 
     Ok(HttpRequest {
         method,
-        path,
-        protocol,
-        host: "localhost:4000".to_string(),
+        target,
+        version,
+        headers,
         body: None,
     })
+}
+
+const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
+
+fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, RunError> {
+    // TODO: 최적화 가능
+    // 매 요청마다 버퍼, Vec 새로 만들지 않고 만들어진 것 쓰기
+    // 단, keep-alive 지원할 경우, 그에 대해 고려해야함
+    let mut request = Vec::with_capacity(4096);
+    let mut buffer = [0u8; 1024];
+    loop {
+        let bytes_read = stream
+            .read(&mut buffer)
+            .map_err(|source| RunError::IoError { source })?;
+
+        if bytes_read == 0 {
+            return Err(RunError::RequestParseError);
+        }
+
+        request.extend_from_slice(&buffer[..bytes_read]);
+
+        // TODO: 헤더 경계 찾기 최적화 가능
+        // 전체를 훑지 말고 최근에 받은 내용 중에서 훑기
+        // buffer만 보면 안됨. \r\n | \r\n 이렇게 끊어서 올 수도 있으니까.
+        if request.windows(4).any(|w| w == b"\r\n\r\n") {
+            return Ok(request);
+        }
+
+        if request.len() > MAX_REQUEST_HEAD_SIZE {
+            return Err(RunError::RequestParseError);
+        }
+    }
 }
 
 fn serve_http(root: &Path, files: &[PathBuf]) -> Result<(), RunError> {
@@ -133,16 +195,10 @@ fn serve_http(root: &Path, files: &[PathBuf]) -> Result<(), RunError> {
 
     println!("Listening on http://localhost:4000");
 
-    let mut buffer = [0u8; 1024];
     for stream in listener.incoming() {
         let mut stream = stream.map_err(|source| RunError::IoError { source })?;
-        let bytes_read = stream
-            .read(&mut buffer)
-            .map_err(|source| RunError::IoError { source })?;
-        if bytes_read == 0 {
-            continue;
-        }
-        let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+        let raw_request = read_request_head(&mut stream)?;
+        let request = String::from_utf8_lossy(&raw_request);
         let request = parse_request(&request)?;
 
         let response = handle_request(&root, &request, files)?;
@@ -161,7 +217,7 @@ fn render_response(response: &HttpResponse) -> String {
         HttpStatus::NotFound => "404 Not Found",
     };
     format!(
-        "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: {}\r\n\r\n{}",
+        "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n{}",
         status,
         response.body.len(),
         response.content_type,
@@ -441,19 +497,19 @@ mod tests {
         assert!(request.is_ok());
         let request = request.unwrap();
         assert_eq!(request.method, HttpMethod::Get);
-        assert_eq!(request.path, "/favicon.ico");
-        assert_eq!(request.protocol, HttpProtocol::Http1_1);
-        assert_eq!(request.host, "localhost:4000");
+        assert_eq!(request.target, "/favicon.ico");
+        assert_eq!(request.version, HttpVersion::Http1_1);
         assert_eq!(request.body, None);
+        assert_eq!(request.headers.get("host").unwrap(), "localhost:4000");
     }
 
     #[test]
     fn test_handle_unknown_path_returns_not_found() {
         let request = HttpRequest {
             method: HttpMethod::Get,
-            path: "/missing".to_string(),
-            protocol: HttpProtocol::Http1_1,
-            host: "localhost:4000".to_string(),
+            target: "/missing".to_string(),
+            version: HttpVersion::Http1_1,
+            headers: HttpHeaders::new(),
             body: None,
         };
 
@@ -472,5 +528,29 @@ mod tests {
         let rendered = render_response(&response);
 
         assert!(rendered.contains("404 Not Found"));
+    }
+
+    #[test]
+    fn test_read_request_with_split_header() {
+        let mut input = &b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"[..];
+        let raw = read_request_head(&mut input).unwrap();
+        assert!(raw.ends_with(b"\r\n\r\n"));
+    }
+
+    #[test]
+    fn test_parse_request_line() {
+        let request = "GET /favicon.ico HTTP/1.1";
+        let (method, target, version) = parse_request_line(request).unwrap();
+        assert_eq!(method, HttpMethod::Get);
+        assert_eq!(target, "/favicon.ico");
+        assert_eq!(version, HttpVersion::Http1_1);
+    }
+
+    #[test]
+    fn test_parse_request_headers() {
+        let mut lines = ["Host: localhost", "Connection: close"].into_iter();
+        let headers = parse_request_headers(&mut lines).unwrap();
+        assert_eq!(headers.get("host").unwrap(), "localhost");
+        assert_eq!(headers.get("connection").unwrap(), "close");
     }
 }
