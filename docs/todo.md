@@ -2,8 +2,8 @@
 
 ## 1단계
 
-- [ ] markdown target directory 받아서
-- [ ] 웹 서빙하기
+- [x] markdown target directory 받아서
+- [x] 웹 서빙하기
 
 ## 2단계
 

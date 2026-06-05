@@ -24,3 +24,10 @@ Emacs + org를 대체하기 위해 에디터 + 마크다운 LSP를 이용하는 
 ## 구현 현황
 
 [docs/todo.md](./docs/todo.md) 참고
+
+## Development
+
+```
+cargo llvm-cov --text --show-missing-lines
+cargo llvm-cov --html
+```
