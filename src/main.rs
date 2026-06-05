@@ -1,30 +1,21 @@
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use percent_encoding::percent_decode_str;
+
+mod http;
 
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve { root: PathBuf },
 }
 
-#[derive(Debug, PartialEq)]
-enum HttpStatusCode {
-    Ok,                  // 200
-    MovedPermanently,    // 301
-    Found,               // 302
-    NotFound,            // 404
-    BadRequest,          // 400
-    InternalServerError, // 500
-}
-
-#[derive(Debug, PartialEq)]
-enum HttpMethod {
-    Get,
+impl From<http::Error> for RunError {
+    fn from(error: http::Error) -> Self {
+        RunError::Http(error)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -45,12 +36,6 @@ enum HomeMode {
     Redirect(String),
 }
 
-impl Default for HttpHeaders {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Default for MakiConfig {
     fn default() -> Self {
         Self {
@@ -60,213 +45,10 @@ impl Default for MakiConfig {
     }
 }
 
-impl FromStr for HttpMethod {
-    type Err = RunError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_method(s)
-    }
-}
-
-fn parse_method(method: &str) -> Result<HttpMethod, RunError> {
-    match method {
-        "GET" => Ok(HttpMethod::Get),
-        _ => Err(RunError::RequestParseError),
-    }
-}
-
-fn parse_protocol(protocol: &str) -> Result<HttpVersion, RunError> {
-    match protocol {
-        "HTTP/1.1" => Ok(HttpVersion::Http1_1),
-        _ => Err(RunError::RequestParseError),
-    }
-}
-
 struct Maki {
     root: PathBuf,       // canonical absolute path
     files: Vec<PathBuf>, // root-relative markdown paths
     config: MakiConfig,
-}
-
-#[derive(Debug, PartialEq)]
-struct HttpResponse {
-    status: HttpStatusCode,
-    version: HttpVersion,
-    headers: HttpHeaders,
-    body: Vec<u8>,
-}
-
-impl Display for HttpStatusCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HttpStatusCode::Ok => write!(f, "200 OK"),
-            HttpStatusCode::NotFound => write!(f, "404 Not Found"),
-            HttpStatusCode::Found => write!(f, "302 Found"),
-            HttpStatusCode::MovedPermanently => write!(f, "301 Moved Permanently"),
-            HttpStatusCode::InternalServerError => write!(f, "500 Internal Server Error"),
-            HttpStatusCode::BadRequest => write!(f, "400 Bad Request"),
-        }
-    }
-}
-
-impl Display for HttpHeaders {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (key, value) in &self.0 {
-            write!(f, "{}: {}\r\n", key, value)?;
-        }
-        Ok(())
-    }
-}
-
-impl HttpResponse {
-    fn new(status: HttpStatusCode) -> Self {
-        HttpResponse {
-            status,
-            version: HttpVersion::Http1_1,
-            headers: HttpHeaders::new(),
-            body: vec![],
-        }
-        .set_header("Connection", "close")
-    }
-
-    fn set_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.insert(key.into(), value.into());
-        self
-    }
-
-    fn set_body(mut self, body: impl Into<Vec<u8>>) -> Self {
-        self.body = body.into();
-        self.headers
-            .insert("Content-Length".to_string(), self.body.len().to_string());
-        self
-    }
-
-    fn get_status_line(&self) -> String {
-        format!("{} {}", self.version, self.status)
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut raw = Vec::new();
-        let status_line = self.get_status_line();
-
-        raw.extend_from_slice(status_line.as_bytes());
-        raw.extend_from_slice(b"\r\n");
-
-        raw.extend_from_slice(self.headers.to_string().as_bytes());
-        raw.extend_from_slice(b"\r\n");
-
-        if !&self.body.is_empty() {
-            raw.extend_from_slice(&self.body);
-        }
-
-        raw
-    }
-}
-
-impl FromStr for HttpVersion {
-    type Err = RunError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_protocol(s)
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum HttpVersion {
-    Http1_1,
-}
-
-impl Display for HttpVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HttpVersion::Http1_1 => write!(f, "HTTP/1.1"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-struct HttpHeaders(HashMap<String, String>);
-
-impl HttpHeaders {
-    fn new() -> Self {
-        Self(HashMap::new())
-    }
-
-    fn insert(&mut self, key: String, value: String) {
-        self.0.insert(key, value);
-    }
-
-    fn get(&self, key: &str) -> Option<&String> {
-        self.0.get(key)
-    }
-}
-
-#[derive(Debug, PartialEq)]
-struct HttpRequest {
-    method: HttpMethod,
-    target: String,
-    version: HttpVersion,
-    headers: HttpHeaders,
-    body: Vec<u8>,
-}
-
-/// Parses an HTTP request-line.
-fn parse_request_line(line: &str) -> Result<(HttpMethod, String, HttpVersion), RunError> {
-    let mut parts = line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or(RunError::RequestParseError)?
-        .parse::<HttpMethod>()?;
-    let target = parts.next().ok_or(RunError::RequestParseError)?.to_string();
-    let version = parts
-        .next()
-        .ok_or(RunError::RequestParseError)?
-        .parse::<HttpVersion>()?;
-    if parts.next().is_some() {
-        return Err(RunError::RequestParseError);
-    }
-    Ok((method, target, version))
-}
-
-fn parse_request_headers<'a>(
-    lines: &mut impl Iterator<Item = &'a str>,
-) -> Result<HttpHeaders, RunError> {
-    let mut headers = HttpHeaders::new();
-
-    for line in lines {
-        if line.is_empty() {
-            break;
-        }
-        let (key, value) = line.split_once(':').ok_or(RunError::RequestParseError)?;
-
-        if key.trim() != key || key.is_empty() {
-            return Err(RunError::RequestParseError);
-        }
-
-        let key = key.to_ascii_lowercase();
-        let value = value.trim().to_string();
-        headers.insert(key, value);
-    }
-
-    Ok(headers)
-}
-
-/// Parses a raw HTTP request string into a [`HttpRequest`] struct.
-fn parse_request(request: &str) -> Result<HttpRequest, RunError> {
-    let mut lines = request.lines();
-    let first_line = lines.next().ok_or(RunError::RequestParseError)?;
-
-    let (method, target, version) = parse_request_line(first_line)?;
-
-    let headers = parse_request_headers(&mut lines)?;
-
-    Ok(HttpRequest {
-        method,
-        target,
-        version,
-        headers,
-        body: vec![],
-    })
 }
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
@@ -312,7 +94,7 @@ fn serve_http(maki: &Maki) -> Result<(), RunError> {
         let raw_request = read_request_head(&mut stream)?;
         // TODO: header만 잘라서 먼저 utf8로 변환하기
         let request = String::from_utf8_lossy(&raw_request);
-        let request = parse_request(&request)?;
+        let request = http::parse_request(&request)?;
 
         let response = maki.handle_request(&request)?;
         let http_response = response.to_bytes();
@@ -342,27 +124,27 @@ enum MakiRoute {
 }
 
 impl Maki {
-    fn handle_request(&self, request: &HttpRequest) -> Result<HttpResponse, RunError> {
-        match self.resolve_route(request.target.as_str()) {
-            Ok(MakiRoute::NotePage(path)) => Ok(HttpResponse::new(HttpStatusCode::Ok)
+    fn handle_request(&self, request: &http::Request) -> Result<http::Response, RunError> {
+        match self.resolve_route(request.target()) {
+            Ok(MakiRoute::NotePage(path)) => Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(self.render_html(&path)?)),
-            Ok(MakiRoute::NoteSource(path)) => Ok(HttpResponse::new(HttpStatusCode::Ok)
+            Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(self.get_raw_content(&path)?)),
             Ok(MakiRoute::Home) => match &self.config.home_mode {
-                HomeMode::Redirect(path) => Ok(HttpResponse::new(HttpStatusCode::Found)
+                HomeMode::Redirect(path) => Ok(http::Response::new(http::StatusCode::Found)
                     .set_header("Location", path)
                     .set_header("Content-Type", "text/plain; charset=utf-8")
                     .set_body(path.as_bytes())),
             },
-            Ok(MakiRoute::NotFound) => Ok(HttpResponse::new(HttpStatusCode::NotFound)
+            Ok(MakiRoute::NotFound) => Ok(http::Response::new(http::StatusCode::NotFound)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body("Not Found".to_string())),
-            Err(RunError::BadRequest) => Ok(HttpResponse::new(HttpStatusCode::BadRequest)
+            Err(RunError::BadRequest) => Ok(http::Response::new(http::StatusCode::BadRequest)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body("Bad Request".to_string())),
-            Err(e) => Ok(HttpResponse::new(HttpStatusCode::InternalServerError)
+            Err(e) => Ok(http::Response::new(http::StatusCode::InternalServerError)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(e.to_string())),
         }
@@ -513,6 +295,7 @@ enum RunError {
     IoError {
         source: std::io::Error,
     },
+    Http(http::Error),
     RequestParseError,
     BadRequest,
 }
@@ -533,6 +316,7 @@ impl Display for RunError {
             RunError::BadRequest => write!(f, "Bad request"),
             RunError::IoError { source } => write!(f, "IO error: {}", source),
             RunError::RequestParseError => write!(f, "Request parse error"),
+            RunError::Http(error) => write!(f, "HTTP error: {:?}", error),
         }
     }
 }
@@ -700,28 +484,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_request() {
-        let raw_request = "GET /favicon.ico HTTP/1.1\r\nHost: localhost:4000\r\nConnection: keep-alive\r\nsec-ch-ua-platform: \"macOS\"\r\nUser-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36\r\nsec-ch-ua: \"Not/A)Brand\";v=\"99\", \"Chromium\";v=\"148\"\r\nsec-ch-ua-mobile: ?0\r\nAccept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nReferer: http://localhost:4000/nice\r\nAccept-Encoding: gzip, deflate, br, zstd\r\nAccept-Language: en-US,en;q=0.9,ko;q=0.8\r\n\r\nst: document\r\nAccept-Encoding: gzip, deflate, br, zstd\r\nAccept-Language: en-US,en;q=0.9,ko;q=0.8\r\n\r\n\0";
-
-        let request = parse_request(raw_request);
-        assert!(request.is_ok());
-        let request = request.unwrap();
-        assert_eq!(request.method, HttpMethod::Get);
-        assert_eq!(request.target, "/favicon.ico");
-        assert_eq!(request.version, HttpVersion::Http1_1);
-        assert_eq!(request.body, vec![]);
-        assert_eq!(request.headers.get("host").unwrap(), "localhost:4000");
-    }
-
-    #[test]
     fn test_handle_unknown_path_returns_not_found() {
-        let request = HttpRequest {
-            method: HttpMethod::Get,
-            target: "/missing".to_string(),
-            version: HttpVersion::Http1_1,
-            headers: HttpHeaders::new(),
-            body: vec![],
-        };
+        let request = http::Request::get("/missing");
 
         let maki = Maki {
             root: PathBuf::from("."),
@@ -731,18 +495,18 @@ mod tests {
 
         let response = maki.handle_request(&request).unwrap();
 
-        assert_eq!(response.status, HttpStatusCode::NotFound);
+        assert_eq!(response.status(), http::StatusCode::NotFound);
     }
 
     #[test]
     fn test_render_not_found_response() {
-        let response = HttpResponse::new(HttpStatusCode::NotFound)
+        let response = http::Response::new(http::StatusCode::NotFound)
             .set_header("Content-Type", "text/plain; charset=utf-8")
             .set_body("Not Found".to_string());
-        assert_eq!(response.status, HttpStatusCode::NotFound);
-        assert_eq!(response.body, b"Not Found".to_vec());
+        assert_eq!(response.status(), http::StatusCode::NotFound);
+        assert_eq!(response.body(), b"Not Found".to_vec());
         assert_eq!(
-            response.headers.get("Content-Type").map(String::as_str),
+            response.get_header("Content-Type"),
             Some("text/plain; charset=utf-8")
         );
     }
@@ -752,23 +516,6 @@ mod tests {
         let mut input = &b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"[..];
         let raw = read_request_head(&mut input).unwrap();
         assert!(raw.ends_with(b"\r\n\r\n"));
-    }
-
-    #[test]
-    fn test_parse_request_line() {
-        let request = "GET /favicon.ico HTTP/1.1";
-        let (method, target, version) = parse_request_line(request).unwrap();
-        assert_eq!(method, HttpMethod::Get);
-        assert_eq!(target, "/favicon.ico");
-        assert_eq!(version, HttpVersion::Http1_1);
-    }
-
-    #[test]
-    fn test_parse_request_headers() {
-        let mut lines = ["Host: localhost", "Connection: close"].into_iter();
-        let headers = parse_request_headers(&mut lines).unwrap();
-        assert_eq!(headers.get("host").unwrap(), "localhost");
-        assert_eq!(headers.get("connection").unwrap(), "close");
     }
 
     #[test]
@@ -824,72 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn test_http_response_structure() {
-        let response = HttpResponse::new(HttpStatusCode::Ok)
-            .set_header("Content-Type", "text/plain")
-            .set_body("hello");
-
-        assert_eq!(response.status, HttpStatusCode::Ok);
-        assert_eq!(response.version, HttpVersion::Http1_1);
-        assert_eq!(response.body, b"hello".to_vec());
-        assert_eq!(
-            response.headers.get("Connection").map(String::as_str),
-            Some("close")
-        );
-        assert_eq!(
-            response.headers.get("Content-Type").map(String::as_str),
-            Some("text/plain")
-        );
-        assert_eq!(
-            response.headers.get("Content-Length").map(String::as_str),
-            Some("5")
-        );
-    }
-
-    #[test]
-    fn test_http_status_code_reason_phrases() {
-        assert_eq!(HttpStatusCode::Ok.to_string(), "200 OK");
-        assert_eq!(
-            HttpStatusCode::MovedPermanently.to_string(),
-            "301 Moved Permanently"
-        );
-        assert_eq!(HttpStatusCode::Found.to_string(), "302 Found");
-        assert_eq!(HttpStatusCode::NotFound.to_string(), "404 Not Found");
-        assert_eq!(HttpStatusCode::BadRequest.to_string(), "400 Bad Request");
-        assert_eq!(
-            HttpStatusCode::InternalServerError.to_string(),
-            "500 Internal Server Error"
-        );
-    }
-
-    #[test]
-    fn test_http_response_wire_format() {
-        let response = HttpResponse::new(HttpStatusCode::Ok)
-            .set_header("Content-Type", "text/plain")
-            .set_body("hello");
-
-        let response = String::from_utf8(response.to_bytes()).unwrap();
-
-        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(response.contains("Connection: close\r\n"));
-        assert!(response.contains("Content-Type: text/plain\r\n"));
-        assert!(response.contains("Content-Length: 5\r\n"));
-        assert!(response.ends_with("\r\n\r\nhello"));
-    }
-
-    #[test]
-    fn test_http_response_wire_format_without_body() {
-        let response = HttpResponse::new(HttpStatusCode::Found).set_header("Location", "/n/README");
-
-        let response = String::from_utf8(response.to_bytes()).unwrap();
-
-        assert!(response.starts_with("HTTP/1.1 302 Found\r\n"));
-        assert!(response.contains("Connection: close\r\n"));
-        assert!(response.contains("Location: /n/README\r\n"));
-        assert!(response.ends_with("\r\n\r\n"));
-    }
-
-    #[test]
     fn test_handle_request() {
         let maki = Maki::load(
             &PathBuf::from("./tests/fixtures/basic-maki-project"),
@@ -897,54 +578,35 @@ mod tests {
         )
         .unwrap();
 
-        let request = HttpRequest {
-            method: HttpMethod::Get,
-            target: "/n/daily.md".to_string(),
-            version: HttpVersion::Http1_1,
-            headers: HttpHeaders::default(),
-            body: vec![],
-        };
-
+        let request = http::Request::get("/n/daily.md");
         let response = maki.handle_request(&request).unwrap();
-        assert_eq!(response.status, HttpStatusCode::Ok);
+        assert_eq!(response.status(), http::StatusCode::Ok);
         assert!(
-            String::from_utf8(response.body)
+            String::from_utf8(response.body().to_vec())
                 .unwrap()
                 .contains("# Daily")
         );
         assert!(
             response
-                .headers
-                .get("Content-Type")
+                .get_header("Content-Type")
                 .is_some_and(|v| v.contains("plain"))
         );
 
-        let request = HttpRequest {
-            method: HttpMethod::Get,
-            target: "/n/ignore.txt".to_string(),
-            version: HttpVersion::Http1_1,
-            headers: HttpHeaders::default(),
-            body: vec![],
-        };
-
+        let request = http::Request::get("/n/ignore.txt");
         let response = maki.handle_request(&request).unwrap();
-        assert_eq!(response.status, HttpStatusCode::NotFound);
+        assert_eq!(response.status(), http::StatusCode::NotFound);
 
-        let request = HttpRequest {
-            method: HttpMethod::Get,
-            target: "/n/README".to_string(),
-            version: HttpVersion::Http1_1,
-            headers: HttpHeaders::default(),
-            body: vec![],
-        };
-
+        let request = http::Request::get("/n/README");
         let response = maki.handle_request(&request).unwrap();
-        assert_eq!(response.status, HttpStatusCode::Ok);
-        assert!(String::from_utf8(response.body).unwrap().contains("Maki"));
+        assert_eq!(response.status(), http::StatusCode::Ok);
+        assert!(
+            String::from_utf8(response.body().to_vec())
+                .unwrap()
+                .contains("Maki")
+        );
         assert!(
             response
-                .headers
-                .get("Content-Type")
+                .get_header("Content-Type")
                 .is_some_and(|v| v.contains("html"))
         );
     }
