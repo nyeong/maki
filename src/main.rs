@@ -13,7 +13,7 @@ enum Command {
 }
 
 #[derive(Debug, PartialEq)]
-enum HttpStatus {
+enum HttpStatusCode {
     Ok,                  // 200
     MovedPermanently,    // 301
     Found,               // 302
@@ -90,21 +90,21 @@ struct Maki {
 
 #[derive(Debug, PartialEq)]
 struct HttpResponse {
-    status: HttpStatus,
+    status: HttpStatusCode,
     version: HttpVersion,
     headers: HttpHeaders,
     body: Vec<u8>,
 }
 
-impl Display for HttpStatus {
+impl Display for HttpStatusCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HttpStatus::Ok => write!(f, "200 OK"),
-            HttpStatus::NotFound => write!(f, "404 Not Found"),
-            HttpStatus::Found => write!(f, "302 Found"),
-            HttpStatus::MovedPermanently => write!(f, "301 Moved Permanently"),
-            HttpStatus::InternalServerError => write!(f, "500 Internal Server Error"),
-            HttpStatus::BadRequest => write!(f, "400 Bad Request"),
+            HttpStatusCode::Ok => write!(f, "200 OK"),
+            HttpStatusCode::NotFound => write!(f, "404 Not Found"),
+            HttpStatusCode::Found => write!(f, "302 Found"),
+            HttpStatusCode::MovedPermanently => write!(f, "301 Moved Permanently"),
+            HttpStatusCode::InternalServerError => write!(f, "500 Internal Server Error"),
+            HttpStatusCode::BadRequest => write!(f, "400 Bad Request"),
         }
     }
 }
@@ -119,7 +119,7 @@ impl Display for HttpHeaders {
 }
 
 impl HttpResponse {
-    fn new(status: HttpStatus) -> Self {
+    fn new(status: HttpStatusCode) -> Self {
         HttpResponse {
             status,
             version: HttpVersion::Http1_1,
@@ -145,7 +145,7 @@ impl HttpResponse {
         format!("{} {}", self.version, self.status)
     }
 
-    fn to_raw(&self) -> Vec<u8> {
+    fn to_bytes(&self) -> Vec<u8> {
         let mut raw = Vec::new();
         let status_line = self.get_status_line();
 
@@ -207,7 +207,7 @@ struct HttpRequest {
     target: String,
     version: HttpVersion,
     headers: HttpHeaders,
-    body: Option<String>,
+    body: Vec<u8>,
 }
 
 /// Parses an HTTP request-line.
@@ -265,7 +265,7 @@ fn parse_request(request: &str) -> Result<HttpRequest, RunError> {
         target,
         version,
         headers,
-        body: None,
+        body: vec![],
     })
 }
 
@@ -315,7 +315,7 @@ fn serve_http(maki: &Maki) -> Result<(), RunError> {
         let request = parse_request(&request)?;
 
         let response = maki.handle_request(&request)?;
-        let http_response = response.to_raw();
+        let http_response = response.to_bytes();
         stream
             .write_all(&http_response)
             .map_err(|source| RunError::IoError { source })?;
@@ -344,25 +344,25 @@ enum MakiRoute {
 impl Maki {
     fn handle_request(&self, request: &HttpRequest) -> Result<HttpResponse, RunError> {
         match self.resolve_route(request.target.as_str()) {
-            Ok(MakiRoute::NotePage(path)) => Ok(HttpResponse::new(HttpStatus::Ok)
+            Ok(MakiRoute::NotePage(path)) => Ok(HttpResponse::new(HttpStatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(self.render_html(&path)?)),
-            Ok(MakiRoute::NoteSource(path)) => Ok(HttpResponse::new(HttpStatus::Ok)
+            Ok(MakiRoute::NoteSource(path)) => Ok(HttpResponse::new(HttpStatusCode::Ok)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(self.get_raw_content(&path)?)),
             Ok(MakiRoute::Home) => match &self.config.home_mode {
-                HomeMode::Redirect(path) => Ok(HttpResponse::new(HttpStatus::Found)
+                HomeMode::Redirect(path) => Ok(HttpResponse::new(HttpStatusCode::Found)
                     .set_header("Location", path)
                     .set_header("Content-Type", "text/plain; charset=utf-8")
                     .set_body(path.as_bytes())),
             },
-            Ok(MakiRoute::NotFound) => Ok(HttpResponse::new(HttpStatus::NotFound)
+            Ok(MakiRoute::NotFound) => Ok(HttpResponse::new(HttpStatusCode::NotFound)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body("Not Found".to_string())),
-            Err(RunError::BadRequest) => Ok(HttpResponse::new(HttpStatus::BadRequest)
+            Err(RunError::BadRequest) => Ok(HttpResponse::new(HttpStatusCode::BadRequest)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body("Bad Request".to_string())),
-            Err(e) => Ok(HttpResponse::new(HttpStatus::InternalServerError)
+            Err(e) => Ok(HttpResponse::new(HttpStatusCode::InternalServerError)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(e.to_string())),
         }
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.target, "/favicon.ico");
         assert_eq!(request.version, HttpVersion::Http1_1);
-        assert_eq!(request.body, None);
+        assert_eq!(request.body, vec![]);
         assert_eq!(request.headers.get("host").unwrap(), "localhost:4000");
     }
 
@@ -720,7 +720,7 @@ mod tests {
             target: "/missing".to_string(),
             version: HttpVersion::Http1_1,
             headers: HttpHeaders::new(),
-            body: None,
+            body: vec![],
         };
 
         let maki = Maki {
@@ -731,16 +731,20 @@ mod tests {
 
         let response = maki.handle_request(&request).unwrap();
 
-        assert_eq!(response.status, HttpStatus::NotFound);
+        assert_eq!(response.status, HttpStatusCode::NotFound);
     }
 
     #[test]
     fn test_render_not_found_response() {
-        let response = HttpResponse::new(HttpStatus::NotFound)
+        let response = HttpResponse::new(HttpStatusCode::NotFound)
             .set_header("Content-Type", "text/plain; charset=utf-8")
             .set_body("Not Found".to_string());
-        let rendered = String::from_utf8(response.to_raw()).unwrap();
-        assert!(rendered.contains("404 Not Found"));
+        assert_eq!(response.status, HttpStatusCode::NotFound);
+        assert_eq!(response.body, b"Not Found".to_vec());
+        assert_eq!(
+            response.headers.get("Content-Type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
     }
 
     #[test]
@@ -820,46 +824,69 @@ mod tests {
     }
 
     #[test]
-    fn test_render_response() {
-        let response = String::from_utf8(
-            HttpResponse::new(HttpStatus::BadRequest)
-                .set_header("Content-Type", "text/plain")
-                .set_body("Bad Request")
-                .to_raw(),
-        )
-        .unwrap();
-        assert!(response.contains("400 Bad Request"));
-        assert!(response.contains("text/plain"));
+    fn test_http_response_structure() {
+        let response = HttpResponse::new(HttpStatusCode::Ok)
+            .set_header("Content-Type", "text/plain")
+            .set_body("hello");
 
-        let response = String::from_utf8(
-            HttpResponse::new(HttpStatus::InternalServerError)
-                .set_header("Content-Type", "text/plain")
-                .set_body("Bad Request")
-                .to_raw(),
-        )
-        .unwrap();
-        assert!(response.starts_with("HTTP/1.1 500 Internal Server Error\r\n"));
-        assert!(response.contains("text/plain"));
+        assert_eq!(response.status, HttpStatusCode::Ok);
+        assert_eq!(response.version, HttpVersion::Http1_1);
+        assert_eq!(response.body, b"hello".to_vec());
+        assert_eq!(
+            response.headers.get("Connection").map(String::as_str),
+            Some("close")
+        );
+        assert_eq!(
+            response.headers.get("Content-Type").map(String::as_str),
+            Some("text/plain")
+        );
+        assert_eq!(
+            response.headers.get("Content-Length").map(String::as_str),
+            Some("5")
+        );
+    }
 
-        let response = String::from_utf8(
-            HttpResponse::new(HttpStatus::NotFound)
-                .set_header("Content-Type", "text/plain")
-                .set_body("Bad Request")
-                .to_raw(),
-        )
-        .unwrap();
-        assert!(response.contains("HTTP/1.1 404 Not Found\r\n"));
-        assert!(response.contains("text/plain"));
+    #[test]
+    fn test_http_status_code_reason_phrases() {
+        assert_eq!(HttpStatusCode::Ok.to_string(), "200 OK");
+        assert_eq!(
+            HttpStatusCode::MovedPermanently.to_string(),
+            "301 Moved Permanently"
+        );
+        assert_eq!(HttpStatusCode::Found.to_string(), "302 Found");
+        assert_eq!(HttpStatusCode::NotFound.to_string(), "404 Not Found");
+        assert_eq!(HttpStatusCode::BadRequest.to_string(), "400 Bad Request");
+        assert_eq!(
+            HttpStatusCode::InternalServerError.to_string(),
+            "500 Internal Server Error"
+        );
+    }
 
-        let response = String::from_utf8(
-            HttpResponse::new(HttpStatus::Ok)
-                .set_header("Content-Type", "text/plain")
-                .set_body("Bad Request")
-                .to_raw(),
-        )
-        .unwrap();
-        assert!(response.contains("HTTP/1.1 200 OK\r\n"));
-        assert!(response.contains("text/plain"));
+    #[test]
+    fn test_http_response_wire_format() {
+        let response = HttpResponse::new(HttpStatusCode::Ok)
+            .set_header("Content-Type", "text/plain")
+            .set_body("hello");
+
+        let response = String::from_utf8(response.to_bytes()).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.contains("Connection: close\r\n"));
+        assert!(response.contains("Content-Type: text/plain\r\n"));
+        assert!(response.contains("Content-Length: 5\r\n"));
+        assert!(response.ends_with("\r\n\r\nhello"));
+    }
+
+    #[test]
+    fn test_http_response_wire_format_without_body() {
+        let response = HttpResponse::new(HttpStatusCode::Found).set_header("Location", "/n/README");
+
+        let response = String::from_utf8(response.to_bytes()).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 302 Found\r\n"));
+        assert!(response.contains("Connection: close\r\n"));
+        assert!(response.contains("Location: /n/README\r\n"));
+        assert!(response.ends_with("\r\n\r\n"));
     }
 
     #[test]
@@ -875,11 +902,11 @@ mod tests {
             target: "/n/daily.md".to_string(),
             version: HttpVersion::Http1_1,
             headers: HttpHeaders::default(),
-            body: None,
+            body: vec![],
         };
 
         let response = maki.handle_request(&request).unwrap();
-        assert_eq!(response.status, HttpStatus::Ok);
+        assert_eq!(response.status, HttpStatusCode::Ok);
         assert!(
             String::from_utf8(response.body)
                 .unwrap()
@@ -897,22 +924,22 @@ mod tests {
             target: "/n/ignore.txt".to_string(),
             version: HttpVersion::Http1_1,
             headers: HttpHeaders::default(),
-            body: None,
+            body: vec![],
         };
 
         let response = maki.handle_request(&request).unwrap();
-        assert_eq!(response.status, HttpStatus::NotFound);
+        assert_eq!(response.status, HttpStatusCode::NotFound);
 
         let request = HttpRequest {
             method: HttpMethod::Get,
             target: "/n/README".to_string(),
             version: HttpVersion::Http1_1,
             headers: HttpHeaders::default(),
-            body: None,
+            body: vec![],
         };
 
         let response = maki.handle_request(&request).unwrap();
-        assert_eq!(response.status, HttpStatus::Ok);
+        assert_eq!(response.status, HttpStatusCode::Ok);
         assert!(String::from_utf8(response.body).unwrap().contains("Maki"));
         assert!(
             response
