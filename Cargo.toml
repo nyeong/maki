@@ -5,3 +5,7 @@ authors = ["An Nyeong <me@annyeong.me>"]
 edition = "2024"
 description = "File based markdown wiki"
 readme = "README.md"
+
+
+[dependencies]
+percent-encoding = "2.3.2"

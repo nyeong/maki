@@ -5,6 +5,8 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use percent_encoding::percent_decode_str;
+
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve { root: PathBuf },
@@ -14,6 +16,8 @@ enum Command {
 enum HttpStatus {
     Ok,
     NotFound,
+    InternalServerError,
+    BadRequest,
 }
 
 #[derive(Debug, PartialEq)]
@@ -43,10 +47,16 @@ fn parse_protocol(protocol: &str) -> Result<HttpVersion, RunError> {
     }
 }
 
+struct Maki {
+    root: PathBuf,       // canonical absolute path
+    files: Vec<PathBuf>, // root-relative markdown paths
+}
+
 #[derive(Debug, PartialEq)]
 struct HttpResponse {
     status: HttpStatus,
     content_type: &'static str,
+    // TODO: 바이너리 서빙 필요해지면 Vec<u8>로 바꾸기
     body: String,
 }
 
@@ -58,28 +68,39 @@ impl FromStr for HttpVersion {
     }
 }
 
-fn handle_request(
-    root: &Path,
-    request: &HttpRequest,
-    files: &[PathBuf],
-) -> Result<HttpResponse, RunError> {
-    let response = match request.target.as_str() {
-        "/" => {
-            let body = render_index(root, files)?;
-            HttpResponse {
-                status: HttpStatus::Ok,
-                content_type: "text/html",
-                body,
-            }
-        }
-        _ => HttpResponse {
+fn handle_request(maki: &Maki, request: &HttpRequest) -> Result<HttpResponse, RunError> {
+    match maki.resolve_route(request.target.as_str()) {
+        Ok(Some(MakiRoute::RenderedPage(path))) => Ok(HttpResponse {
+            status: HttpStatus::Ok,
+            content_type: "text/html; charset=utf-8",
+            body: maki.render_html(&path)?,
+        }),
+        Ok(Some(MakiRoute::SourcePage(path))) => Ok(HttpResponse {
+            status: HttpStatus::Ok,
+            content_type: "text/plain; charset=utf-8",
+            body: maki.get_raw_content(&path)?,
+        }),
+        Ok(Some(MakiRoute::Index)) => Ok(HttpResponse {
+            status: HttpStatus::Ok,
+            content_type: "text/plain; charset=utf-8",
+            body: "Index".to_string(),
+        }),
+        Ok(None) => Ok(HttpResponse {
             status: HttpStatus::NotFound,
-            content_type: "text/plain",
+            content_type: "text/plain; charset=utf-8",
             body: "Not Found".to_string(),
-        },
-    };
-
-    Ok(response)
+        }),
+        Err(RunError::BadRequest) => Ok(HttpResponse {
+            status: HttpStatus::BadRequest,
+            content_type: "text/plain; charset=utf-8",
+            body: "Bad Request".to_string(),
+        }),
+        Err(e) => Ok(HttpResponse {
+            status: HttpStatus::InternalServerError,
+            content_type: "text/plain; charset=utf-8",
+            body: e.to_string(),
+        }),
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -189,7 +210,7 @@ fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, RunError> {
     }
 }
 
-fn serve_http(root: &Path, files: &[PathBuf]) -> Result<(), RunError> {
+fn serve_http(maki: &Maki) -> Result<(), RunError> {
     let listener =
         TcpListener::bind("127.0.0.1:4000").map_err(|source| RunError::IoError { source })?;
 
@@ -198,10 +219,11 @@ fn serve_http(root: &Path, files: &[PathBuf]) -> Result<(), RunError> {
     for stream in listener.incoming() {
         let mut stream = stream.map_err(|source| RunError::IoError { source })?;
         let raw_request = read_request_head(&mut stream)?;
+        // TODO: header만 잘라서 먼저 utf8로 변환하기
         let request = String::from_utf8_lossy(&raw_request);
         let request = parse_request(&request)?;
 
-        let response = handle_request(&root, &request, files)?;
+        let response = handle_request(&maki, &request)?;
         let http_response = render_response(&response);
         stream
             .write_all(http_response.as_bytes())
@@ -215,6 +237,8 @@ fn render_response(response: &HttpResponse) -> String {
     let status = match response.status {
         HttpStatus::Ok => "200 OK",
         HttpStatus::NotFound => "404 Not Found",
+        HttpStatus::InternalServerError => "500 Internal Server Error",
+        HttpStatus::BadRequest => "400 Bad Request",
     };
     format!(
         "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n{}",
@@ -225,16 +249,117 @@ fn render_response(response: &HttpResponse) -> String {
     )
 }
 
-fn render_index(root: &Path, files: &[PathBuf]) -> Result<String, RunError> {
-    let mut html = String::from("<!doctype html><html><body><ul>");
-    let files = relative_markdown_paths(root, files)?;
+fn get_relative_path(root: &Path, path: &Path) -> Result<PathBuf, RunError> {
+    path.strip_prefix(root)
+        .map_err(|source| RunError::InvalidMarkdownPath {
+            path: path.to_path_buf(),
+            source,
+        })
+        .map(Path::to_path_buf)
+}
 
-    for file in files {
-        html.push_str(&format!("<li>{}</li>", file.display(),))
+#[derive(Debug, PartialEq)]
+enum MakiRoute {
+    Index,
+    RenderedPage(PathBuf),
+    SourcePage(PathBuf),
+}
+
+impl Maki {
+    fn get_raw_content(&self, file: &Path) -> Result<String, RunError> {
+        let file = self.root.join(file);
+
+        if !file.exists() || !file.is_file() {
+            return Err(RunError::IoError {
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"),
+            });
+        }
+
+        std::fs::read_to_string(&file).map_err(|source| RunError::IoError { source })
     }
 
-    html.push_str("</ul></body></html>");
-    Ok(html)
+    // root: absolute or relative to the project directory
+    fn load(root: &Path) -> Result<Self, RunError> {
+        if !root.exists() {
+            return Err(RunError::RootNotFound(root.to_path_buf()));
+        }
+        if !root.is_dir() {
+            return Err(RunError::RootNotDirectory(root.to_path_buf()));
+        }
+
+        let root = std::fs::canonicalize(root).map_err(|source| RunError::IoError { source })?;
+
+        let files = list_markdown_files(&root)?
+            .into_iter()
+            .map(|path| get_relative_path(&root, &path))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self { root, files })
+    }
+
+    // TODO: render markdown to HTML
+    fn render_html(&self, file: &Path) -> Result<String, RunError> {
+        let file = self.root.join(file);
+        if !file.exists() {
+            return Err(RunError::IoError {
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"),
+            });
+        }
+        if !file.is_file() {
+            return Err(RunError::IoError {
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "not a file"),
+            });
+        }
+
+        let mut html =
+            String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>");
+        let content =
+            std::fs::read_to_string(&file).map_err(|source| RunError::IoError { source })?;
+        html.push_str(&content);
+        html.push_str("</body></html>");
+        Ok(html)
+    }
+
+    /// Resolves a page path relative to the root directory.
+    /// Returns `None` if the path is not a markdown file or is not found.
+    fn resolve_route(&self, target: &str) -> Result<Option<MakiRoute>, RunError> {
+        let target = target
+            .strip_prefix('/')
+            .ok_or(RunError::RequestParseError)?;
+
+        let is_source = target.ends_with(".md");
+
+        if target.is_empty() {
+            return Ok(Some(MakiRoute::Index));
+        }
+
+        let target = percent_decode_str(target)
+            .decode_utf8()
+            .map_err(|_e| RunError::BadRequest)?
+            .to_string();
+
+        let relative_path = if is_source {
+            PathBuf::from(target)
+        } else {
+            PathBuf::from(target).with_added_extension("md")
+        };
+
+        if relative_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(RunError::BadRequest);
+        }
+
+        if !self.files.contains(&relative_path) {
+            return Ok(None);
+        }
+
+        match is_source {
+            true => Ok(Some(MakiRoute::SourcePage(relative_path))),
+            false => Ok(Some(MakiRoute::RenderedPage(relative_path))),
+        }
+    }
 }
 
 fn main() {
@@ -267,6 +392,7 @@ enum RunError {
         source: std::io::Error,
     },
     RequestParseError,
+    BadRequest,
 }
 
 impl Display for RunError {
@@ -282,6 +408,7 @@ impl Display for RunError {
             RunError::ReadDirectoryFailed { path, source } => {
                 write!(f, "Failed to read directory {}: {}", path.display(), source)
             }
+            RunError::BadRequest => write!(f, "Bad request"),
             RunError::IoError { source } => write!(f, "IO error: {}", source),
             RunError::RequestParseError => write!(f, "Request parse error"),
         }
@@ -316,38 +443,12 @@ fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, RunError> {
 }
 
 fn run_serve(root: PathBuf) -> Result<(), RunError> {
-    if !root.exists() {
-        return Err(RunError::RootNotFound(root));
-    }
-
-    if !root.is_dir() {
-        return Err(RunError::RootNotDirectory(root));
-    }
-
-    let files = list_markdown_files(&root)?;
-    println!("Found {} markdown files", files.len());
-    let relative_files = relative_markdown_paths(&root, &files)?;
-    for file in &relative_files {
+    let maki = Maki::load(&root)?;
+    println!("Found {} markdown files", maki.files.len());
+    for file in &maki.files {
         println!("- {}", file.display());
     }
-    serve_http(&root, &files)
-}
-
-fn relative_markdown_paths(root: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>, RunError> {
-    let mut vec = Vec::new();
-
-    for file in files {
-        let relative = file
-            .strip_prefix(root)
-            .map_err(|source| RunError::InvalidMarkdownPath {
-                path: file.to_path_buf(),
-                source,
-            })?
-            .to_path_buf();
-        vec.push(relative);
-    }
-
-    Ok(vec)
+    serve_http(&maki)
 }
 
 fn run_command(command: Command) -> Result<(), RunError> {
@@ -468,25 +569,12 @@ mod tests {
     #[test]
     fn test_relative_markdown_paths() {
         let root = PathBuf::from("./tests/fixtures/basic-maki-project");
-        let files = list_markdown_files(&root).unwrap();
-        let relative = relative_markdown_paths(&root, &files).unwrap();
+        let maki = Maki::load(&root).unwrap();
+        let relative = maki.files;
         assert_eq!(
             relative,
             vec![PathBuf::from("README.md"), PathBuf::from("daily.md"),]
         );
-    }
-
-    #[test]
-    fn test_render_index() {
-        let html = render_index(
-            &PathBuf::from("."),
-            &[PathBuf::from("./README.md"), PathBuf::from("./daily.md")],
-        );
-        assert!(html.is_ok());
-        let html = html.unwrap();
-
-        assert!(html.contains("README.md"));
-        assert!(html.contains("daily.md"));
     }
 
     #[test]
@@ -513,7 +601,12 @@ mod tests {
             body: None,
         };
 
-        let response = handle_request(&PathBuf::from("."), &request, &[]).unwrap();
+        let maki = Maki {
+            root: PathBuf::from("."),
+            files: vec![],
+        };
+
+        let response = handle_request(&maki, &request).unwrap();
 
         assert_eq!(response.status, HttpStatus::NotFound);
     }
@@ -522,7 +615,7 @@ mod tests {
     fn test_render_not_found_response() {
         let response = HttpResponse {
             status: HttpStatus::NotFound,
-            content_type: "text/plain",
+            content_type: "text/plain; charset=utf-8",
             body: "Not Found".to_string(),
         };
         let rendered = render_response(&response);
@@ -552,5 +645,32 @@ mod tests {
         let headers = parse_request_headers(&mut lines).unwrap();
         assert_eq!(headers.get("host").unwrap(), "localhost");
         assert_eq!(headers.get("connection").unwrap(), "close");
+    }
+
+    #[test]
+    fn test_resolve_route() {
+        let maki = Maki {
+            root: PathBuf::from("."),
+            files: vec![PathBuf::from("hi.md"), PathBuf::from("좋은아침.md")],
+        };
+        let route = maki.resolve_route("/").unwrap();
+        assert_eq!(route, Some(MakiRoute::Index));
+        let route = maki.resolve_route("/favicon.ico").unwrap();
+        assert_eq!(route, None);
+        let route = maki.resolve_route("/hi.md").unwrap();
+        assert_eq!(route, Some(MakiRoute::SourcePage(PathBuf::from("hi.md"))));
+        let route = maki.resolve_route("/hi").unwrap();
+        assert_eq!(route, Some(MakiRoute::RenderedPage(PathBuf::from("hi.md"))));
+        let route = maki.resolve_route("/../hi");
+        assert!(matches!(route, Err(RunError::BadRequest)));
+        let route = maki.resolve_route("/%2e%2e/hi");
+        assert!(matches!(route, Err(RunError::BadRequest)));
+        let route = maki
+            .resolve_route("/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8.md")
+            .unwrap();
+        assert_eq!(
+            route,
+            Some(MakiRoute::SourcePage(PathBuf::from("좋은아침.md")))
+        );
     }
 }
