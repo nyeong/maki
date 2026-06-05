@@ -2,43 +2,128 @@ use std::fmt::Display;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve { root: PathBuf },
 }
 
-fn handle_request(root: &Path, request: &str, files: &[PathBuf]) -> Result<String, RunError> {
-    println!("request: {}", request);
-    let html = render_index(root, files)?;
-    let http_response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
-        html.len(),
-        html
-    );
-    Ok(http_response)
+#[derive(Debug, PartialEq)]
+enum HttpStatus {
+    Ok,
+    NotFound,
 }
 
 #[derive(Debug, PartialEq)]
-struct RawRequest {
-    method: String,
-    path: String,
-    protocol: String,
-    host: String,
+enum HttpMethod {
+    Get,
+}
+
+impl FromStr for HttpMethod {
+    type Err = RunError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_method(s)
+    }
+}
+
+fn parse_method(method: &str) -> Result<HttpMethod, RunError> {
+    match method {
+        "GET" => Ok(HttpMethod::Get),
+        _ => Err(RunError::RequestParseError),
+    }
+}
+
+fn parse_protocol(protocol: &str) -> Result<HttpProtocol, RunError> {
+    match protocol {
+        "HTTP/1.1" => Ok(HttpProtocol::Http1_1),
+        _ => Err(RunError::RequestParseError),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct HttpResponse {
+    status: HttpStatus,
+    content_type: &'static str,
     body: String,
 }
 
-/// Parses a raw HTTP request string into a [`RawRequest`] struct.
-fn parse_request(request: &str) -> Result<RawRequest, RunError> {
-    let parts: Vec<&str> = request.split_whitespace().collect();
-    println!("parts: {:?}", parts);
+impl FromStr for HttpProtocol {
+    type Err = RunError;
 
-    Ok(RawRequest {
-        method: parts[0].to_string(),
-        path: parts[1].to_string(),
-        protocol: "HTTP/1.1".to_string(),
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_protocol(s)
+    }
+}
+
+fn handle_request(
+    root: &Path,
+    request: &HttpRequest,
+    files: &[PathBuf],
+) -> Result<HttpResponse, RunError> {
+    let response = match request.path.as_str() {
+        "/" => {
+            let body = render_index(root, files)?;
+            HttpResponse {
+                status: HttpStatus::Ok,
+                content_type: "text/html",
+                body,
+            }
+        }
+        _ => HttpResponse {
+            status: HttpStatus::NotFound,
+            content_type: "text/plain",
+            body: "Not Found".to_string(),
+        },
+    };
+
+    Ok(response)
+}
+
+#[derive(Debug, PartialEq)]
+enum HttpProtocol {
+    Http1_1,
+}
+
+#[derive(Debug, PartialEq)]
+struct HttpRequest {
+    method: HttpMethod,
+    path: String,
+    protocol: HttpProtocol,
+    host: String,
+    body: Option<String>,
+}
+
+/// Parses a raw HTTP request string into a [`HttpRequest`] struct.
+fn parse_request(request: &str) -> Result<HttpRequest, RunError> {
+    let mut first_line = request
+        .lines()
+        .next()
+        .ok_or(RunError::RequestParseError)?
+        .split_whitespace();
+    let method = first_line
+        .next()
+        .ok_or(RunError::RequestParseError)?
+        .parse::<HttpMethod>()?;
+    let path = first_line
+        .next()
+        .ok_or(RunError::RequestParseError)?
+        .to_string();
+    let protocol = first_line
+        .next()
+        .ok_or(RunError::RequestParseError)?
+        .parse::<HttpProtocol>()?;
+    if first_line.next().is_some() {
+        return Err(RunError::RequestParseError);
+    }
+
+    Ok(HttpRequest {
+        method,
+        path,
+        protocol,
         host: "localhost:4000".to_string(),
-        body: "".to_string(),
+        body: None,
     })
 }
 
@@ -51,21 +136,37 @@ fn serve_http(root: &Path, files: &[PathBuf]) -> Result<(), RunError> {
     let mut buffer = [0u8; 1024];
     for stream in listener.incoming() {
         let mut stream = stream.map_err(|source| RunError::IoError { source })?;
-        stream
+        let bytes_read = stream
             .read(&mut buffer)
             .map_err(|source| RunError::IoError { source })?;
-        let request = String::from_utf8_lossy(&buffer);
-        println!("raw request: {:?}", request);
+        if bytes_read == 0 {
+            continue;
+        }
+        let request = String::from_utf8_lossy(&buffer[..bytes_read]);
         let request = parse_request(&request)?;
 
-        println!("{:?}", request);
-        let response = handle_request(&root, "hi", files)?;
+        let response = handle_request(&root, &request, files)?;
+        let http_response = render_response(&response);
         stream
-            .write_all(response.as_bytes())
+            .write_all(http_response.as_bytes())
             .map_err(|source| RunError::IoError { source })?;
     }
 
     Ok(())
+}
+
+fn render_response(response: &HttpResponse) -> String {
+    let status = match response.status {
+        HttpStatus::Ok => "200 OK",
+        HttpStatus::NotFound => "404 Not Found",
+    };
+    format!(
+        "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: {}\r\n\r\n{}",
+        status,
+        response.body.len(),
+        response.content_type,
+        response.body
+    )
 }
 
 fn render_index(root: &Path, files: &[PathBuf]) -> Result<String, RunError> {
@@ -109,6 +210,7 @@ enum RunError {
     IoError {
         source: std::io::Error,
     },
+    RequestParseError,
 }
 
 impl Display for RunError {
@@ -125,6 +227,7 @@ impl Display for RunError {
                 write!(f, "Failed to read directory {}: {}", path.display(), source)
             }
             RunError::IoError { source } => write!(f, "IO error: {}", source),
+            RunError::RequestParseError => write!(f, "Request parse error"),
         }
     }
 }
@@ -337,10 +440,37 @@ mod tests {
         let request = parse_request(raw_request);
         assert!(request.is_ok());
         let request = request.unwrap();
-        assert_eq!(request.method, "GET");
+        assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.path, "/favicon.ico");
-        assert_eq!(request.protocol, "HTTP/1.1");
+        assert_eq!(request.protocol, HttpProtocol::Http1_1);
         assert_eq!(request.host, "localhost:4000");
-        assert_eq!(request.body, "");
+        assert_eq!(request.body, None);
+    }
+
+    #[test]
+    fn test_handle_unknown_path_returns_not_found() {
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            path: "/missing".to_string(),
+            protocol: HttpProtocol::Http1_1,
+            host: "localhost:4000".to_string(),
+            body: None,
+        };
+
+        let response = handle_request(&PathBuf::from("."), &request, &[]).unwrap();
+
+        assert_eq!(response.status, HttpStatus::NotFound);
+    }
+
+    #[test]
+    fn test_render_not_found_response() {
+        let response = HttpResponse {
+            status: HttpStatus::NotFound,
+            content_type: "text/plain",
+            body: "Not Found".to_string(),
+        };
+        let rendered = render_response(&response);
+
+        assert!(rendered.contains("404 Not Found"));
     }
 }
