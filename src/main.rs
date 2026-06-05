@@ -68,41 +68,6 @@ impl FromStr for HttpVersion {
     }
 }
 
-fn handle_request(maki: &Maki, request: &HttpRequest) -> Result<HttpResponse, RunError> {
-    match maki.resolve_route(request.target.as_str()) {
-        Ok(Some(MakiRoute::RenderedPage(path))) => Ok(HttpResponse {
-            status: HttpStatus::Ok,
-            content_type: "text/html; charset=utf-8",
-            body: maki.render_html(&path)?,
-        }),
-        Ok(Some(MakiRoute::SourcePage(path))) => Ok(HttpResponse {
-            status: HttpStatus::Ok,
-            content_type: "text/plain; charset=utf-8",
-            body: maki.get_raw_content(&path)?,
-        }),
-        Ok(Some(MakiRoute::Index)) => Ok(HttpResponse {
-            status: HttpStatus::Ok,
-            content_type: "text/plain; charset=utf-8",
-            body: "Index".to_string(),
-        }),
-        Ok(None) => Ok(HttpResponse {
-            status: HttpStatus::NotFound,
-            content_type: "text/plain; charset=utf-8",
-            body: "Not Found".to_string(),
-        }),
-        Err(RunError::BadRequest) => Ok(HttpResponse {
-            status: HttpStatus::BadRequest,
-            content_type: "text/plain; charset=utf-8",
-            body: "Bad Request".to_string(),
-        }),
-        Err(e) => Ok(HttpResponse {
-            status: HttpStatus::InternalServerError,
-            content_type: "text/plain; charset=utf-8",
-            body: e.to_string(),
-        }),
-    }
-}
-
 #[derive(Debug, PartialEq)]
 enum HttpVersion {
     Http1_1,
@@ -223,7 +188,7 @@ fn serve_http(maki: &Maki) -> Result<(), RunError> {
         let request = String::from_utf8_lossy(&raw_request);
         let request = parse_request(&request)?;
 
-        let response = handle_request(&maki, &request)?;
+        let response = maki.handle_request(&request)?;
         let http_response = render_response(&response);
         stream
             .write_all(http_response.as_bytes())
@@ -266,6 +231,40 @@ enum MakiRoute {
 }
 
 impl Maki {
+    fn handle_request(&self, request: &HttpRequest) -> Result<HttpResponse, RunError> {
+        match self.resolve_route(request.target.as_str()) {
+            Ok(Some(MakiRoute::RenderedPage(path))) => Ok(HttpResponse {
+                status: HttpStatus::Ok,
+                content_type: "text/html; charset=utf-8",
+                body: self.render_html(&path)?,
+            }),
+            Ok(Some(MakiRoute::SourcePage(path))) => Ok(HttpResponse {
+                status: HttpStatus::Ok,
+                content_type: "text/plain; charset=utf-8",
+                body: self.get_raw_content(&path)?,
+            }),
+            Ok(Some(MakiRoute::Index)) => Ok(HttpResponse {
+                status: HttpStatus::Ok,
+                content_type: "text/plain; charset=utf-8",
+                body: "Index".to_string(),
+            }),
+            Ok(None) => Ok(HttpResponse {
+                status: HttpStatus::NotFound,
+                content_type: "text/plain; charset=utf-8",
+                body: "Not Found".to_string(),
+            }),
+            Err(RunError::BadRequest) => Ok(HttpResponse {
+                status: HttpStatus::BadRequest,
+                content_type: "text/plain; charset=utf-8",
+                body: "Bad Request".to_string(),
+            }),
+            Err(e) => Ok(HttpResponse {
+                status: HttpStatus::InternalServerError,
+                content_type: "text/plain; charset=utf-8",
+                body: e.to_string(),
+            }),
+        }
+    }
     fn get_raw_content(&self, file: &Path) -> Result<String, RunError> {
         let file = self.root.join(file);
 
@@ -606,7 +605,7 @@ mod tests {
             files: vec![],
         };
 
-        let response = handle_request(&maki, &request).unwrap();
+        let response = maki.handle_request(&request).unwrap();
 
         assert_eq!(response.status, HttpStatus::NotFound);
     }
@@ -651,26 +650,124 @@ mod tests {
     fn test_resolve_route() {
         let maki = Maki {
             root: PathBuf::from("."),
-            files: vec![PathBuf::from("hi.md"), PathBuf::from("좋은아침.md")],
+            files: vec![
+                PathBuf::from("hi.md"),
+                PathBuf::from("좋은아침.md"),
+                PathBuf::from("foo.bar.md"),
+            ],
         };
-        let route = maki.resolve_route("/").unwrap();
-        assert_eq!(route, Some(MakiRoute::Index));
-        let route = maki.resolve_route("/favicon.ico").unwrap();
-        assert_eq!(route, None);
-        let route = maki.resolve_route("/hi.md").unwrap();
-        assert_eq!(route, Some(MakiRoute::SourcePage(PathBuf::from("hi.md"))));
-        let route = maki.resolve_route("/hi").unwrap();
-        assert_eq!(route, Some(MakiRoute::RenderedPage(PathBuf::from("hi.md"))));
-        let route = maki.resolve_route("/../hi");
-        assert!(matches!(route, Err(RunError::BadRequest)));
-        let route = maki.resolve_route("/%2e%2e/hi");
-        assert!(matches!(route, Err(RunError::BadRequest)));
-        let route = maki
-            .resolve_route("/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8.md")
-            .unwrap();
+        assert_eq!(maki.resolve_route("/").unwrap(), Some(MakiRoute::Index));
+        assert_eq!(maki.resolve_route("/favicon.ico").unwrap(), None);
         assert_eq!(
-            route,
+            maki.resolve_route("/hi.md").unwrap(),
+            Some(MakiRoute::SourcePage(PathBuf::from("hi.md")))
+        );
+        assert_eq!(
+            maki.resolve_route("/hi").unwrap(),
+            Some(MakiRoute::RenderedPage(PathBuf::from("hi.md")))
+        );
+        assert!(matches!(
+            maki.resolve_route("/../hi"),
+            Err(RunError::BadRequest)
+        ));
+        assert!(matches!(
+            maki.resolve_route("/%2e%2e/hi"),
+            Err(RunError::BadRequest)
+        ));
+        assert_eq!(
+            maki.resolve_route("/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8.md")
+                .unwrap(),
             Some(MakiRoute::SourcePage(PathBuf::from("좋은아침.md")))
         );
+        assert_eq!(
+            maki.resolve_route("/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8")
+                .unwrap(),
+            Some(MakiRoute::RenderedPage(PathBuf::from("좋은아침.md")))
+        );
+        assert_eq!(
+            maki.resolve_route("/foo.bar.md").unwrap(),
+            Some(MakiRoute::SourcePage(PathBuf::from("foo.bar.md")))
+        );
+        assert_eq!(
+            maki.resolve_route("/foo.bar").unwrap(),
+            Some(MakiRoute::RenderedPage(PathBuf::from("foo.bar.md")))
+        );
+    }
+
+    #[test]
+    fn test_render_response() {
+        let response = render_response(&HttpResponse {
+            status: HttpStatus::BadRequest,
+            content_type: "text/plain",
+            body: "Bad Request".to_string(),
+        });
+        assert!(response.contains("400 Bad Request"));
+        assert!(response.contains("text/plain"));
+
+        let response = render_response(&HttpResponse {
+            status: HttpStatus::InternalServerError,
+            content_type: "text/plain",
+            body: "Bad Request".to_string(),
+        });
+        assert!(response.starts_with("HTTP/1.1 500 Internal Server Error\r\n"));
+        assert!(response.contains("text/plain"));
+
+        let response = render_response(&HttpResponse {
+            status: HttpStatus::NotFound,
+            content_type: "text/plain",
+            body: "Bad Request".to_string(),
+        });
+        assert!(response.contains("HTTP/1.1 404 Not Found\r\n"));
+        assert!(response.contains("text/plain"));
+
+        let response = render_response(&HttpResponse {
+            status: HttpStatus::Ok,
+            content_type: "text/plain",
+            body: "Bad Request".to_string(),
+        });
+        assert!(response.contains("HTTP/1.1 200 OK\r\n"));
+        assert!(response.contains("text/plain"));
+    }
+
+    #[test]
+    fn test_handle_request() {
+        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            target: "/daily.md".to_string(),
+            version: HttpVersion::Http1_1,
+            headers: HttpHeaders::default(),
+            body: None,
+        };
+
+        let response = maki.handle_request(&request).unwrap();
+        assert_eq!(response.status, HttpStatus::Ok);
+        assert!(response.body.contains("# Daily"));
+        assert!(response.content_type.contains("plain"));
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            target: "/ignore.txt".to_string(),
+            version: HttpVersion::Http1_1,
+            headers: HttpHeaders::default(),
+            body: None,
+        };
+
+        let response = maki.handle_request(&request).unwrap();
+        assert_eq!(response.status, HttpStatus::NotFound);
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            target: "/README".to_string(),
+            version: HttpVersion::Http1_1,
+            headers: HttpHeaders::default(),
+            body: None,
+        };
+
+        let response = maki.handle_request(&request).unwrap();
+        assert_eq!(response.status, HttpStatus::Ok);
+        assert!(response.body.contains("Maki"));
+        assert!(response.content_type.contains("html"));
     }
 }
