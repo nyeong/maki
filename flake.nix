@@ -3,10 +3,12 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    git-hooks.url = "github:cachix/git-hooks.nix";
+    git-hooks.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }@inputs:
     let
       systems = [
         "aarch64-darwin"
@@ -18,13 +20,46 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
+      checks = forAllSystems (system: {
+        pre-commit-check = inputs.git-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = {
+            nixfmt.enable = true;
+            rustfmt.enable = true;
+            clippy = {
+              enable = true;
+              settings = {
+                allFeatures = true;
+                denyWarnings = true;
+              };
+            };
+            statix.enable = true;
+            deadnix.enable = true;
+            cargo-test = {
+              enable = true;
+              name = "cargo test";
+              entry = "cargo test";
+              language = "system";
+              pass_filenames = false;
+              stages = [
+                "pre-commit"
+                "pre-push"
+              ];
+              always_run = true;
+            };
+          };
+        };
+      });
       devShells = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          inherit (self.checks.${system}.pre-commit-check) shellHook enabledPackages;
         in
         {
           default = pkgs.mkShell {
+            inherit shellHook;
+            buildInputs = enabledPackages;
             packages = with pkgs; [
               cargo
               clippy
@@ -40,7 +75,5 @@
           };
         }
       );
-
-      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixpkgs-fmt);
     };
 }
