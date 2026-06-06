@@ -1,3 +1,6 @@
+//! HTTP module
+//!
+//! request, response, parse, serialize, ...
 use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, PartialEq)]
@@ -14,11 +17,12 @@ use Error::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum StatusCode {
-    Ok,                  // 200
-    MovedPermanently,    // 301
-    Found,               // 302
-    NotFound,            // 404
-    BadRequest,          // 400
+    Ok, // 200
+    #[allow(dead_code)]
+    MovedPermanently, // 301
+    Found, // 302
+    NotFound, // 404
+    BadRequest, // 400
     InternalServerError, // 500
 }
 
@@ -52,6 +56,7 @@ impl Headers {
         self.0.insert(key.to_lowercase(), value);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.0.get(&key.to_lowercase()).map(|s| s.as_str())
     }
@@ -84,6 +89,7 @@ pub(crate) struct Request {
 }
 
 impl Request {
+    #[allow(dead_code)]
     pub(crate) fn new(method: Method, target: impl Into<String>) -> Self {
         Self {
             method,
@@ -94,6 +100,7 @@ impl Request {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get(target: impl Into<String>) -> Self {
         Self::new(Method::Get, target.into())
     }
@@ -191,6 +198,7 @@ impl Response {
         self
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_header(&self, key: &str) -> Option<&str> {
         self.headers.get(key)
     }
@@ -223,10 +231,12 @@ impl Response {
         raw
     }
 
+    #[allow(dead_code)]
     pub(crate) fn status(&self) -> StatusCode {
         self.status
     }
 
+    #[allow(dead_code)]
     pub(crate) fn body(&self) -> &[u8] {
         &self.body
     }
@@ -331,6 +341,8 @@ mod tests {
         let response = Response::new(StatusCode::Ok)
             .set_header("content-type", "text/plain")
             .set_body("hello");
+
+        assert_eq!(response.status(), StatusCode::Ok);
 
         let response = String::from_utf8(response.to_bytes()).unwrap();
 
