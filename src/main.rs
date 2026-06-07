@@ -37,7 +37,7 @@ enum HomeMode {
 impl Default for MakiConfig {
     fn default() -> Self {
         Self {
-            home_mode: HomeMode::Redirect("/n/README".to_string()),
+            home_mode: HomeMode::Redirect("/README".to_string()),
             publish_policy: PublishPolicy::PublishAll,
         }
     }
@@ -47,6 +47,17 @@ struct Maki {
     root: PathBuf,       // canonical absolute path
     files: Vec<PathBuf>, // root-relative markdown paths
     config: MakiConfig,
+}
+
+fn parse_markdown(markdown: &str) -> String {
+    let mut options = pulldown_cmark::Options::empty();
+    options.insert(pulldown_cmark::Options::ENABLE_GFM);
+    options.insert(pulldown_cmark::Options::ENABLE_WIKILINKS);
+    let parser = pulldown_cmark::Parser::new_ext(markdown, options);
+    let mut buffer = String::new();
+    pulldown_cmark::html::push_html(&mut buffer, parser);
+
+    buffer
 }
 
 fn get_relative_path(root: &Path, path: &Path) -> Result<PathBuf, RunError> {
@@ -90,10 +101,7 @@ impl Maki {
 
         let root = std::fs::canonicalize(root).map_err(|source| RunError::IoError { source })?;
 
-        let files = list_markdown_files(&root)?
-            .into_iter()
-            .map(|path| get_relative_path(&root, &path))
-            .collect::<Result<Vec<_>, _>>()?;
+        let files = list_markdown_files(&root)?;
 
         Ok(Self {
             root,
@@ -102,7 +110,6 @@ impl Maki {
         })
     }
 
-    // TODO: render markdown to HTML
     fn render_html(&self, file: &Path) -> Result<String, RunError> {
         let file = self.root.join(file);
         if !file.exists() {
@@ -120,6 +127,7 @@ impl Maki {
             String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>");
         let content =
             std::fs::read_to_string(&file).map_err(|source| RunError::IoError { source })?;
+        let content = parse_markdown(&content);
         html.push_str(&content);
         html.push_str("</body></html>");
         Ok(html)
@@ -160,7 +168,7 @@ impl Maki {
     /// Resolves a page path relative to the root directory.
     /// # Example
     /// ```text
-    /// maki.resolve_route("/n/maki"); // => MakiRoute::NotePage("maki.md")
+    /// maki.resolve_route("/maki"); // => MakiRoute::NotePage("maki.md")
     /// ```
     fn resolve_route(&self, target: &str) -> Result<MakiRoute, RunError> {
         let target = target
@@ -176,11 +184,7 @@ impl Maki {
             .map_err(|_e| RunError::BadRequest)?
             .to_string();
 
-        if let Some(note_target) = target.strip_prefix("n/") {
-            return self.resolve_note_route(note_target);
-        }
-
-        Ok(MakiRoute::NotFound)
+        self.resolve_note_route(&target)
     }
 }
 
@@ -239,29 +243,37 @@ impl Display for RunError {
     }
 }
 
-/// Lists all markdown files in the given directory.
-/// Currently, it does not recursively search subdirectories.
-fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, RunError> {
-    let entries = std::fs::read_dir(root).map_err(|source| RunError::ReadDirectoryFailed {
-        path: root.to_path_buf(),
+fn collect_markdown_files(
+    root: &Path,
+    current: &Path,
+    acc: &mut Vec<PathBuf>,
+) -> Result<(), RunError> {
+    let entries = std::fs::read_dir(current).map_err(|source| RunError::ReadDirectoryFailed {
+        path: current.to_path_buf(),
         source,
     })?;
 
-    let mut files = Vec::new();
-
     for entry in entries {
         let entry = entry.map_err(|source| RunError::ReadDirectoryFailed {
-            path: root.to_path_buf(),
+            path: current.to_path_buf(),
             source,
         })?;
 
         let path = entry.path();
 
-        if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
-            files.push(path);
+        if path.is_dir() {
+            collect_markdown_files(root, &path, acc)?;
+        } else if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+            acc.push(get_relative_path(root, &path)?);
         }
     }
+    Ok(())
+}
 
+/// Lists all markdown files in the given directory.
+fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, RunError> {
+    let mut files = Vec::new();
+    collect_markdown_files(root, root, &mut files)?;
     files.sort();
     Ok(files)
 }
@@ -384,8 +396,9 @@ mod tests {
         assert_eq!(
             files,
             vec![
-                PathBuf::from("./tests/fixtures/basic-maki-project/README.md"),
-                PathBuf::from("./tests/fixtures/basic-maki-project/daily.md"),
+                PathBuf::from("README.md"),
+                PathBuf::from("daily.md"),
+                PathBuf::from("nested/nested.md"),
             ]
         );
     }
@@ -397,7 +410,11 @@ mod tests {
         let relative = maki.files;
         assert_eq!(
             relative,
-            vec![PathBuf::from("README.md"), PathBuf::from("daily.md"),]
+            vec![
+                PathBuf::from("README.md"),
+                PathBuf::from("daily.md"),
+                PathBuf::from("nested/nested.md"),
+            ]
         );
     }
 
@@ -414,41 +431,41 @@ mod tests {
         };
         assert_eq!(maki.resolve_route("/").unwrap(), MakiRoute::Home);
         assert_eq!(
-            maki.resolve_route("/n/favicon.ico").unwrap(),
+            maki.resolve_route("/favicon.ico").unwrap(),
             MakiRoute::NotFound
         );
         assert_eq!(
-            maki.resolve_route("/n/hi.md").unwrap(),
+            maki.resolve_route("/hi.md").unwrap(),
             MakiRoute::NoteSource(PathBuf::from("hi.md"))
         );
         assert_eq!(
-            maki.resolve_route("/n/hi").unwrap(),
+            maki.resolve_route("/hi").unwrap(),
             MakiRoute::NotePage(PathBuf::from("hi.md"))
         );
         assert!(matches!(
-            maki.resolve_route("/n/../hi"),
+            maki.resolve_route("/../hi"),
             Err(RunError::BadRequest)
         ));
         assert!(matches!(
-            maki.resolve_route("/n/%2e%2e/hi"),
+            maki.resolve_route("/%2e%2e/hi"),
             Err(RunError::BadRequest)
         ));
         assert_eq!(
-            maki.resolve_route("/n/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8.md")
+            maki.resolve_route("/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8.md")
                 .unwrap(),
             MakiRoute::NoteSource(PathBuf::from("좋은아침.md"))
         );
         assert_eq!(
-            maki.resolve_route("/n/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8")
+            maki.resolve_route("/%EC%A2%8B%EC%9D%80%EC%95%84%EC%B9%A8")
                 .unwrap(),
             MakiRoute::NotePage(PathBuf::from("좋은아침.md"))
         );
         assert_eq!(
-            maki.resolve_route("/n/foo.bar.md").unwrap(),
+            maki.resolve_route("/foo.bar.md").unwrap(),
             MakiRoute::NoteSource(PathBuf::from("foo.bar.md"))
         );
         assert_eq!(
-            maki.resolve_route("/n/foo.bar").unwrap(),
+            maki.resolve_route("/foo.bar").unwrap(),
             MakiRoute::NotePage(PathBuf::from("foo.bar.md"))
         );
     }

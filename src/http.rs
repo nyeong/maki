@@ -355,13 +355,13 @@ mod tests {
 
     #[test]
     fn test_http_response_wire_format_without_body() {
-        let response = Response::new(StatusCode::Found).set_header("Location", "/n/README");
+        let response = Response::new(StatusCode::Found).set_header("Location", "/README");
 
         let response = String::from_utf8(response.to_bytes()).unwrap();
 
         assert!(response.starts_with("HTTP/1.1 302 Found\r\n"));
         assert!(response.contains("connection: close\r\n"));
-        assert!(response.contains("location: /n/README\r\n"));
+        assert!(response.contains("location: /README\r\n"));
         assert!(response.ends_with("\r\n\r\n"));
     }
 }

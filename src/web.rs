@@ -244,7 +244,7 @@ mod tests {
         )
         .unwrap();
 
-        let request = http::Request::get("/n/daily.md");
+        let request = http::Request::get("/daily.md");
         let response = handle_request(&maki, &request).unwrap();
         assert_eq!(response.status(), http::StatusCode::Ok);
         assert!(
@@ -258,11 +258,11 @@ mod tests {
                 .is_some_and(|v| v.contains("plain"))
         );
 
-        let request = http::Request::get("/n/ignore.txt");
+        let request = http::Request::get("/ignore.txt");
         let response = handle_request(&maki, &request).unwrap();
         assert_eq!(response.status(), http::StatusCode::NotFound);
 
-        let request = http::Request::get("/n/README");
+        let request = http::Request::get("/README");
         let response = handle_request(&maki, &request).unwrap();
         assert_eq!(response.status(), http::StatusCode::Ok);
         assert!(
