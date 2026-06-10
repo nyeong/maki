@@ -3,11 +3,28 @@
 //! ```text
 //! http::Request -> Maki -> http::Response
 //! ```
+//!
+//! ### Error Handling
+//!
+//! Web errors describe failures at the HTTP/domain boundary.
+//! `into_response` owns the web error -> HTTP error response policy.
+//!
+//! ```text
+//! maki::Error ─┐
+//! http::Error ─┼─> web::Error ──> http::Response
+//! io::Error   ─┘
+//! ```
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 
-use crate::{HomeMode, Maki, MakiRoute, RunError, http};
+use percent_encoding::percent_decode_str;
+
+use crate::http::Response;
+use crate::maki;
+use crate::maki::{HomeMode, Maki, MakiRoute};
+use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
 const ADDRESS: &str = "127.0.0.1";
@@ -19,10 +36,58 @@ enum Error {
     Io {
         source: std::io::Error,
     },
+    InvalidRequest {
+        #[allow(dead_code)]
+        source: http::Error,
+    },
     TooLongRequest,
     ZeroLengthRequest,
-    #[allow(dead_code)]
-    Http(http::Error),
+    BadRequest,
+    Maki {
+        source: maki::Error,
+    },
+}
+
+fn internal_server_error(e: &Error) -> Response {
+    Response::new(http::StatusCode::InternalServerError)
+        .set_header("content-type", "text/plain")
+        .set_body(format!("Internal Server Error: {}", e))
+}
+
+fn not_found(e: &Error) -> Response {
+    Response::new(http::StatusCode::NotFound)
+        .set_header("content-type", "text/plain")
+        .set_body(format!("Not Found: {}", e))
+}
+
+fn bad_request(e: &Error) -> Response {
+    Response::new(http::StatusCode::BadRequest)
+        .set_header("content-type", "text/plain")
+        .set_body(format!("Bad Request: {}", e))
+}
+
+impl Error {
+    fn into_response(self) -> Response {
+        match self {
+            e @ Error::Maki {
+                source: maki::Error::NoteNotFound(..),
+            } => not_found(&e),
+            e @ Error::Maki {
+                source: maki::Error::InvalidNotePath(..),
+            }
+            | e @ Error::InvalidRequest { .. }
+            | e @ Error::TooLongRequest
+            | e @ Error::BadRequest
+            | e @ Error::ZeroLengthRequest => bad_request(&e),
+            e @ Error::Io { .. } | e @ Error::Maki { .. } => internal_server_error(&e),
+        }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl From<std::io::Error> for Error {
@@ -31,38 +96,45 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<http::Error> for Error {
-    fn from(error: http::Error) -> Self {
-        Self::Http(error)
+impl From<maki::Error> for Error {
+    fn from(error: maki::Error) -> Self {
+        Self::Maki { source: error }
     }
 }
 
-pub(crate) fn handle_request(
-    maki: &Maki,
-    request: &http::Request,
-) -> Result<http::Response, RunError> {
-    match maki.resolve_route(request.target()) {
+impl From<http::Error> for Error {
+    fn from(error: http::Error) -> Self {
+        Self::InvalidRequest { source: error }
+    }
+}
+
+fn handle_request(maki: &Maki, request: &http::Request) -> Result<http::Response, Error> {
+    let target = percent_decode_str(request.target())
+        .decode_utf8()
+        .map_err(|_e| Error::BadRequest)?
+        .to_string();
+
+    if PathBuf::from(&target)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(Error::BadRequest);
+    }
+
+    match maki.resolve_route(&target) {
         Ok(MakiRoute::NotePage(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/html; charset=utf-8")
             .set_body(maki.render_html(&path)?)),
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
             .set_body(maki.get_raw_content(&path)?)),
-        Ok(MakiRoute::Home) => match &maki.config.home_mode {
+        Ok(MakiRoute::Home) => match &maki.config().home_mode() {
             HomeMode::Redirect(path) => Ok(http::Response::new(http::StatusCode::Found)
                 .set_header("Location", path)
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(path.as_bytes())),
         },
-        Ok(MakiRoute::NotFound) => Ok(http::Response::new(http::StatusCode::NotFound)
-            .set_header("Content-Type", "text/plain; charset=utf-8")
-            .set_body("Not Found".to_string())),
-        Err(RunError::BadRequest) => Ok(http::Response::new(http::StatusCode::BadRequest)
-            .set_header("Content-Type", "text/plain; charset=utf-8")
-            .set_body("Bad Request".to_string())),
-        Err(e) => Ok(http::Response::new(http::StatusCode::InternalServerError)
-            .set_header("Content-Type", "text/plain; charset=utf-8")
-            .set_body(e.to_string())),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -105,22 +177,12 @@ fn read_request(stream: &mut impl Read) -> Result<http::Request, Error> {
 fn create_response_from_connection(maki: &Maki, stream: &mut impl Read) -> http::Response {
     let request = match read_request(stream) {
         Ok(request) => request,
-        Err(err) => {
-            eprintln!("Request Parse Error: {:?}", err);
-            return http::Response::new(http::StatusCode::BadRequest)
-                .set_header("Content-Type", "text/plain; charset=utf-8")
-                .set_body("Bad Request");
-        }
+        Err(err) => return err.into_response(),
     };
 
     match handle_request(maki, &request) {
         Ok(response) => response,
-        Err(err) => {
-            eprintln!("Response Error: {:?}", err);
-            http::Response::new(http::StatusCode::InternalServerError)
-                .set_header("Content-Type", "text/plain; charset=utf-8")
-                .set_body("Internal Server Error")
-        }
+        Err(err) => err.into_response(),
     }
 }
 
@@ -162,7 +224,7 @@ pub(crate) fn serve(maki: &Maki) -> Result<(), RunError> {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::{MakiConfig, web::*};
+    use crate::web::*;
 
     #[test]
     fn test_render_not_found_response() {
@@ -188,31 +250,37 @@ mod tests {
     fn test_handle_unknown_path_returns_not_found() {
         let request = http::Request::get("/missing");
 
-        let maki = Maki {
-            root: PathBuf::from("."),
-            files: vec![],
-            config: MakiConfig::default(),
-        };
+        let maki = Maki::load(&PathBuf::from(".")).unwrap();
 
-        let response = handle_request(&maki, &request).unwrap();
+        let response = handle_request(&maki, &request);
 
-        assert_eq!(response.status(), http::StatusCode::NotFound);
+        assert!(matches!(
+            response,
+            Err(Error::Maki {
+                source: maki::Error::NoteNotFound(..)
+            })
+        ));
     }
 
     #[test]
     fn test_malformed_request_returns_bad_request() {
-        let maki = Maki::load(
-            &PathBuf::from("./tests/fixtures/basic-maki-project"),
-            MakiConfig::default(),
-        )
-        .unwrap();
+        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
 
         let mut input = &b"GET\r\n\r\n"[..];
 
         let response = create_response_from_connection(&maki, &mut input);
 
         assert_eq!(response.status(), http::StatusCode::BadRequest);
-        assert_eq!(response.body(), b"Bad Request");
+    }
+
+    #[test]
+    fn test_percent_encoded_path() {
+        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
+        let request = http::Request::get("/nested/%ED%95%9C%EA%B8%80.md");
+        assert_eq!(
+            handle_request(&maki, &request).unwrap().status(),
+            http::StatusCode::Ok
+        );
     }
 
     #[test]
@@ -238,11 +306,7 @@ mod tests {
 
     #[test]
     fn test_handle_request() {
-        let maki = Maki::load(
-            &PathBuf::from("./tests/fixtures/basic-maki-project"),
-            MakiConfig::default(),
-        )
-        .unwrap();
+        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
 
         let request = http::Request::get("/daily.md");
         let response = handle_request(&maki, &request).unwrap();
@@ -259,8 +323,13 @@ mod tests {
         );
 
         let request = http::Request::get("/ignore.txt");
-        let response = handle_request(&maki, &request).unwrap();
-        assert_eq!(response.status(), http::StatusCode::NotFound);
+        let response = handle_request(&maki, &request);
+        assert!(matches!(
+            response,
+            Err(Error::Maki {
+                source: maki::Error::NoteNotFound(..)
+            })
+        ));
 
         let request = http::Request::get("/README");
         let response = handle_request(&maki, &request).unwrap();

@@ -1,6 +1,8 @@
 //! HTTP module
 //!
 //! request, response, parse, serialize, ...
+//! This module does not know Maki routes or web error policy.
+
 use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, PartialEq)]
@@ -11,6 +13,7 @@ pub(crate) enum Error {
     InvalidTarget,
     InvalidHeader,
     EmptyRequest,
+    // TODO: Unsupported..., Malformed...
 }
 
 use Error::*;
