@@ -30,6 +30,8 @@ title: TODO
 # 4단계: Maki 확장, 인덱싱
 
 - [x] note identity, wikilink resolve 규칙 정하기
+  - [ ] wikilink가 resolve되는 게 아니라 일괄변환 되는 문제 수정하기
+    - 예)
 - [ ] 확장 문법 정하기
 - [ ] 동적 페이지 정하기 (`/@/schedule/{date}`, TODO 등)
 - [ ] case-insensitive unique note path
