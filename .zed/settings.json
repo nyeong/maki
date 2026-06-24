@@ -14,5 +14,8 @@
   },
   "languages": {
     "Rust": {},
+    "Markdown": {
+      "format_on_save": "off",
+    },
   },
 }
