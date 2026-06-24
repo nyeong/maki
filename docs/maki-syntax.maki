@@ -1,0 +1,238 @@
+--^ title: Maki Syntax
+
+독자적인 포맷을 쓰기로 함. line-first markup language, like bullet journal.
+
+= 멘탈 모델
+
+- 텍스트파일은 소스이자 결과물임
+- 단일 파일이 아니라 프로젝트 단위를 기대함
+- 새 block, inline, property를 추가해도 기존 문법의 해석이 바뀌지 않아야함
+
+== 사용자 멘탈모델
+
+- Line이 기본 단위임
+- Line이 모여서 Block을 형성함
+- Line 내에는 Inline이 있을 수 있음
+- 한정적인 용도로 Container Block을 사용함
+- 불렛저널을 쓰듯 쓸 수 있어야
+- 도구의 도움 없어도 기본적으로 타이핑이 용이해야
+
+== 설계적 멘탈모델
+
+- Container Block이 기본 단위임.
+- Line은 syntactic sugar임.
+
+= 참고함
+
+- 명백히 참고함
+  - org
+  - markdown
+- 참고하기 위해 메모함
+  - asciidoc
+  - reStructuredText
+  - 나무위키
+  - gemtext
+  - typst
+  - obsidian
+  - logseq
+  - MFM; Markup language for Misskey
+  - [djot](https://github.com/jgm/djot)
+  - 불렛저널
+
+= 문서 표기 설명
+
+- `<...>` : 토큰
+- `[...]` : optional
+- `<...>*` : zero or more
+- `<...>+` : one or more
+- `<...>{num}` : 그 숫자만큼
+- `<whitespace>` : space or tab
+- `/실제-공백` : space
+- `/실제-eol` : end of line
+
+= Block
+
+Maki의 기본 단위.
+
+- 속성을 가질 수 있음
+- 인자가 필요할 수 있음
+- 각 block마다 body를 해석하는 방법이 다를 수 있음
+  - 예: src는 raw text로 두어야하지만, quote는 inline, block을 허용함
+- 파일 전체도 하나의 root block임
+- Line은 Block에 대한 syntactic sugar임
+
+예를 들어 아래의 src block은
+
+```src html
+<html>
+  hi!
+</html>
+```
+
+아래의 code line과 동치이다
+
+--v lang=html
+    <html>
+      hi!
+    </html>
+
+아래의 특성이 각각 직교함
+
+1. Content mode
+   - inline, block, raw, custom
+
+== 속성
+
+- key, value
+
+== 종류
+
+- container
+- file
+- paragraph
+- heading
+- property block
+- quote block
+- code block
+- list
+- table
+- ...
+
+--v milestone: v0
+=== Container Block
+
+    ```<kind> [<args>]
+    <body>
+    ```
+
+- 유일하게 시작-종료가 있는 구문
+- 모든 Maki 블록은 Container Block으로 기술할 수 있어야함
+  - 다만 자주 쓰는 것들은 line-prefix 문법을 선호함
+- 엇갈려 닫는 구문은 지원하지 않음
+  - 예: `{ [ } ]` 이런식은 지원하지 않음
+  - 무조건 스택식
+
+--v milestone: v0
+=== File
+
+- 파일 전체가 하나의 블록임
+- Canonical Path : 프로젝트 루트에서 파일로 향하는 relative path에서 확장자를 제거한 값
+- File Name : 확장자를 제거한 파일의 이름
+
+= Line
+
+- Block에 대한 syntactic sugar. 왠만하면 line으로 작성하는 것을 권장함.
+- 나머지는 각 블록의 특성을 따름
+
+아래의 특성이 각각 직교함
+
+- Grouping Mode
+  - Atomic Line : 각 줄이 각각의 블록을 형성함.
+    [[#Heading]] 등
+
+  - Cluster Line : 연속한 줄은 하나의 블록을 형성함.
+    [[#Property Line]] 등
+
+== 종류
+
+- paragraph
+- heading (`=`)
+- property block (`--^`, `--v`)
+- quote block (`>`)
+- code block (`<whitespace>{4}`)
+- list (ordered (`1.`), unordered (`-`), definition (`:`))
+- table (`|`)
+
+--v milestone: v0
+=== Paragraph
+
+- Cluster.
+- [[#Inline]]을 파싱함
+- 다른 문단으로 판단되지 않으면 Paragraph로 파싱됨.
+
+--v milestone: v0
+=== Heading
+
+    ={1-6}<whitespace>+<heading text>
+
+- Atomic.
+- `=`으로 heading level을 지정한다.
+- 갯수로 depth를 더해감
+
+--v milestone: later
+=== Property Line
+
+    --^ <key><whitespace>*:<whitespace>*<value>
+    --v <key><whitespace>*:<whitespace>*<value>
+
+- Cluster.
+- Property Line으로 다른 블록에 속성을 지정할 수 있음.
+
+inline prefix는 두 종료가 있음
+
+- `--^` : prev property block.
+- `--v` : next property block.
+
+--v status: todo
+==== 고민중
+
+- 상속을 허용할 것인가?
+  - `--^ +<property-name>: <value>` 하면 상속?
+- 스키마를 선언할 수 있게 만들 것인가?
+  - `--^ @<property-name> = <value> | <value>` 하면 enum?
+  - 스키마를 만들면 어느 prop에 스키마를 따져야하는가?
+  - 타입을 만들 것인가? 선언할 수 있게 할 것인가?
+  - ...
+  - org, obsidian, logseq를 참고하자
+
+
+= Inline
+
+- *bold*
+- /italic/
+- _underline_
+- +strike+
+- `code`
+- ~command~
+- =highlight=
+- [link text](link target)
+- [[Note link]]
+- [^footnote]
+- date/datetime
+  - scheduled date/datetime: <2026-06-06>, <2026-06-06 20:00>
+  - formatted date/datetime: [2026-06-06], [2026-06-06 20:00]
+
+--v milestone: v0
+== Note Link
+
+프로젝트 내부의 이동을 위한 링크
+
+    [[<target>]]
+    [[#<heading-path>]]
+    [[<target>#<heading-path>]]
+
+    <heading-path> = <heading>(#<heading>)*
+
+- 같은 프로젝트 내의 note라는 문서로 연결하려면 `[[note]]`
+- 같은 문서 내의 heading이라는 헤딩으로 연결하려면 `[[#heading]]`
+
+=== Resolve 규칙
+
+용어는 [[#Canonical Path]] 참고
+
+- `[[target]]`
+  - Canonical Path인 경우 언제나 그 문서를 가리킴
+  - File Name인 경우, 프로젝트 내에서 해당 File Name이 유일하다면 그 문서를 가리킴
+    - 유일하지 않지만, sibling file 중 그 File Name이 있다면 그 문서를 가리킴
+    - 그 외의 경우는 에러
+- `[[#heading]]`
+  - `[[target#heading]]`의 경우, target 문서 내의 heading을 가리킴
+  - 그냥 `[[#heading]]`의 경우, 현재 문서 내의 heading을 가리킴
+  - heading이 유일하다면 그 heading을 가리킴
+    - 유일하지 않다면 heading path를 써줘야함
+      - 예: `[[#heading#something]]`
+
+--v milestone: later
+== List
+
+    -[<whitespace>]<list item><eol>
