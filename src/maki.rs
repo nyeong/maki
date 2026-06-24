@@ -2,6 +2,7 @@
 //!
 //! Owns note/indexing errors. It does not decide HTTP status codes.
 
+use crate::{parser, renderer};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -49,6 +50,10 @@ fn collect_markdown_files(
 
     for entry in entries {
         let entry = entry.map_err(|_s| Error::ReadDirectoryFailed(current.to_path_buf()))?;
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy().starts_with('.') {
+            continue;
+        }
 
         let path = entry.path();
 
@@ -70,9 +75,14 @@ fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, Error> {
 }
 
 pub(crate) struct Maki {
-    root: PathBuf,       // canonical absolute path
-    files: Vec<PathBuf>, // root-relative markdown paths
+    root: PathBuf,    // canonical absolute path
+    notes: Vec<Note>, // root-relative markdown paths
     config: MakiConfig,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Note {
+    path: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -107,16 +117,6 @@ pub(crate) enum HomeMode {
     Redirect(String),
 }
 
-fn parse_markdown(markdown: &str) -> String {
-    let mut options = pulldown_cmark::Options::empty();
-    options.insert(pulldown_cmark::Options::ENABLE_GFM);
-    options.insert(pulldown_cmark::Options::ENABLE_WIKILINKS);
-    let parser = pulldown_cmark::Parser::new_ext(markdown, options);
-    let mut buffer = String::new();
-    pulldown_cmark::html::push_html(&mut buffer, parser);
-
-    buffer
-}
 fn get_relative_path(root: &Path, path: &Path) -> Result<PathBuf, Error> {
     path.strip_prefix(root)
         .map_err(|_s| Error::InvalidNotePath(path.to_path_buf()))
@@ -128,6 +128,18 @@ pub(crate) enum MakiRoute {
     Home,
     NotePage(PathBuf),
     NoteSource(PathBuf),
+}
+
+impl Note {
+    pub(crate) fn path(&self) -> &Path {
+        self.path.as_ref()
+    }
+
+    fn load(_root: impl AsRef<Path>, relative_path: impl AsRef<Path>) -> Result<Self, Error> {
+        Ok(Self {
+            path: relative_path.as_ref().to_path_buf(),
+        })
+    }
 }
 
 impl Maki {
@@ -145,6 +157,14 @@ impl Maki {
         &self.config
     }
 
+    pub(crate) fn notes(&self) -> &[Note] {
+        &self.notes
+    }
+
+    pub(crate) fn notes_len(&self) -> usize {
+        self.notes.len()
+    }
+
     pub(crate) fn load_with_config(root: &Path, config: MakiConfig) -> Result<Self, Error> {
         if !root.exists() {
             return Err(Error::RootNotFound(root.to_path_buf()));
@@ -157,21 +177,21 @@ impl Maki {
             std::fs::canonicalize(root).map_err(|_source| Error::RootNotFound(root.to_owned()))?;
 
         let files = list_markdown_files(&root)?;
+        let notes = files
+            .into_iter()
+            .map(|file| Note::load(&root, &file))
+            .collect::<Result<Vec<Note>, _>>()?;
 
         Ok(Self {
             root,
-            files,
+            notes,
             config,
         })
     }
 
     // root: absolute or relative to the project directory
-    pub(crate) fn load(root: &Path) -> Result<Self, Error> {
-        Self::load_with_config(root, MakiConfig::default())
-    }
-
-    pub(crate) fn files(&self) -> &[PathBuf] {
-        &self.files
+    pub(crate) fn load(root: impl AsRef<Path>) -> Result<Self, Error> {
+        Self::load_with_config(root.as_ref(), MakiConfig::default())
     }
 
     pub(crate) fn render_html(&self, path: &Path) -> Result<String, Error> {
@@ -184,12 +204,20 @@ impl Maki {
         }
 
         let mut html =
-            String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>");
+            String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body><pre>");
         let content =
             std::fs::read_to_string(&path).map_err(|_source| Error::ReadNoteFailed(path))?;
-        let content = parse_markdown(&content);
-        html.push_str(&content);
-        html.push_str("</body></html>");
+        html.push_str(&renderer::render_html(&parser::parse(&content), |query| {
+            if query.target().is_empty() {
+                renderer::NoteLinkResult::Broken
+            } else {
+                renderer::NoteLinkResult::Found {
+                    href: format!("/{}", query.target()),
+                    label: query.target().to_string(),
+                }
+            }
+        }));
+        html.push_str("</pre></body></html>");
         Ok(html)
     }
 
@@ -208,7 +236,7 @@ impl Maki {
             PathBuf::from(format!("{target}.md"))
         };
 
-        if !self.files.contains(&relative_path) {
+        if !self.notes.iter().any(|n| n.path == relative_path) {
             return Err(Error::NoteNotFound(relative_path));
         }
 
@@ -236,7 +264,7 @@ impl Maki {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, Maki, MakiConfig, MakiRoute, list_markdown_files};
+    use super::{Error, Maki, MakiRoute, list_markdown_files};
     use std::path::PathBuf;
 
     #[test]
@@ -256,35 +284,56 @@ mod tests {
 
     #[test]
     fn test_resolve_route() {
-        let maki = Maki {
-            root: PathBuf::from("."),
-            files: vec![
-                PathBuf::from("hi.md"),
-                PathBuf::from("좋은아침.md"),
-                PathBuf::from("foo.bar.md"),
-            ],
-            config: MakiConfig::default(),
-        };
+        let maki = Maki::load("tests/fixtures/basic-maki-project").unwrap();
         assert_eq!(maki.resolve_route("/").unwrap(), MakiRoute::Home);
         assert!(matches!(
             maki.resolve_route("/favicon.ico"),
             Err(Error::NoteNotFound { .. })
         ));
         assert_eq!(
-            maki.resolve_route("/hi.md").unwrap(),
-            MakiRoute::NoteSource(PathBuf::from("hi.md"))
+            maki.resolve_route("/daily.md").unwrap(),
+            MakiRoute::NoteSource(PathBuf::from("daily.md"))
         );
         assert_eq!(
-            maki.resolve_route("/hi").unwrap(),
-            MakiRoute::NotePage(PathBuf::from("hi.md"))
+            maki.resolve_route("/README").unwrap(),
+            MakiRoute::NotePage(PathBuf::from("README.md"))
         );
         assert_eq!(
-            maki.resolve_route("/foo.bar.md").unwrap(),
-            MakiRoute::NoteSource(PathBuf::from("foo.bar.md"))
+            maki.resolve_route("/nested/nested.md").unwrap(),
+            MakiRoute::NoteSource(PathBuf::from("nested/nested.md"))
         );
         assert_eq!(
-            maki.resolve_route("/foo.bar").unwrap(),
-            MakiRoute::NotePage(PathBuf::from("foo.bar.md"))
+            maki.resolve_route("/nested/한글").unwrap(),
+            MakiRoute::NotePage(PathBuf::from("nested/한글.md"))
         );
     }
+
+    // #[test]
+    // fn resolve_wikilink_absolute() {
+    //     let files = vec![PathBuf::from("notes/foo.md"), PathBuf::from("notes/bar.md")];
+    //     assert_eq!(
+    //         resolve_wikilink(&files, &PathBuf::from("notes/bar.md"), "notes/foo"),
+    //         WikiLinkTarget::Found(PathBuf::from("notes/foo.md"))
+    //     );
+    //     assert_eq!(
+    //         resolve_wikilink(&files, &PathBuf::from("notes/bar.md"), "notes/foo/foo"),
+    //         WikiLinkTarget::Broken
+    //     );
+    // }
+
+    // #[test]
+    // fn resolve_wikilink_same_directory() {
+    //     let files = vec![PathBuf::from("notes/foo.md"), PathBuf::from("notes/bar.md")];
+    //     assert_eq!(
+    //         resolve_wikilink(&files, &PathBuf::from("notes/foo.md"), "bar"),
+    //         WikiLinkTarget::Found(PathBuf::from("notes/bar.md"))
+    //     );
+    //     assert_eq!(
+    //         resolve_wikilink(&files, &PathBuf::from("notes/foo.md"), "foo"),
+    //         WikiLinkTarget::Broken
+    //     );
+    // }
+
+    // #[test]
+    // fn resolve_wikilink_project_wide() {}
 }

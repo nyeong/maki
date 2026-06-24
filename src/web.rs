@@ -250,7 +250,7 @@ mod tests {
     fn test_handle_unknown_path_returns_not_found() {
         let request = http::Request::get("/missing");
 
-        let maki = Maki::load(&PathBuf::from(".")).unwrap();
+        let maki = Maki::load(PathBuf::from(".")).unwrap();
 
         let response = handle_request(&maki, &request);
 
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_malformed_request_returns_bad_request() {
-        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
+        let maki = Maki::load(PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
 
         let mut input = &b"GET\r\n\r\n"[..];
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_percent_encoded_path() {
-        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
+        let maki = Maki::load(PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
         let request = http::Request::get("/nested/%ED%95%9C%EA%B8%80.md");
         assert_eq!(
             handle_request(&maki, &request).unwrap().status(),
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_handle_request() {
-        let maki = Maki::load(&PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
+        let maki = Maki::load(PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
 
         let request = http::Request::get("/daily.md");
         let response = handle_request(&maki, &request).unwrap();

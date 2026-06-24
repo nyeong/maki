@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 mod http;
 mod maki;
+mod parser;
+mod renderer;
 mod web;
 
 use maki::Maki;
@@ -57,9 +59,9 @@ impl Display for RunError {
 
 fn run_serve(root: PathBuf) -> Result<(), RunError> {
     let maki = Maki::load(&root)?;
-    println!("Found {} markdown files", maki.files().len());
-    for file in maki.files() {
-        println!("- {}", file.display());
+    println!("Found {} markdown files", maki.notes_len());
+    for note in maki.notes() {
+        println!("- {}", note.path().display());
     }
     web::serve(&maki)
 }
@@ -170,7 +172,11 @@ mod tests {
     fn test_relative_markdown_paths() {
         let root = PathBuf::from("./tests/fixtures/basic-maki-project");
         let maki = Maki::load(&root).unwrap();
-        let relative = maki.files();
+        let relative = maki
+            .notes()
+            .iter()
+            .map(|n| n.path().to_path_buf())
+            .collect::<Vec<_>>();
         assert_eq!(
             relative,
             vec![
