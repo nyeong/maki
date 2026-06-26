@@ -19,8 +19,19 @@
 
 == 설계적 멘탈모델
 
+- Block 단위 IR
 - Container Block이 기본 단위임.
 - Line은 syntactic sugar임.
+- Project 단위로 컴파일됨 = 의미 단위를 가짐
+  - 링크 땜시
+
+== Source-Result
+
+- 각 문서가 소스이자 결과면 좋겠음
+- 텍스트 문서만으로 의미가 완결되어야함
+- 예
+  - query block으로 쿼리한 결과를 별도 파일로 내보내지 않겠다면 문서 내에 포함되어야함
+  - result block 같은 개념이 있어야
 
 = 참고함
 
@@ -49,6 +60,13 @@
 - `<whitespace>` : space or tab
 - `/실제-공백` : space
 - `/실제-eol` : end of line
+
+= 문법 개요
+
+- Block
+- Line
+- Inline
+- Property
 
 = Block
 
@@ -133,6 +151,9 @@ Maki의 기본 단위.
   - Cluster Line : 연속한 줄은 하나의 블록을 형성함.
     [[#Property Line]] 등
 
+  - Item Line : 독자적으로는 Atomic하지만 상위 Block에 대해서는 Cluster임.
+    리스트
+
 == 종류
 
 - paragraph
@@ -167,11 +188,41 @@ Maki의 기본 단위.
 
 - Cluster.
 - Property Line으로 다른 블록에 속성을 지정할 수 있음.
+- 기본적으로 출력하지 않는다. 다른 블록에 속성을 부여하기만 함.
 
 inline prefix는 두 종료가 있음
 
 - `--^` : prev property block.
 - `--v` : next property block.
+
+파일의 처음은 암묵적으로 File block이기 때문에, 다른 블록 시작하기 전에 `--^`로 Property를 선언하면
+이는 File에 대한 Property 지정임.
+
+==== List와 함께 쓸 경우
+
+    - list a
+    - list b
+    --^ key: value
+
+    --v key: value
+    - list a
+    - list b
+
+위의 Property는 ListBlock에 붙는다.
+
+    - list a
+    - list b
+      --^ key: value
+
+      --v key: value
+    - list a
+    - list b
+
+    - list a
+      --^ key: value
+    - list b
+
+위의 Property는 각각의 ListItemBlock에 붙는다.
 
 --v status: todo
 ==== 고민중

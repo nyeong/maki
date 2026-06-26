@@ -1,259 +1,564 @@
 //! Maki parser
 
-use std::collections::HashMap;
+/// source
+///   -> LineToken[]
+///   -> BlockDraft[]
+///   -> Block[]
+///   -> Document
+pub(crate) fn parse(source: &str) -> Document {
+    let lines = scan_lines(source);
+    let drafts = build_drafts(&lines);
+    let blocks = build_blocks(&drafts);
 
-pub(crate) fn parse(content: &str) -> Document {
-    Document {
-        blocks: parse_blocks(content),
-    }
+    Document { blocks }
 }
 
-fn parse_blocks(source: &str) -> Vec<Block> {
-    let mut blocks = vec![];
-    let mut paragraph_lines = vec![];
-
-    for line in source.lines() {
-        if line.trim().is_empty() {
-            flush_paragraph(&mut paragraph_lines, &mut blocks);
-            continue;
-        }
-
-        if let Some(heading) = parse_heading_line(line) {
-            flush_paragraph(&mut paragraph_lines, &mut blocks);
-            blocks.push(Block::new(heading));
-            continue;
-        }
-        paragraph_lines.push(line.to_string());
-    }
-
-    flush_paragraph(&mut paragraph_lines, &mut blocks);
-
-    blocks
-}
-
-fn flush_paragraph(paragraph_lines: &mut Vec<String>, blocks: &mut Vec<Block>) {
-    if !paragraph_lines.is_empty() {
-        blocks.push(Block::new(BlockBody::Paragraph {
-            content: parse_inlines(&paragraph_lines.join("\n")),
-        }));
-        paragraph_lines.clear();
-    }
-}
-
-fn parse_heading_line(line: &str) -> Option<BlockBody> {
-    let marker_len = line.chars().take_while(|&c| c == '=').count();
-
-    if marker_len == 0 || marker_len > 6 {
-        return None;
-    }
-    let rest = &line[marker_len..];
-    if !rest.starts_with(' ') {
-        return None;
-    }
-
-    let text = rest.trim_start();
-
-    Some(BlockBody::Heading {
-        level: marker_len.into(),
-        content: parse_inlines(text),
-    })
-}
-
-fn parse_inlines(mut rest: &str) -> Vec<Inline> {
-    let mut inlines = vec![];
-
-    while let Some(start) = rest.find("[[") {
-        let before = &rest[..start];
-        if !before.is_empty() {
-            inlines.push(Inline::Text(before.to_string()));
-        }
-
-        let inner_start = &rest[start + 2..];
-        let Some(end) = inner_start.find("]]") else {
-            inlines.push(Inline::Text(rest[start..].to_string()));
-            return inlines;
-        };
-
-        let raw_target = &inner_start[..end];
-
-        if raw_target.is_empty() {
-            inlines.push(Inline::Text(rest[start..].to_string()));
-        } else {
-            let note_link = parse_note_link(raw_target);
-            inlines.push(note_link);
-        }
-
-        rest = &inner_start[end + 2..];
-    }
-
-    if !rest.is_empty() {
-        inlines.push(Inline::Text(rest.to_string()));
-    }
-
-    inlines
-}
-
-/// NoteLink에서 구분자를 제외한 구문을 입력으로 받아 파싱합니다
-fn parse_note_link(raw_target: &str) -> Inline {
-    Inline::NoteLink {
-        target: raw_target.to_string(),
-    }
-}
-
-type Props = HashMap<String, String>;
-
-/// Parsed document written in Maki syntax.
+#[derive(Debug, PartialEq)]
 pub(crate) struct Document {
     blocks: Vec<Block>,
 }
 
-impl Document {
-    pub(crate) fn blocks(&self) -> &[Block] {
-        &self.blocks
+#[derive(Debug, Clone, PartialEq)]
+enum Block {}
+
+fn build_blocks(_drafts: &[BlockDraft]) -> Vec<Block> {
+    todo!()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LineToken<'a> {
+    Blank {
+        raw_line: &'a str,
+    },
+    Line {
+        indent: usize,
+        kind: LinePrefix,
+        raw_line: &'a str,
+    },
+}
+
+/// Run means a sequence of characters.
+#[derive(Debug, Clone, PartialEq)]
+enum LinePrefix {
+    EqualsRun(usize), // #, ##, ###, ...
+    EnCaret,          // --^
+    EnV,              // --v
+    Hyphen,           // -
+    Backticks,        // ```
+    None,
+}
+
+fn scan_line(line: &str) -> LineToken<'_> {
+    // TODO: 현재는 들여쓰기를 space만 지원하는데, 필요시 탭도 지원하도록
+    let indent = line.chars().take_while(|&c| c == ' ').count();
+    if line.trim().is_empty() {
+        return LineToken::Blank { raw_line: line };
+    }
+
+    let prefix = scan_line_prefix(&line[indent..]);
+
+    LineToken::Line {
+        indent,
+        kind: prefix,
+        raw_line: line,
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum HeadingLevel {
-    H1,
-    H2,
-    H3,
-    H4,
-    H5,
-    H6,
+const EN_CARET: &str = "--^ ";
+const EN_V: &str = "--v ";
+const HYPHEN: &str = "- ";
+const BACKTICKS: &str = "```";
+const EQUALS: char = '=';
+
+/// Accepts a text trimmed of leading whitespace.
+fn scan_line_prefix(raw_text: &str) -> LinePrefix {
+    if raw_text.starts_with(EN_CARET) {
+        return LinePrefix::EnCaret;
+    }
+    if raw_text.starts_with(EN_V) {
+        return LinePrefix::EnV;
+    }
+    if raw_text.starts_with(HYPHEN) {
+        return LinePrefix::Hyphen;
+    }
+    if raw_text.starts_with(BACKTICKS) {
+        return LinePrefix::Backticks;
+    }
+    if let Some(len) = count_prefix_run(raw_text, EQUALS, ' ') {
+        return LinePrefix::EqualsRun(len);
+    }
+
+    LinePrefix::None
 }
 
-impl From<HeadingLevel> for usize {
-    fn from(level: HeadingLevel) -> usize {
-        match level {
-            HeadingLevel::H1 => 1,
-            HeadingLevel::H2 => 2,
-            HeadingLevel::H3 => 3,
-            HeadingLevel::H4 => 4,
-            HeadingLevel::H5 => 5,
-            HeadingLevel::H6 => 6,
+// prefix가 연속되고 마지막에 delimiter가 하나 나와야함
+// 구성에 맞다면 Some(prefix의 개수), 구성에 맞지 않다면 None
+fn count_prefix_run(raw_line: &str, prefix: char, delimiter: char) -> Option<usize> {
+    let mut count = 0;
+
+    for c in raw_line.chars() {
+        if c == prefix {
+            count += 1;
+        } else if c == delimiter {
+            break;
+        } else {
+            return None;
         }
     }
+    (count > 0).then_some(count)
 }
 
-impl From<usize> for HeadingLevel {
-    fn from(level: usize) -> Self {
-        match level {
-            1 => HeadingLevel::H1,
-            2 => HeadingLevel::H2,
-            3 => HeadingLevel::H3,
-            4 => HeadingLevel::H4,
-            5 => HeadingLevel::H5,
-            6 => HeadingLevel::H6,
-            _ => unreachable!(),
-        }
-    }
+fn scan_lines(source: &str) -> Vec<LineToken<'_>> {
+    source.lines().map(scan_line).collect()
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Inline {
-    Text(String),
-    NoteLink { target: String },
+enum ListKind {
+    Unordered,
+    // Ordered
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Block {
-    body: BlockBody,
-    props: Props,
+enum PropertyKind {
+    Previous,
+    Next,
 }
 
-impl Block {
-    fn new(body: BlockBody) -> Self {
-        let props = HashMap::new();
-        Self { body, props }
-    }
-
-    pub(crate) fn body(&self) -> &BlockBody {
-        &self.body
-    }
-}
-
+/// A draft of a block to be built into a [`Block`].
+/// LineToken을 파싱하여 Block 구성하기 위한 정보를 모음.
+/// Block과의 차이: BlockDraft는 아직 body를 파싱하지 않음
 #[derive(Debug, PartialEq)]
-pub(crate) enum BlockBody {
+enum BlockDraft<'a> {
+    /// --^, --v
+    Property {
+        indent: usize,
+        kind: PropertyKind,
+        body: Vec<&'a str>,
+    },
+    /// =
     Heading {
-        level: HeadingLevel,
-        content: Vec<Inline>,
+        level: usize,
+        body: &'a str,
     },
+
+    /// 그 외 일반 텍스트
     Paragraph {
-        content: Vec<Inline>,
+        raw_lines: Vec<&'a str>,
     },
+
+    /// 4-length-indented
+    Code {
+        raw_lines: Vec<&'a str>,
+    },
+
+    /// ```
+    Container {
+        header: &'a str,
+        raw_lines: Vec<&'a str>,
+    },
+
+    List {
+        items: Vec<ListItemDraft<'a>>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+struct ListItemDraft<'a> {
+    kind: ListKind,
+    indent: usize,
+    body: &'a str,
+}
+
+impl LinePrefix {
+    fn as_property_kind(&self) -> Option<PropertyKind> {
+        match self {
+            LinePrefix::EnCaret => Some(PropertyKind::Previous),
+            LinePrefix::EnV => Some(PropertyKind::Next),
+            _ => None,
+        }
+    }
+
+    /// Returns the width of the prefix in characters.
+    /// It contains the whitespaces after the prefix which serve as the prefix's delimiter.
+    fn width(&self) -> usize {
+        match self {
+            LinePrefix::EqualsRun(len) => *len + 1,
+            LinePrefix::EnCaret => EN_CARET.len(),
+            LinePrefix::EnV => EN_V.len(),
+            LinePrefix::Hyphen => HYPHEN.len(),
+            LinePrefix::Backticks => BACKTICKS.len(),
+            LinePrefix::None => 0,
+        }
+    }
+}
+
+impl<'a> LineToken<'a> {
+    fn indent(&self) -> usize {
+        match self {
+            LineToken::Blank { .. } => 0,
+            LineToken::Line { indent, .. } => *indent,
+        }
+    }
+
+    fn raw_body(&self) -> &'a str {
+        match self {
+            LineToken::Blank { raw_line, .. } => raw_line,
+            LineToken::Line { raw_line, .. } => raw_line,
+        }
+    }
+
+    fn text(&self) -> Option<&'a str> {
+        match self {
+            LineToken::Blank { .. } => None,
+            LineToken::Line {
+                raw_line,
+                indent,
+                kind,
+            } => {
+                let content = &raw_line[*indent..];
+                Some(&content[kind.width()..])
+            }
+        }
+    }
+}
+
+struct LineCursor<'a> {
+    lines: &'a [LineToken<'a>],
+    pos: usize,
+}
+
+impl<'a> LineCursor<'a> {
+    fn new(lines: &'a [LineToken<'a>]) -> Self {
+        Self { lines, pos: 0 }
+    }
+
+    fn is_eof(&self) -> bool {
+        self.pos >= self.lines.len()
+    }
+
+    fn peek(&self) -> Option<&'a LineToken<'a>> {
+        self.lines.get(self.pos)
+    }
+
+    fn next(&mut self) -> Option<&'a LineToken<'a>> {
+        let line = self.lines.get(self.pos)?;
+        self.pos += 1;
+        Some(line)
+    }
+
+    fn consume_blank(&mut self) -> bool {
+        if matches!(self.peek(), Some(LineToken::Blank { .. })) {
+            self.next();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+    let mut raw_lines = vec![];
+
+    while !cursor.is_eof() {
+        if cursor.consume_blank() {
+            break;
+        }
+        raw_lines.push(cursor.next()?.raw_body());
+    }
+
+    Some(BlockDraft::Paragraph { raw_lines })
+}
+
+fn parse_container_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+    if !matches!(
+        cursor.peek(),
+        Some(LineToken::Line {
+            kind: LinePrefix::Backticks,
+            ..
+        }),
+    ) {
+        return None;
+    };
+
+    let mut raw_lines = vec![];
+    let header = cursor.next()?.text()?;
+
+    while let Some(line) = cursor.next() {
+        if matches!(
+            line,
+            LineToken::Line {
+                kind: LinePrefix::Backticks,
+                ..
+            }
+        ) {
+            break;
+        }
+        raw_lines.push(line.raw_body());
+    }
+
+    Some(BlockDraft::Container { header, raw_lines })
+}
+
+fn parse_property_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+    let LineToken::Line { kind, indent, .. } = cursor.peek()? else {
+        return None;
+    };
+    let property_kind = kind.as_property_kind()?;
+    let indent = *indent;
+    let mut raw_lines = vec![];
+
+    while let Some(LineToken::Line {
+        kind: line_kind,
+        indent: line_indent,
+        ..
+    }) = cursor.peek()
+    {
+        if *line_indent != indent || kind != line_kind {
+            break;
+        }
+        raw_lines.push(cursor.next()?.text()?);
+    }
+
+    Some(BlockDraft::Property {
+        indent,
+        kind: property_kind,
+        body: raw_lines,
+    })
+}
+
+fn parse_heading_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+    let line @ LineToken::Line {
+        kind: LinePrefix::EqualsRun(level),
+        ..
+    } = cursor.peek()?
+    else {
+        return None;
+    };
+    let level = *level;
+
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+
+    cursor.next();
+
+    Some(BlockDraft::Heading {
+        level,
+        body: line.text()?,
+    })
+}
+
+fn parse_list_item_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<ListItemDraft<'a>> {
+    let line @ LineToken::Line {
+        indent,
+        kind: LinePrefix::Hyphen,
+        ..
+    } = cursor.peek()?
+    else {
+        return None;
+    };
+
+    cursor.next();
+
+    Some(ListItemDraft {
+        kind: ListKind::Unordered,
+        indent: *indent,
+        body: line.text()?,
+    })
+}
+
+fn parse_list_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+    let LineToken::Line {
+        indent: 0,
+        kind: LinePrefix::Hyphen,
+        ..
+    } = cursor.peek()?
+    else {
+        return None;
+    };
+
+    let mut items = vec![];
+
+    while let Some(line) = parse_list_item_draft(cursor) {
+        items.push(line);
+    }
+
+    Some(BlockDraft::List { items })
+}
+
+fn parse_code_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+    let line = cursor.peek()?;
+    if line.indent() < 4 {
+        return None;
+    }
+
+    let mut raw_lines = vec![];
+
+    while let Some(line) = cursor.peek() {
+        if line.indent() < 4 {
+            break;
+        }
+        raw_lines.push(line.text()?);
+        cursor.next();
+    }
+
+    Some(BlockDraft::Code { raw_lines })
+}
+
+fn build_drafts<'a>(lines: &'a [LineToken<'a>]) -> Vec<BlockDraft<'a>> {
+    let mut cursor = LineCursor::new(lines);
+    let mut drafts = vec![];
+
+    while !cursor.is_eof() {
+        if let Some(draft) = parse_container_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_property_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_heading_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_list_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_code_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if cursor.consume_blank() {
+            continue;
+        } else if let Some(draft) = parse_paragraph_draft(&mut cursor) {
+            drafts.push(draft);
+        }
+    }
+
+    drafts
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_scan_lines() {
+        let source = r#"--^ title: Maki
+== Heading
 
-    fn h1(raw: &str) -> Block {
-        Block::new(BlockBody::Heading {
-            level: HeadingLevel::H1,
-            content: parse_inlines(raw),
-        })
-    }
+- list
+  - nested list
 
-    fn h2(raw: &str) -> Block {
-        Block::new(BlockBody::Heading {
-            level: HeadingLevel::H2,
-            content: parse_inlines(raw),
-        })
-    }
+    This is Code Line
 
-    fn h3(raw: &str) -> Block {
-        Block::new(BlockBody::Heading {
-            level: HeadingLevel::H3,
-            content: parse_inlines(raw),
-        })
-    }
+```src
+Container Block
+```
 
-    fn text(raw: &str) -> Inline {
-        Inline::Text(raw.to_string())
-    }
+plain text"#;
 
-    fn note_link(raw: &str) -> Inline {
-        Inline::NoteLink {
-            target: raw.to_string(),
-        }
-    }
-
-    fn p(raw: &str) -> Block {
-        Block::new(BlockBody::Paragraph {
-            content: parse_inlines(raw),
-        })
+        assert_eq!(
+            scan_lines(source),
+            vec![
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::EnCaret,
+                    raw_line: "--^ title: Maki"
+                },
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::EqualsRun(2),
+                    raw_line: "== Heading"
+                },
+                LineToken::Blank { raw_line: "" },
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::Hyphen,
+                    raw_line: "- list"
+                },
+                LineToken::Line {
+                    indent: 2,
+                    kind: LinePrefix::Hyphen,
+                    raw_line: "  - nested list"
+                },
+                LineToken::Blank { raw_line: "" },
+                LineToken::Line {
+                    indent: 4,
+                    kind: LinePrefix::None,
+                    raw_line: "    This is Code Line"
+                },
+                LineToken::Blank { raw_line: "" },
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::Backticks,
+                    raw_line: "```src"
+                },
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::None,
+                    raw_line: "Container Block"
+                },
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::Backticks,
+                    raw_line: "```"
+                },
+                LineToken::Blank { raw_line: "" },
+                LineToken::Line {
+                    indent: 0,
+                    kind: LinePrefix::None,
+                    raw_line: "plain text"
+                },
+            ]
+        );
     }
 
     #[test]
-    fn parse_paragraph() {
-        let content = "Hello, World!";
-        let doc = parse(content);
+    fn test_block_build() {
+        let source = r#"--^ title: Maki
+--^ description: This is a simple example.
+== Heading
 
-        assert_eq!(doc.blocks.len(), 1);
-        assert_eq!(doc.blocks[0], p("Hello, World!"));
-        assert!(matches!(doc.blocks[0].body, BlockBody::Paragraph { .. }));
-    }
+- list
+  - nested list
 
-    #[test]
-    fn parse_headings() {
-        let content = r#"
-= heading 1
-== heading 2
-=== heading 3
-"#;
+    This is Code Line
 
-        let doc = parse(content);
-        assert_eq!(doc.blocks[0], h1("heading 1"));
-        assert_eq!(doc.blocks[1], h2("heading 2"));
-        assert_eq!(doc.blocks[2], h3("heading 3"));
-    }
+```src
+Container Block
+```
 
-    #[test]
-    fn parse_note_link() {
-        let content = r#"Hello, [[World]]!"#;
-        let doc = parse_inlines(content);
+plain text"#;
 
-        assert_eq!(doc, vec![text("Hello, "), note_link("World"), text("!")])
+        assert_eq!(
+            build_drafts(&scan_lines(source)),
+            vec![
+                BlockDraft::Property {
+                    indent: 0,
+                    kind: PropertyKind::Previous,
+                    body: vec!["title: Maki", "description: This is a simple example.",],
+                },
+                BlockDraft::Heading {
+                    level: 2,
+                    body: "Heading",
+                },
+                BlockDraft::List {
+                    items: vec![
+                        ListItemDraft {
+                            kind: ListKind::Unordered,
+                            indent: 0,
+                            body: "list",
+                        },
+                        ListItemDraft {
+                            kind: ListKind::Unordered,
+                            indent: 2,
+                            body: "nested list",
+                        },
+                    ],
+                },
+                BlockDraft::Code {
+                    raw_lines: vec!["This is Code Line"],
+                },
+                BlockDraft::Container {
+                    header: "src",
+                    raw_lines: vec!["Container Block"],
+                },
+                BlockDraft::Paragraph {
+                    raw_lines: vec!["plain text"],
+                },
+            ]
+        );
     }
 }

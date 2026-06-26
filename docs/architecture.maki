@@ -1,0 +1,54 @@
+--^ title: Architecture
+
+= 파싱
+
+이 순서대로
+
+    Source
+    -> Line Scan (LineToken[])
+    -> Draft Build (BlockDraft[])
+    -> Property Consume (BlockDraft[])
+    -> Body Parse (Block[])
+    -> Build (Document)
+
+- Line Scan : source를 줄 단위 token으로 분류
+- Draft Build : 연속된 line token을 block으로 묶음
+- Property Consume : property line을 consume하여 대상 block에 property로 붙임
+- Body Parse : block body를 kind에 따라 파싱
+- Build : 최종 Document 생성
+
+== Line Scan
+
+주어진 문서를 줄단위로 Prefix 분석 결과로 바꿈.
+
+    --v milestone: v0
+    === Container Block
+
+        ```<kind> [<args>]
+        <body>
+        ```
+
+    유일하고 제네릭한 블록 문법
+
+위는 아래처럼 파싱되어야
+
+    Line { prefix = "--v", indent = 0, body = "milestone ..." }
+    Line { prefix = "===", indent = 0, body = "Container ..." }
+    Blank
+    Line { prefix = "```", indent = 4, body = ... }
+    Line { prefix = "", indent = 4, body = ... }
+    Line { prefix = "```", indent = 4, body = ... }
+    Blank
+    Line { prefix = "", indent = 0, body = ... }
+
+== Block Build
+
+LineToken stream을 BlockDraft stream으로 변환함. 이제는 위치 정보까지 포함하여 Prefix -> Block으로 바꿈.
+
+예:
+
+- `EqualsRun(1..=6)`은 Heading Block이 됨
+- Backticks으로 둘러싸인 line들은 ContainerBlock의 raw body가 됨
+- 갑자기 나온 indent 4 line은 CodeBlock임
+- List context 안에서 indent가 증가한 Hyphen line은 Nested ListItem임
+- ...

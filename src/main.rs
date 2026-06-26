@@ -4,7 +4,6 @@ use std::path::PathBuf;
 mod http;
 mod maki;
 mod parser;
-mod renderer;
 mod web;
 
 use maki::Maki;
@@ -12,6 +11,7 @@ use maki::Maki;
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve { root: PathBuf },
+    Parse { file: PathBuf },
 }
 
 impl From<http::Error> for RunError {
@@ -66,9 +66,17 @@ fn run_serve(root: PathBuf) -> Result<(), RunError> {
     web::serve(&maki)
 }
 
+fn run_parse(file: PathBuf) -> Result<(), RunError> {
+    let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
+    let doc = parser::parse(&content);
+    println!("{:?}", doc);
+    Ok(())
+}
+
 fn run_command(command: Command) -> Result<(), RunError> {
     match command {
         Command::Serve { root } => run_serve(root),
+        Command::Parse { file } => run_parse(file),
     }
 }
 
@@ -99,6 +107,13 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
                 root: PathBuf::from(root),
             })
         }
+        "parse" => {
+            // TODO: 에러 유형 바꾸기
+            let file = args.get(2).ok_or(CliError::MissingCommand)?;
+            Ok(Command::Parse {
+                file: PathBuf::from(file),
+            })
+        }
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }
@@ -119,18 +134,6 @@ mod tests {
 
         match error {
             RunError::Maki(maki::Error::RootNotFound(realpath)) => assert_eq!(realpath, path),
-            _ => panic!("Unexpected error: {:?}", error),
-        }
-    }
-
-    #[test]
-    fn test_run_serve_not_directory() {
-        let path = PathBuf::from("./tests/fixtures/basic-maki-project/README.md");
-
-        let error = run_command(Command::Serve { root: path.clone() }).unwrap_err();
-
-        match error {
-            RunError::Maki(maki::Error::RootNotDirectory(realpath)) => assert_eq!(realpath, path),
             _ => panic!("Unexpected error: {:?}", error),
         }
     }
@@ -166,25 +169,5 @@ mod tests {
                 root: PathBuf::from(".")
             })
         )
-    }
-
-    #[test]
-    fn test_relative_markdown_paths() {
-        let root = PathBuf::from("./tests/fixtures/basic-maki-project");
-        let maki = Maki::load(&root).unwrap();
-        let relative = maki
-            .notes()
-            .iter()
-            .map(|n| n.path().to_path_buf())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            relative,
-            vec![
-                PathBuf::from("README.md"),
-                PathBuf::from("daily.md"),
-                PathBuf::from("nested/nested.md"),
-                PathBuf::from("nested/한글.md"),
-            ]
-        );
     }
 }

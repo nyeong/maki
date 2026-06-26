@@ -1,0 +1,34 @@
+--^ title: v0 Milestone
+--^ date: [2026-06-25]
+
+
+= 목표
+
+1. Maki 문서 자체를 maki로 작성하고 서빙하기.
+2. 이를 위해 대략적으로 문법을 확정하고 적절한 구현 방법 강구하기.
+
+이를 위해서
+
+- `.maki`를 프로젝트 단위로 읽기
+- Note Link를 프로젝트 단위로 resolve하기
+- [[architecture#Line Scan]]
+- HTML로 렌더링하기
+- 웹 서버로 HTML 서빙하기
+- Property 숨기기
+- 구현할 것
+  - [[maki-syntax#File]], [[maki-syntax#Heading]], [[maki-syntax#Paragraph]], [[maki-syntax#Note Link]].
+- 구현되지 않은 것은 HTML export 할 때 pre로 출력하기
+
+= 비목표
+
+- Query
+- Schema
+- 외부 플러그인
+- PDF, ICS 등 export
+- table
+- 복잡한 inline, line
+- property에 대한 복잡한 관리
+
+= 확정
+
+-

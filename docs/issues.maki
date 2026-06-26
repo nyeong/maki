@@ -1,0 +1,11 @@
+--^ title: Issues
+
+= 양식
+
+--v lang: maki
+    --v status: todo
+    --v type: bug
+    --v milestone: v0
+    = 이슈 제목
+
+    이슈 내용

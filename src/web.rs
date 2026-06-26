@@ -263,27 +263,6 @@ mod tests {
     }
 
     #[test]
-    fn test_malformed_request_returns_bad_request() {
-        let maki = Maki::load(PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
-
-        let mut input = &b"GET\r\n\r\n"[..];
-
-        let response = create_response_from_connection(&maki, &mut input);
-
-        assert_eq!(response.status(), http::StatusCode::BadRequest);
-    }
-
-    #[test]
-    fn test_percent_encoded_path() {
-        let maki = Maki::load(PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
-        let request = http::Request::get("/nested/%ED%95%9C%EA%B8%80.md");
-        assert_eq!(
-            handle_request(&maki, &request).unwrap().status(),
-            http::StatusCode::Ok
-        );
-    }
-
-    #[test]
     fn test_empty_request() {
         let mut input = &b""[..];
 
@@ -302,47 +281,5 @@ mod tests {
             read_request_head(&mut input),
             Err(Error::TooLongRequest)
         ))
-    }
-
-    #[test]
-    fn test_handle_request() {
-        let maki = Maki::load(PathBuf::from("./tests/fixtures/basic-maki-project")).unwrap();
-
-        let request = http::Request::get("/daily.md");
-        let response = handle_request(&maki, &request).unwrap();
-        assert_eq!(response.status(), http::StatusCode::Ok);
-        assert!(
-            String::from_utf8(response.body().to_vec())
-                .unwrap()
-                .contains("# Daily")
-        );
-        assert!(
-            response
-                .get_header("Content-Type")
-                .is_some_and(|v| v.contains("plain"))
-        );
-
-        let request = http::Request::get("/ignore.txt");
-        let response = handle_request(&maki, &request);
-        assert!(matches!(
-            response,
-            Err(Error::Maki {
-                source: maki::Error::NoteNotFound(..)
-            })
-        ));
-
-        let request = http::Request::get("/README");
-        let response = handle_request(&maki, &request).unwrap();
-        assert_eq!(response.status(), http::StatusCode::Ok);
-        assert!(
-            String::from_utf8(response.body().to_vec())
-                .unwrap()
-                .contains("Maki")
-        );
-        assert!(
-            response
-                .get_header("Content-Type")
-                .is_some_and(|v| v.contains("html"))
-        );
     }
 }

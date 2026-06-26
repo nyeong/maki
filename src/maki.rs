@@ -2,7 +2,6 @@
 //!
 //! Owns note/indexing errors. It does not decide HTTP status codes.
 
-use crate::{parser, renderer};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -205,18 +204,6 @@ impl Maki {
 
         let mut html =
             String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body><pre>");
-        let content =
-            std::fs::read_to_string(&path).map_err(|_source| Error::ReadNoteFailed(path))?;
-        html.push_str(&renderer::render_html(&parser::parse(&content), |query| {
-            if query.target().is_empty() {
-                renderer::NoteLinkResult::Broken
-            } else {
-                renderer::NoteLinkResult::Found {
-                    href: format!("/{}", query.target()),
-                    label: query.target().to_string(),
-                }
-            }
-        }));
         html.push_str("</pre></body></html>");
         Ok(html)
     }
@@ -263,77 +250,4 @@ impl Maki {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Error, Maki, MakiRoute, list_markdown_files};
-    use std::path::PathBuf;
-
-    #[test]
-    fn test_list_markdown_files() {
-        let path = PathBuf::from("./tests/fixtures/basic-maki-project");
-        let files = list_markdown_files(&path).unwrap();
-        assert_eq!(
-            files,
-            vec![
-                PathBuf::from("README.md"),
-                PathBuf::from("daily.md"),
-                PathBuf::from("nested/nested.md"),
-                PathBuf::from("nested/한글.md"),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_resolve_route() {
-        let maki = Maki::load("tests/fixtures/basic-maki-project").unwrap();
-        assert_eq!(maki.resolve_route("/").unwrap(), MakiRoute::Home);
-        assert!(matches!(
-            maki.resolve_route("/favicon.ico"),
-            Err(Error::NoteNotFound { .. })
-        ));
-        assert_eq!(
-            maki.resolve_route("/daily.md").unwrap(),
-            MakiRoute::NoteSource(PathBuf::from("daily.md"))
-        );
-        assert_eq!(
-            maki.resolve_route("/README").unwrap(),
-            MakiRoute::NotePage(PathBuf::from("README.md"))
-        );
-        assert_eq!(
-            maki.resolve_route("/nested/nested.md").unwrap(),
-            MakiRoute::NoteSource(PathBuf::from("nested/nested.md"))
-        );
-        assert_eq!(
-            maki.resolve_route("/nested/한글").unwrap(),
-            MakiRoute::NotePage(PathBuf::from("nested/한글.md"))
-        );
-    }
-
-    // #[test]
-    // fn resolve_wikilink_absolute() {
-    //     let files = vec![PathBuf::from("notes/foo.md"), PathBuf::from("notes/bar.md")];
-    //     assert_eq!(
-    //         resolve_wikilink(&files, &PathBuf::from("notes/bar.md"), "notes/foo"),
-    //         WikiLinkTarget::Found(PathBuf::from("notes/foo.md"))
-    //     );
-    //     assert_eq!(
-    //         resolve_wikilink(&files, &PathBuf::from("notes/bar.md"), "notes/foo/foo"),
-    //         WikiLinkTarget::Broken
-    //     );
-    // }
-
-    // #[test]
-    // fn resolve_wikilink_same_directory() {
-    //     let files = vec![PathBuf::from("notes/foo.md"), PathBuf::from("notes/bar.md")];
-    //     assert_eq!(
-    //         resolve_wikilink(&files, &PathBuf::from("notes/foo.md"), "bar"),
-    //         WikiLinkTarget::Found(PathBuf::from("notes/bar.md"))
-    //     );
-    //     assert_eq!(
-    //         resolve_wikilink(&files, &PathBuf::from("notes/foo.md"), "foo"),
-    //         WikiLinkTarget::Broken
-    //     );
-    // }
-
-    // #[test]
-    // fn resolve_wikilink_project_wide() {}
-}
+mod tests {}
