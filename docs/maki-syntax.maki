@@ -145,14 +145,9 @@ Maki의 기본 단위.
 아래의 특성이 각각 직교함
 
 - Grouping Mode
-  - Atomic Line : 각 줄이 각각의 블록을 형성함.
-    [[#Heading]] 등
-
-  - Cluster Line : 연속한 줄은 하나의 블록을 형성함.
-    [[#Property Line]] 등
-
-  - Item Line : 독자적으로는 Atomic하지만 상위 Block에 대해서는 Cluster임.
-    리스트
+  - Atomic Line : 각 줄이 각각의 블록을 형성함. [[#Heading]] 등
+  - Cluster Line : 연속한 줄은 하나의 블록을 형성함. [[#Property Line]] 등
+  - Item Line : 독자적으로는 Atomic하지만 상위 Block에 대해서는 Cluster임. 리스트 등.
 
 == 종류
 
@@ -235,6 +230,14 @@ inline prefix는 두 종료가 있음
   - 타입을 만들 것인가? 선언할 수 있게 할 것인가?
   - ...
   - org, obsidian, logseq를 참고하자
+
+=== List
+
+--v milestone: v0
+==== Unordered List
+
+--v milestone: later
+==== Ordered List
 
 
 = Inline

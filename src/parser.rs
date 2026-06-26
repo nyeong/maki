@@ -264,6 +264,7 @@ fn parse_container_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'
         cursor.peek(),
         Some(LineToken::Line {
             kind: LinePrefix::Backticks,
+            indent: 0,
             ..
         }),
     ) {
@@ -387,9 +388,16 @@ fn parse_code_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
     while let Some(line) = cursor.peek() {
         if line.indent() < CODE_BLOCK_INDENT {
             break;
+        } else if matches!(line, LineToken::Blank { .. }) {
+            raw_lines.push(line.raw_line());
+        } else {
+            raw_lines.push(&line.raw_line()[CODE_BLOCK_INDENT..]);
         }
-        raw_lines.push(&line.raw_line()[CODE_BLOCK_INDENT..]);
         cursor.next();
+    }
+
+    if raw_lines.last().is_some_and(|l| l.is_empty()) {
+        raw_lines.pop();
     }
 
     Some(BlockDraft::Code { raw_lines })
@@ -402,13 +410,13 @@ fn build_drafts<'a>(lines: &'a [LineToken<'a>]) -> Vec<BlockDraft<'a>> {
     while !cursor.is_eof() {
         if let Some(draft) = parse_container_draft(&mut cursor) {
             drafts.push(draft);
+        } else if let Some(draft) = parse_code_draft(&mut cursor) {
+            drafts.push(draft);
         } else if let Some(draft) = parse_property_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_list_draft(&mut cursor) {
-            drafts.push(draft);
-        } else if let Some(draft) = parse_code_draft(&mut cursor) {
             drafts.push(draft);
         } else if cursor.consume_blank() {
             continue;
@@ -496,7 +504,7 @@ plain text"#;
     }
 
     #[test]
-    fn test_block_build() {
+    fn test_build_drafts() {
         let source = r#"--^ title: Maki
 --^ description: This is a simple example.
 == Heading
