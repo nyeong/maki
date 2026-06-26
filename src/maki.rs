@@ -2,6 +2,9 @@
 //!
 //! Owns note/indexing errors. It does not decide HTTP status codes.
 
+const MAKI_EXTENSION: &str = "maki";
+const MAKI_SOURCE_EXTENSION: &str = ".maki";
+
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -58,7 +61,7 @@ fn collect_markdown_files(
 
         if path.is_dir() {
             collect_markdown_files(root, &path, acc)?;
-        } else if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+        } else if path.is_file() && path.extension().is_some_and(|ext| ext == MAKI_EXTENSION) {
             acc.push(get_relative_path(root, &path)?);
         }
     }
@@ -211,16 +214,16 @@ impl Maki {
     /// Resolves a note path relative to the root directory.
     /// # Example
     /// ```
-    /// maki.resolve_note_route("maki.md"); // => MakiRoute::NoteSource("maki.md")
-    /// maki.resolve_note_route("maki"); // => MakiRoute::NotePage("maki.md")
+    /// maki.resolve_note_route("maki.maki"); // => MakiRoute::NoteSource("maki.maki")
+    /// maki.resolve_note_route("maki"); // => MakiRoute::NotePage("maki.maki")
     /// ```
     fn resolve_note_route(&self, target: &str) -> Result<MakiRoute, Error> {
-        let is_source = target.ends_with(".md");
+        let is_source = target.ends_with(MAKI_SOURCE_EXTENSION);
 
         let relative_path = if is_source {
             PathBuf::from(target)
         } else {
-            PathBuf::from(format!("{target}.md"))
+            PathBuf::from(format!("{target}{MAKI_SOURCE_EXTENSION}"))
         };
 
         if !self.notes.iter().any(|n| n.path == relative_path) {
@@ -236,7 +239,7 @@ impl Maki {
     /// Resolves a page path relative to the root directory.
     /// # Example
     /// ```text
-    /// maki.resolve_route("/maki"); // => MakiRoute::NotePage("maki.md")
+    /// maki.resolve_route("/maki"); // => MakiRoute::NotePage("maki.maki")
     /// ```
     pub(crate) fn resolve_route(&self, target: &str) -> Result<MakiRoute, Error> {
         let target = target.strip_prefix('/').unwrap_or(target);

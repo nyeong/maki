@@ -3,26 +3,15 @@
 /// source
 ///   -> LineToken[]
 ///   -> BlockDraft[]
+///
+/// Later:
 ///   -> Block[]
 ///   -> Document
-pub(crate) fn parse(source: &str) -> Document {
+pub(crate) fn parse(source: &str) -> String {
     let lines = scan_lines(source);
     let drafts = build_drafts(&lines);
-    let blocks = build_blocks(&drafts);
 
-    Document { blocks }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Document {
-    blocks: Vec<Block>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum Block {}
-
-fn build_blocks(_drafts: &[BlockDraft]) -> Vec<Block> {
-    todo!()
+    format!("{drafts:#?}")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +58,7 @@ const EN_V: &str = "--v ";
 const HYPHEN: &str = "- ";
 const BACKTICKS: &str = "```";
 const EQUALS: char = '=';
+const CODE_BLOCK_INDENT: usize = 4;
 
 /// Accepts a text trimmed of leading whitespace.
 fn scan_line_prefix(raw_text: &str) -> LinePrefix {
@@ -200,14 +190,14 @@ impl<'a> LineToken<'a> {
         }
     }
 
-    fn raw_body(&self) -> &'a str {
+    fn raw_line(&self) -> &'a str {
         match self {
             LineToken::Blank { raw_line, .. } => raw_line,
             LineToken::Line { raw_line, .. } => raw_line,
         }
     }
 
-    fn text(&self) -> Option<&'a str> {
+    fn body(&self) -> Option<&'a str> {
         match self {
             LineToken::Blank { .. } => None,
             LineToken::Line {
@@ -263,7 +253,7 @@ fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'
         if cursor.consume_blank() {
             break;
         }
-        raw_lines.push(cursor.next()?.raw_body());
+        raw_lines.push(cursor.next()?.raw_line());
     }
 
     Some(BlockDraft::Paragraph { raw_lines })
@@ -281,7 +271,7 @@ fn parse_container_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'
     };
 
     let mut raw_lines = vec![];
-    let header = cursor.next()?.text()?;
+    let header = cursor.next()?.body()?;
 
     while let Some(line) = cursor.next() {
         if matches!(
@@ -293,7 +283,7 @@ fn parse_container_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'
         ) {
             break;
         }
-        raw_lines.push(line.raw_body());
+        raw_lines.push(line.raw_line());
     }
 
     Some(BlockDraft::Container { header, raw_lines })
@@ -316,7 +306,7 @@ fn parse_property_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a
         if *line_indent != indent || kind != line_kind {
             break;
         }
-        raw_lines.push(cursor.next()?.text()?);
+        raw_lines.push(cursor.next()?.body()?);
     }
 
     Some(BlockDraft::Property {
@@ -344,7 +334,7 @@ fn parse_heading_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>
 
     Some(BlockDraft::Heading {
         level,
-        body: line.text()?,
+        body: line.body()?,
     })
 }
 
@@ -363,7 +353,7 @@ fn parse_list_item_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<ListItemDraf
     Some(ListItemDraft {
         kind: ListKind::Unordered,
         indent: *indent,
-        body: line.text()?,
+        body: line.body()?,
     })
 }
 
@@ -388,17 +378,17 @@ fn parse_list_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
 
 fn parse_code_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
     let line = cursor.peek()?;
-    if line.indent() < 4 {
+    if line.indent() < CODE_BLOCK_INDENT {
         return None;
     }
 
     let mut raw_lines = vec![];
 
     while let Some(line) = cursor.peek() {
-        if line.indent() < 4 {
+        if line.indent() < CODE_BLOCK_INDENT {
             break;
         }
-        raw_lines.push(line.text()?);
+        raw_lines.push(&line.raw_line()[CODE_BLOCK_INDENT..]);
         cursor.next();
     }
 
