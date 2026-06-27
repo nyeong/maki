@@ -188,6 +188,13 @@ Maki의 기본 단위.
 - 갯수로 depth를 더해감
 
 --v milestone: later
+=== Table
+
+==== Formula
+
+- [[#Property Line]]으로 formula를 붙일 수 있다.
+
+--v milestone: v0
 === Property Line
 
     --^ <key><whitespace>*:<whitespace>*<value>
