@@ -1,23 +1,73 @@
 --^ title: v0 Milestone
 --^ date: [2026-06-25]
 
-
 = 목표
 
-1. Maki 문서 자체를 maki로 작성하고 서빙하기.
-2. 이를 위해 대략적으로 문법을 확정하고 적절한 구현 방법 강구하기.
+- Maki 문서 자체를 Maki로 작성하기
+- Maki를 부분적으로 파싱하기
+- 이를 위해 v0에 필요한 최소 문법, 파서, 렌더러, 서버 경로를 구현한다.
 
-이를 위해서
+== 성공 기준
 
-- `.maki`를 프로젝트 단위로 읽기
-- Note Link를 프로젝트 단위로 resolve하기
-- [[architecture#Line Scan]]
-- HTML로 렌더링하기
-- 웹 서버로 HTML 서빙하기
-- Property 숨기기
-- 구현할 것
-  - [[maki-syntax#File]], [[maki-syntax#Heading]], [[maki-syntax#Paragraph]], [[maki-syntax#Note Link]].
-- 구현되지 않은 것은 HTML export 할 때 pre로 출력하기
+- `maki serve <directory>`로 `.maki` 문서를 서빙할 수 있다.
+- `docs/index.maki`에서 다른 Maki 문서로 이동할 수 있다.
+- 웹 서빙할 때 지원하지 않는 block은 내용을 잃지 않고 fallback으로 보여준다.
+  - 특히 plain text 형상을 그대로 보존해서 서빙하기
+- property line은 기본 HTML 출력에 노출되지 않는다.
+
+= 구현 범위
+
+--v status: done
+== Project
+
+- `.maki` 파일을 프로젝트 단위로 읽는다.
+- root-relative path를 note identity로 사용한다.
+
+--v status: in_progress
+== Parser
+
+- [[architecture#Line Scan]]: source를 `LineToken[]`으로 변환한다.
+- [[architecture#Block Build]]: line token을 `BlockDraft[]`로 묶는다.
+- 지원하는 draft
+  - File
+  - Heading
+  - Paragraph
+  - Property
+  - Unordered List
+  - Indented Code
+  - Container Block
+
+--v status: todo
+== Property Consume and Body Parse
+
+- Heading, Paragraph, List item을 Inline 파싱 대상으로 타이핑한다.
+- Code, unknown container는 raw text로 보존한다.
+- Property를 컨슘한다.
+  - `--^` property를 이전 attachable block에 붙인다.
+  - `--v` property를 다음 attachable block에 붙인다.
+  - v0에서는 property value를 문자열로만 보존한다.
+
+--v status: todo
+== Note Link
+
+- `[[target]]`을 프로젝트 단위로 resolve한다.
+- `[[#heading]]`을 현재 문서의 heading으로 resolve한다.
+- `[[target#heading]]`을 다른 문서의 heading으로 resolve한다.
+- broken link와 ambiguous link를 구분한다.
+
+--v status: todo
+== HTML Render
+
+- File, Heading, Paragraph, List, Code를 HTML로 렌더링한다.
+- Note Link를 `<a>`로 렌더링한다.
+- 구현되지 않은 block은 fallback으로 출력한다.
+
+--v status: todo
+== Web Serve
+
+- `.maki` source route와 HTML rendered route를 구분한다.
+- Maki 문서를 웹 서버로 서빙한다.
+- Not Found, Bad Request 등 기본 HTTP 응답을 유지한다.
 
 = 비목표
 
@@ -31,4 +81,26 @@
 
 = 확정
 
--
+- v0의 기본 문서 확장자는 `.maki`이다.
+- v0의 기본 문서 단위는 File이다.
+- File identity는 프로젝트 root-relative path이다.
+- Container Block은 canonical surface syntax이다.
+- Line syntax는 자주 쓰는 block을 위한 syntactic sugar이다.
+- Property syntax는 v0에 포함한다.
+- Property schema, validation, inheritance는 v0에 포함하지 않는다.
+- Ordered List는 v0에 포함하지 않는다.
+- Query, export, external plugin은 v0에 포함하지 않는다.
+
+= 다음 작업
+
+--v status: todo
+== Property Consume
+
+현재 parser는 property를 독립적인 `BlockDraft`로 만든다.
+다음 단계에서는 property draft를 consume하여 대상 block의 metadata로 옮긴다.
+
+--v status: todo
+== Document Build
+
+`BlockDraft[]`를 최종 `Document`로 만든다.
+`parse` 명령은 debug string이 아니라 Document의 구조를 안정적으로 출력해야 한다.

@@ -167,6 +167,18 @@ Maki의 기본 단위.
 - 다른 문단으로 판단되지 않으면 Paragraph로 파싱됨.
 
 --v milestone: v0
+=== Code Block
+
+    <whitespace>{4}
+
+혹은
+
+    ```src <lang>
+    <raw text>
+    ```
+
+
+--v milestone: v0
 === Heading
 
     ={1-6}<whitespace>+<heading text>
@@ -184,6 +196,7 @@ Maki의 기본 단위.
 - Cluster.
 - Property Line으로 다른 블록에 속성을 지정할 수 있음.
 - 기본적으로 출력하지 않는다. 다른 블록에 속성을 부여하기만 함.
+- key는 case-insensitive.
 
 inline prefix는 두 종료가 있음
 
@@ -192,6 +205,31 @@ inline prefix는 두 종료가 있음
 
 파일의 처음은 암묵적으로 File block이기 때문에, 다른 블록 시작하기 전에 `--^`로 Property를 선언하면
 이는 File에 대한 Property 지정임.
+
+==== Key
+
+- case-insensitive
+- `:` 포함할 수 없음
+- trim 후 비어있을 수 없음
+
+--v status: todo
+- `key: value`: scalar set
+- `key+: value`: list append
+- `@key: value`: key/schema declaration
+
+==== Value
+
+--v status: todo
+- 멀티라인
+
+    --v key:
+        multiline value
+        continues while indented
+
+혹은
+
+    --v key: multiline value
+             continues while indented
 
 ==== List와 함께 쓸 경우
 
@@ -226,10 +264,22 @@ inline prefix는 두 종료가 있음
   - `--^ +<property-name>: <value>` 하면 상속?
 - 스키마를 선언할 수 있게 만들 것인가?
   - `--^ @<property-name> = <value> | <value>` 하면 enum?
+  - `@<property-name>`은 해당 Property에 대한 메타 선언
   - 스키마를 만들면 어느 prop에 스키마를 따져야하는가?
   - 타입을 만들 것인가? 선언할 수 있게 할 것인가?
   - ...
   - org, obsidian, logseq를 참고하자
+- 배열을 허용할 것인가?
+  - 허용 하는 것 자체는 좋은데, 쓰기에 장황하지 않았으면
+  - 예를 들어 yaml은 쓰기에 너무 불편함: `tag: ["value1", "value2"]`
+    - 배열 리터럴, 문자열 리터럴 꼬박꼬박 다 써야함
+- 중복된 key에 대해서는?
+  - 마지막 값만 사용? last-win?
+  - 첫 번째 값만 사용? first-win?
+  - 에러? 컴파일 거부?
+  - 자동으로 배열로 전환?
+  - 명시적으로 배열로 전환?
+    - `--^ key: [value1, value2, ...]`
 
 === List
 
@@ -242,6 +292,7 @@ inline prefix는 두 종료가 있음
 
 = Inline
 
+- inline container: `@<type>[body]`
 - *bold*
 - /italic/
 - _underline_
@@ -255,6 +306,15 @@ inline prefix는 두 종료가 있음
 - date/datetime
   - scheduled date/datetime: <2026-06-06>, <2026-06-06 20:00>
   - formatted date/datetime: [2026-06-06], [2026-06-06 20:00]
+
+--v milestone: later
+== Inline Container
+
+모든 Inline을 표시할 수 있는 컨테이너.
+
+    @<type>[body]
+
+예를 들어 [[#Note Link]]는 `@notelink[Note Link]`로 표기하면 동일한 의미를 가진다.
 
 --v milestone: v0
 == Note Link

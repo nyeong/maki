@@ -7,8 +7,7 @@
     Source
     -> Line Scan (LineToken[])
     -> Draft Build (BlockDraft[])
-    -> Property Consume (BlockDraft[])
-    -> Body Parse (Block[])
+    -> Property Consume and Body Parse (Block[])
     -> Build (Document)
 
 - Line Scan : source를 줄 단위 token으로 분류

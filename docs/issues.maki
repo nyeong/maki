@@ -9,3 +9,29 @@
     = 이슈 제목
 
     이슈 내용
+
+
+--v status: todo
+= org TODO percentage 옮기기
+
+org에서는 하위 todo의 진행도에 따라 자동으로 진행도를 계산해주는 기능이 있다:
+
+```src org
+* 이슈 [5/28]
+** TODO NanoKVM 세팅하기 [...]
+** IN_PROGRESS 전기세 측정하기 [50%] [...]
+** IN_PROGRESS IaC 구성하기 [77%] [...]
+```
+
+```src org
+** IN_PROGRESS 전기세 측정하기 [50%]
+:PROPERTIES:
+:ID:       d00182f9-6ad2-43e7-9f71-2bf3448d846f
+:END:
+- [X] Tapo P115 달기
+- [ ] 서버에서 Tapo P115 값 읽기
+
+   Grafana? HomeAssistant?
+```
+
+어떻게 문법으로 넣을까 🤔
