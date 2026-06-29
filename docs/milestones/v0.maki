@@ -124,3 +124,47 @@
 
 `BlockDraft[]`를 최종 `Document`로 만든다.
 `parse` 명령은 debug string이 아니라 Document의 구조를 안정적으로 출력해야 한다.
+
+== 파싱 결과 예시
+
+```code
+Document
+  title: "Title"
+  date: "[2026-05-05]"
+
+  Heading
+    level: 1
+    Text "목표"
+
+  List
+    type: unordered
+    ListItem
+      Text "Maki 문서 자체를 Maki로 작성하기"
+    ListItem
+      Text "Maki를 부분적으로 파싱하기"
+    ListItem
+      Text "이를 위해 v0에 필요한 최소 문법, 파서, 렌더러, 서버 경로를 구현한다."
+
+  Heading
+    level: 2
+    Text "성공 기준"
+
+  List
+    type: unordered
+    ListItem
+      InlineCode "maki serve <directory>"
+      Text "로 "
+      InlineCode ".maki"
+      Text " 문서를 서빙할 수 있다."
+    ListItem
+      InlineCode "docs/index.maki"
+      Text "에서 다른 Maki 문서로 이동할 수 있다."
+    ListItem
+      Text "웹 서빙할 때 지원하지 않는 block은 내용을 잃지 않고 fallback으로 보여준다."
+      List
+        type: unordered
+        ListItem
+          Text "특히 plain text 형상을 그대로 보존해서 서빙하기"
+    ListItem
+      Text "property line은 기본 HTML 출력에 노출되지 않는다."
+```
