@@ -12,7 +12,7 @@ use maki::Maki;
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve { root: PathBuf },
-    Parse { file: PathBuf },
+    Build { file: PathBuf },
 }
 
 impl From<http::Error> for RunError {
@@ -67,17 +67,17 @@ fn run_serve(root: PathBuf) -> Result<(), RunError> {
     web::serve(&maki)
 }
 
-fn run_parse(file: PathBuf) -> Result<(), RunError> {
+fn run_build(file: PathBuf) -> Result<(), RunError> {
     let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
     let doc = parser::parse(&content);
-    println!("{:#?}", doc);
+    println!("{}", html::render_document(&doc));
     Ok(())
 }
 
 fn run_command(command: Command) -> Result<(), RunError> {
     match command {
         Command::Serve { root } => run_serve(root),
-        Command::Parse { file } => run_parse(file),
+        Command::Build { file } => run_build(file),
     }
 }
 
@@ -108,10 +108,10 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
                 root: PathBuf::from(root),
             })
         }
-        "parse" => {
+        "build" => {
             // TODO: 에러 유형 바꾸기
             let file = args.get(2).ok_or(CliError::MissingCommand)?;
-            Ok(Command::Parse {
+            Ok(Command::Build {
                 file: PathBuf::from(file),
             })
         }

@@ -1,0 +1,169 @@
+:root {
+  color-scheme: light;
+  --bg: #f8f8f5;
+  --fg: #202124;
+  --muted: #6b6f76;
+  --line: #deded8;
+  --code-bg: #eeeeea;
+  --code-fg: #202124;
+  --link: #174ea6;
+  --link-visited: #5f3dc4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    ui-monospace,
+    "SF Mono",
+    Menlo,
+    Monaco,
+    Consolas,
+    "D2Coding",
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    monospace;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+body {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 56px 24px 80px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 2.4em 0 0.75em;
+  color: var(--fg);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+h1 {
+  margin-top: 0;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.35rem;
+}
+
+h3 {
+  font-size: 1.15rem;
+}
+
+h4,
+h5,
+h6 {
+  font-size: 1rem;
+}
+
+p {
+  margin: 1em 0;
+}
+
+a {
+  color: var(--link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:visited {
+  color: var(--link-visited);
+}
+
+ul,
+ol {
+  margin: 1em 0;
+  padding-left: 1.6em;
+}
+
+li {
+  margin: 0.2em 0;
+}
+
+pre {
+  margin: 1.25em 0;
+  padding: 1em;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--code-bg);
+}
+
+code {
+  color: var(--code-fg);
+  font: inherit;
+}
+
+p code,
+li code {
+  padding: 0.08em 0.28em;
+  border: 1px solid var(--line);
+  background: var(--code-bg);
+}
+
+pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+hr {
+  height: 1px;
+  margin: 2em 0;
+  border: 0;
+  background: var(--line);
+}
+
+blockquote {
+  margin: 1.25em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+table {
+  width: 100%;
+  margin: 1.25em 0;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  padding: 0.45em 0.6em;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--code-bg);
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  html {
+    font-size: 15px;
+  }
+
+  body {
+    padding: 32px 16px 56px;
+  }
+}

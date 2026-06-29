@@ -1,16 +1,25 @@
 //! HTML renderer for parsed Maki documents.
 
-use crate::parser::{BlockKind, Document};
+use crate::parser::{BlockKind, Document, Inline};
+
+const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
 
 pub(crate) fn render_document(document: &Document<'_>) -> String {
     let mut html = String::from("<!doctype html><html><head><meta charset=\"utf-8\">");
-    if let Some(title) = document.title() {
+    let title = document.title();
+    html.push_str("<style>");
+    html.push_str(DEFAULT_CSS);
+    html.push_str("</style>");
+    if let Some(title) = title {
         html.push_str("<title>");
         escape_html_into(&mut html, title);
         html.push_str("</title>");
     }
     html.push_str("</head><body>");
 
+    if let Some(title) = title {
+        render_heading(&mut html, 1, title);
+    }
     for block in &document.blocks {
         render_block(&mut html, &block.kind);
     }
@@ -19,15 +28,35 @@ pub(crate) fn render_document(document: &Document<'_>) -> String {
     html
 }
 
+fn render_inline(html: &mut String, inline: &Inline<'_>) {
+    match inline {
+        Inline::NoteLink { target } => {
+            html.push_str("<a href=\"");
+            escape_html_into(html, target);
+            html.push_str("\">");
+            escape_html_into(html, target);
+            html.push_str("</a>");
+        }
+        Inline::SoftBreak => html.push(' '),
+        Inline::Text(text) => escape_html_into(html, text),
+    }
+}
+
+fn render_inlines(html: &mut String, inlines: &[Inline<'_>]) {
+    for inline in inlines {
+        render_inline(html, inline);
+    }
+}
+
 fn render_block(html: &mut String, block: &BlockKind<'_>) {
     match block {
-        BlockKind::Paragraph { lines } => {
+        BlockKind::Paragraph { body } => {
             html.push_str("<p>");
-            for (index, line) in lines.iter().enumerate() {
+            for (index, inline) in body.iter().enumerate() {
                 if index > 0 {
                     html.push('\n');
                 }
-                escape_html_into(html, line);
+                render_inline(html, inline);
             }
             html.push_str("</p>");
         }
@@ -48,24 +77,36 @@ fn render_block(html: &mut String, block: &BlockKind<'_>) {
             html.push_str("</code></pre>");
         }
         BlockKind::Heading { level, body } => {
-            let level = (*level).clamp(1, 6);
-            html.push_str("<h");
-            html.push_str(&level.to_string());
-            html.push('>');
-            escape_html_into(html, body);
-            html.push_str("</h");
-            html.push_str(&level.to_string());
-            html.push('>');
+            // 문서의 title이 h1이 될 거라서 하나씩 올려줌
+            render_heading(html, level + 1, body);
         }
         BlockKind::List { items } => {
             html.push_str("<ul>");
             for item in items {
                 html.push_str("<li>");
-                escape_html_into(html, item.body);
+                render_inlines(html, &item.body);
                 html.push_str("</li>");
             }
             html.push_str("</ul>");
         }
+    }
+}
+
+fn render_heading(html: &mut String, level: usize, body: &str) {
+    if (1usize..=6usize).contains(&level) {
+        html.push_str("<h");
+        html.push_str(&level.to_string());
+        html.push('>');
+        escape_html_into(html, body);
+        html.push_str("</h");
+        html.push_str(&level.to_string());
+        html.push('>');
+    } else {
+        html.push_str("<div role=\"heading\" aria-level=\"");
+        html.push_str(&level.to_string());
+        html.push_str("\">");
+        escape_html_into(html, body);
+        html.push_str("</div>");
     }
 }
 
@@ -111,7 +152,7 @@ hello <maki> & friends
         let html = render_document(&document);
 
         assert!(html.contains("<title>Maki</title>"));
-        assert!(html.contains("<h1>Heading</h1>"));
+        assert!(html.contains("<h2>Heading</h2>"));
         assert!(html.contains("<p>hello &lt;maki&gt; &amp; friends</p>"));
         assert!(html.contains(
             "<pre><code class=\"language-html\">&lt;main&gt;\n&lt;/main&gt;</code></pre>"

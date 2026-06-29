@@ -15,6 +15,102 @@ pub(crate) fn parse(source: &str) -> Document<'_> {
     build_documents(&drafts)
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum Inline<'a> {
+    NoteLink { target: &'a str },
+    Text(&'a str),
+    SoftBreak,
+}
+
+struct InlineCursor<'a> {
+    source: &'a str,
+    pos: usize,
+}
+
+impl<'a> InlineCursor<'a> {
+    fn new(source: &'a str) -> Self {
+        Self { source, pos: 0 }
+    }
+
+    fn pos(&self) -> usize {
+        self.pos
+    }
+
+    fn is_eol(&self) -> bool {
+        self.pos >= self.source.len()
+    }
+
+    fn rest(&self) -> &'a str {
+        &self.source[self.pos..]
+    }
+
+    fn bump(&mut self, n: usize) {
+        self.pos += n;
+    }
+
+    fn bump_char(&mut self) {
+        if let Some(ch) = self.rest().chars().next() {
+            self.pos += ch.len_utf8();
+        }
+    }
+}
+
+const NOTE_LINK_BEGIN: &str = "[[";
+const NOTE_LINK_END: &str = "]]";
+
+fn parse_inline_note_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let rest = cursor.rest();
+    let body = rest.strip_prefix(NOTE_LINK_BEGIN)?;
+    let end = body.find(NOTE_LINK_END)?;
+
+    let target = &body[..end];
+
+    cursor.bump(NOTE_LINK_BEGIN.len() + target.len() + NOTE_LINK_END.len());
+
+    Some(Inline::NoteLink { target })
+}
+
+fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
+    let mut inlines = vec![];
+
+    for (index, line) in source.iter().enumerate() {
+        if index > 0 {
+            inlines.push(Inline::SoftBreak);
+        }
+        inlines.extend(parse_inline(line));
+    }
+
+    inlines
+}
+
+/// Parses a given line into Vec<Inline>
+fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
+    let mut cursor = InlineCursor::new(source);
+    let mut inlines = vec![];
+    let mut text_start = 0;
+
+    while !cursor.is_eol() {
+        let start = cursor.pos();
+
+        if let Some(inline) = parse_inline_note_link(&mut cursor) {
+            if text_start < start {
+                inlines.push(Inline::Text(&source[text_start..start]));
+            }
+
+            inlines.push(inline);
+            text_start = cursor.pos();
+        } else {
+            cursor.bump_char();
+        }
+    }
+
+    if text_start < source.len() {
+        inlines.push(Inline::Text(&source[text_start..]));
+    }
+
+    inlines
+}
+
 fn build_documents<'a>(drafts: &[BlockDraft<'a>]) -> Document<'a> {
     let mut blocks: Vec<Block> = vec![];
     let mut doc_props = Properties::new();
@@ -72,7 +168,7 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
         },
         BlockDraft::Paragraph { raw_lines } => Block {
             kind: BlockKind::Paragraph {
-                lines: raw_lines.clone(),
+                body: parse_inlines(raw_lines),
             },
             props,
         },
@@ -93,7 +189,7 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
                     .map(|draft| ListItem {
                         kind: draft.kind,
                         indent: draft.indent,
-                        body: draft.body,
+                        body: parse_inline(draft.body),
                     })
                     .collect(),
             },
@@ -156,7 +252,7 @@ pub(crate) struct Block<'a> {
 #[derive(Debug, PartialEq)]
 pub(crate) enum BlockKind<'a> {
     Paragraph {
-        lines: Vec<&'a str>,
+        body: Vec<Inline<'a>>,
     },
     Code {
         lines: Vec<&'a str>,
@@ -173,7 +269,7 @@ pub(crate) enum BlockKind<'a> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct ListItem<'a> {
-    pub(crate) body: &'a str,
+    pub(crate) body: Vec<Inline<'a>>,
     indent: usize,
     kind: ListKind,
 }
