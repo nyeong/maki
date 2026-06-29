@@ -1,8 +1,0 @@
---^ title: TODO
-
-나중에 구현할 것들
-
-- tree sitter syntax highlighting
-- LSP
-- nix package
-- file watching and live reload

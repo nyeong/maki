@@ -177,7 +177,7 @@ impl Note {
         parsed.title().unwrap_or(self.file_stem()).to_string()
     }
 
-    fn note_ref(&self) -> NoteRef {
+    pub(crate) fn note_ref(&self) -> NoteRef {
         NoteRef::new(self.canonical_path())
     }
 

@@ -1,5 +1,7 @@
---^ title: v0 Milestone
---^ date: [2026-06-25]
+--^ title: v0: PoC
+--^ date: [2026-06-01]
+
+뭐라도 볼 수 있게 하기
 
 = 목표
 
@@ -14,6 +16,7 @@
 - [x] 어떤 maki 문서에서 다른 maki 문서로 NoteLink를 통해 이동할 수 있다.
 - [ ] 웹 서빙할 때 지원하지 않는 block은 내용을 잃지 않고 fallback으로 보여준다.
   - [ ] 특히 plain text 형상을 그대로 보존해서 서빙하기
+- [ ] Nested Unordered List까지는 파싱하자
 - [x] property line은 기본 HTML 출력에 노출되지 않는다.
 
 = 비목표
