@@ -7,6 +7,8 @@ const MAKI_SOURCE_EXTENSION: &str = ".maki";
 
 use std::path::{Path, PathBuf};
 
+use crate::{html, parser};
+
 #[derive(Debug)]
 pub(crate) enum Error {
     ReadDirectoryFailed(PathBuf),
@@ -197,18 +199,9 @@ impl Maki {
     }
 
     pub(crate) fn render_html(&self, path: &Path) -> Result<String, Error> {
-        let path = self.root.join(path);
-        if !path.exists() {
-            return Err(Error::NoteNotFound(path));
-        }
-        if !path.is_file() {
-            return Err(Error::NoteNotFound(path));
-        }
-
-        let mut html =
-            String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body><pre>");
-        html.push_str("</pre></body></html>");
-        Ok(html)
+        let raw = self.get_raw_content(path)?;
+        let document = parser::parse(&raw);
+        Ok(html::render_document(&document))
     }
 
     /// Resolves a note path relative to the root directory.

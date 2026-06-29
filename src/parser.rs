@@ -1,5 +1,7 @@
 //! Maki parser
 
+use std::collections::BTreeMap;
+
 /// source
 ///   -> LineToken[]
 ///   -> BlockDraft[]
@@ -7,11 +9,173 @@
 /// Later:
 ///   -> Block[]
 ///   -> Document
-pub(crate) fn parse(source: &str) -> String {
+pub(crate) fn parse(source: &str) -> Document<'_> {
     let lines = scan_lines(source);
     let drafts = build_drafts(&lines);
+    build_documents(&drafts)
+}
 
-    format!("{drafts:#?}")
+fn build_documents<'a>(drafts: &[BlockDraft<'a>]) -> Document<'a> {
+    let mut blocks: Vec<Block> = vec![];
+    let mut doc_props = Properties::new();
+    let mut pending_props = Properties::new();
+
+    for draft in drafts {
+        match draft {
+            BlockDraft::Property {
+                kind: PropertyKind::Previous,
+                items,
+                ..
+            } => {
+                if let Some(block) = blocks.last_mut() {
+                    block.props.extend(items)
+                } else {
+                    doc_props.extend(items);
+                }
+            }
+            BlockDraft::Property {
+                kind: PropertyKind::Next,
+                items,
+                ..
+            } => {
+                pending_props.extend(items);
+            }
+            draft => {
+                let block = build_block(draft, std::mem::take(&mut pending_props));
+                blocks.push(block);
+            }
+        }
+    }
+
+    Document {
+        props: doc_props,
+        blocks,
+    }
+}
+
+fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
+    match draft {
+        BlockDraft::Property { .. } => panic!("No Property Block!"),
+        BlockDraft::Heading { level, body } => Block {
+            kind: BlockKind::Heading {
+                level: *level,
+                body,
+            },
+            props,
+        },
+        BlockDraft::Code { raw_lines } => Block {
+            kind: BlockKind::Code {
+                lines: raw_lines.clone(),
+                lang: props.get_one("lang"),
+            },
+            props,
+        },
+        BlockDraft::Paragraph { raw_lines } => Block {
+            kind: BlockKind::Paragraph {
+                lines: raw_lines.clone(),
+            },
+            props,
+        },
+        BlockDraft::Container {
+            header: _,
+            raw_lines,
+        } => Block {
+            kind: BlockKind::Code {
+                lines: raw_lines.clone(),
+                lang: None,
+            },
+            props,
+        },
+        BlockDraft::List { items } => Block {
+            kind: BlockKind::List {
+                items: items
+                    .iter()
+                    .map(|draft| ListItem {
+                        kind: draft.kind,
+                        indent: draft.indent,
+                        body: draft.body,
+                    })
+                    .collect(),
+            },
+            props,
+        },
+        BlockDraft::Tbd { items } => Block {
+            kind: BlockKind::Code {
+                lines: items.clone(),
+                lang: Some("maki"),
+            },
+            props,
+        },
+    }
+}
+
+#[derive(Debug, PartialEq, Default)]
+struct Properties<'a> {
+    values: BTreeMap<String, &'a str>,
+}
+
+impl<'a> Properties<'a> {
+    fn new() -> Self {
+        Self {
+            values: BTreeMap::new(),
+        }
+    }
+
+    // TODO: PropertyDraft만 받도록 바꾸기
+    fn extend(&mut self, props: &[PropertyItemDraft<'a>]) {
+        for prop in props {
+            let key = prop.key.to_lowercase();
+            let value = prop.value;
+            self.values.insert(key, value);
+        }
+    }
+
+    fn get_one(&self, key: &str) -> Option<&'a str> {
+        self.values.get(key).copied()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Document<'a> {
+    props: Properties<'a>,
+    pub(crate) blocks: Vec<Block<'a>>,
+}
+
+impl<'a> Document<'a> {
+    pub(crate) fn title(&self) -> Option<&'a str> {
+        self.props.get_one("title")
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Block<'a> {
+    props: Properties<'a>,
+    pub(crate) kind: BlockKind<'a>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum BlockKind<'a> {
+    Paragraph {
+        lines: Vec<&'a str>,
+    },
+    Code {
+        lines: Vec<&'a str>,
+        lang: Option<&'a str>,
+    },
+    Heading {
+        level: usize,
+        body: &'a str,
+    },
+    List {
+        items: Vec<ListItem<'a>>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ListItem<'a> {
+    pub(crate) body: &'a str,
+    indent: usize,
+    kind: ListKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,13 +191,14 @@ enum LineToken<'a> {
 }
 
 /// Run means a sequence of characters.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum LinePrefix {
     EqualsRun(usize), // #, ##, ###, ...
     EnCaret,          // --^
     EnV,              // --v
     Hyphen,           // -
     Backticks,        // ```
+    NumberDot(usize), // 1.
     None,
 }
 
@@ -60,6 +225,16 @@ const BACKTICKS: &str = "```";
 const EQUALS: char = '=';
 const CODE_BLOCK_INDENT: usize = 4;
 
+fn parse_number_dot_prefix(source: &str) -> Option<usize> {
+    let (digits, rest) = source.split_once('.')?;
+
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) || !rest.starts_with(' ') {
+        return None;
+    }
+
+    digits.parse().ok()
+}
+
 /// Accepts a text trimmed of leading whitespace.
 fn scan_line_prefix(raw_text: &str) -> LinePrefix {
     if raw_text.starts_with(EN_CARET) {
@@ -67,6 +242,9 @@ fn scan_line_prefix(raw_text: &str) -> LinePrefix {
     }
     if raw_text.starts_with(EN_V) {
         return LinePrefix::EnV;
+    }
+    if let Some(n) = parse_number_dot_prefix(raw_text) {
+        return LinePrefix::NumberDot(n);
     }
     if raw_text.starts_with(HYPHEN) {
         return LinePrefix::Hyphen;
@@ -102,8 +280,8 @@ fn scan_lines(source: &str) -> Vec<LineToken<'_>> {
     source.lines().map(scan_line).collect()
 }
 
-#[derive(Debug, PartialEq)]
-enum ListKind {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ListKind {
     Unordered,
     // Ordered
 }
@@ -112,6 +290,18 @@ enum ListKind {
 enum PropertyKind {
     Previous,
     Next,
+}
+
+#[derive(Debug, PartialEq)]
+struct PropertyItemDraft<'a> {
+    key: &'a str,
+    value: &'a str,
+}
+
+impl<'a> PropertyItemDraft<'a> {
+    fn new(key: &'a str, value: &'a str) -> Self {
+        PropertyItemDraft { key, value }
+    }
 }
 
 /// A draft of a block to be built into a [`Block`].
@@ -123,7 +313,7 @@ enum BlockDraft<'a> {
     Property {
         indent: usize,
         kind: PropertyKind,
-        body: Vec<&'a str>,
+        items: Vec<PropertyItemDraft<'a>>,
     },
     /// =
     Heading {
@@ -149,6 +339,10 @@ enum BlockDraft<'a> {
 
     List {
         items: Vec<ListItemDraft<'a>>,
+    },
+
+    Tbd {
+        items: Vec<&'a str>,
     },
 }
 
@@ -177,6 +371,7 @@ impl LinePrefix {
             LinePrefix::EnV => EN_V.len(),
             LinePrefix::Hyphen => HYPHEN.len(),
             LinePrefix::Backticks => BACKTICKS.len(),
+            LinePrefix::NumberDot(num) => num / 10 + 1,
             LinePrefix::None => 0,
         }
     }
@@ -212,13 +407,13 @@ impl<'a> LineToken<'a> {
     }
 }
 
-struct LineCursor<'a> {
-    lines: &'a [LineToken<'a>],
+struct LineCursor<'tokens, 'src> {
+    lines: &'tokens [LineToken<'src>],
     pos: usize,
 }
 
-impl<'a> LineCursor<'a> {
-    fn new(lines: &'a [LineToken<'a>]) -> Self {
+impl<'tokens, 'src> LineCursor<'tokens, 'src> {
+    fn new(lines: &'tokens [LineToken<'src>]) -> Self {
         Self { lines, pos: 0 }
     }
 
@@ -226,11 +421,11 @@ impl<'a> LineCursor<'a> {
         self.pos >= self.lines.len()
     }
 
-    fn peek(&self) -> Option<&'a LineToken<'a>> {
+    fn peek(&self) -> Option<&LineToken<'src>> {
         self.lines.get(self.pos)
     }
 
-    fn next(&mut self) -> Option<&'a LineToken<'a>> {
+    fn next(&mut self) -> Option<&LineToken<'src>> {
         let line = self.lines.get(self.pos)?;
         self.pos += 1;
         Some(line)
@@ -246,7 +441,7 @@ impl<'a> LineCursor<'a> {
     }
 }
 
-fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
     let mut raw_lines = vec![];
 
     while !cursor.is_eof() {
@@ -259,7 +454,7 @@ fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'
     Some(BlockDraft::Paragraph { raw_lines })
 }
 
-fn parse_container_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+fn parse_container_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
     if !matches!(
         cursor.peek(),
         Some(LineToken::Line {
@@ -290,13 +485,15 @@ fn parse_container_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'
     Some(BlockDraft::Container { header, raw_lines })
 }
 
-fn parse_property_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+// TODO: parse.. 함수들 모두 Result<Option<T>, E> 타입으로 바꾸기. Ok(None), Ok(Some(...)), Err(..)
+fn parse_property_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
     let LineToken::Line { kind, indent, .. } = cursor.peek()? else {
         return None;
     };
     let property_kind = kind.as_property_kind()?;
+    let kind = *kind;
     let indent = *indent;
-    let mut raw_lines = vec![];
+    let mut items = vec![];
 
     while let Some(LineToken::Line {
         kind: line_kind,
@@ -304,28 +501,34 @@ fn parse_property_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a
         ..
     }) = cursor.peek()
     {
-        if *line_indent != indent || kind != line_kind {
+        if *line_indent != indent || kind != *line_kind {
             break;
         }
-        raw_lines.push(cursor.next()?.body()?);
+        let raw_line = cursor.next()?.body()?;
+        let (key, value) = raw_line
+            .split_once(':')
+            .unwrap_or_else(|| panic!("invalid property: {:?}", raw_line));
+        items.push(PropertyItemDraft::new(key.trim(), value.trim()))
     }
 
     Some(BlockDraft::Property {
         indent,
         kind: property_kind,
-        body: raw_lines,
+        items,
     })
 }
 
-fn parse_heading_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
-    let line @ LineToken::Line {
+fn parse_heading_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+    let line = cursor.peek()?;
+    let LineToken::Line {
         kind: LinePrefix::EqualsRun(level),
         ..
-    } = cursor.peek()?
+    } = line
     else {
         return None;
     };
     let level = *level;
+    let body = line.body()?;
 
     if !(1..=6).contains(&level) {
         return None;
@@ -333,32 +536,32 @@ fn parse_heading_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>
 
     cursor.next();
 
-    Some(BlockDraft::Heading {
-        level,
-        body: line.body()?,
-    })
+    Some(BlockDraft::Heading { level, body })
 }
 
-fn parse_list_item_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<ListItemDraft<'a>> {
-    let line @ LineToken::Line {
+fn parse_list_item_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<ListItemDraft<'a>> {
+    let line = cursor.peek()?;
+    let LineToken::Line {
         indent,
         kind: LinePrefix::Hyphen,
         ..
-    } = cursor.peek()?
+    } = line
     else {
         return None;
     };
+    let indent = *indent;
+    let body = line.body()?;
 
     cursor.next();
 
     Some(ListItemDraft {
         kind: ListKind::Unordered,
-        indent: *indent,
-        body: line.body()?,
+        indent,
+        body,
     })
 }
 
-fn parse_list_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
     let LineToken::Line {
         indent: 0,
         kind: LinePrefix::Hyphen,
@@ -377,7 +580,33 @@ fn parse_list_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
     Some(BlockDraft::List { items })
 }
 
-fn parse_code_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
+fn parse_tbd_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+    if !matches!(
+        cursor.peek(),
+        Some(LineToken::Line {
+            indent: 0,
+            kind: LinePrefix::NumberDot(_),
+            ..
+        })
+    ) {
+        return None;
+    }
+
+    let mut items = vec![];
+
+    while let Some(LineToken::Line {
+        indent: 0,
+        kind: LinePrefix::NumberDot(_),
+        ..
+    }) = cursor.peek()
+    {
+        items.push(cursor.next()?.raw_line());
+    }
+
+    Some(BlockDraft::Tbd { items })
+}
+
+fn parse_code_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
     let line = cursor.peek()?;
     if line.indent() < CODE_BLOCK_INDENT {
         return None;
@@ -403,7 +632,7 @@ fn parse_code_draft<'a>(cursor: &mut LineCursor<'a>) -> Option<BlockDraft<'a>> {
     Some(BlockDraft::Code { raw_lines })
 }
 
-fn build_drafts<'a>(lines: &'a [LineToken<'a>]) -> Vec<BlockDraft<'a>> {
+fn build_drafts<'a>(lines: &[LineToken<'a>]) -> Vec<BlockDraft<'a>> {
     let mut cursor = LineCursor::new(lines);
     let mut drafts = vec![];
 
@@ -417,6 +646,8 @@ fn build_drafts<'a>(lines: &'a [LineToken<'a>]) -> Vec<BlockDraft<'a>> {
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_list_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_tbd_draft(&mut cursor) {
             drafts.push(draft);
         } else if cursor.consume_blank() {
             continue;
@@ -526,7 +757,10 @@ plain text"#;
                 BlockDraft::Property {
                     indent: 0,
                     kind: PropertyKind::Previous,
-                    body: vec!["title: Maki", "description: This is a simple example.",],
+                    items: vec![
+                        PropertyItemDraft::new("title", "Maki"),
+                        PropertyItemDraft::new("description", "This is a simple example.")
+                    ],
                 },
                 BlockDraft::Heading {
                     level: 2,

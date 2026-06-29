@@ -89,7 +89,7 @@ Maki의 기본 단위.
 
 아래의 code line과 동치이다
 
---v lang=html
+--v lang: html
     <html>
       hi!
     </html>
@@ -119,7 +119,7 @@ Maki의 기본 단위.
 --v milestone: v0
 === Container Block
 
-    ```<kind> [<args>]
+    ```<block-canonical-name> [<args>]
     <body>
     ```
 
@@ -136,6 +136,15 @@ Maki의 기본 단위.
 - 파일 전체가 하나의 블록임
 - Canonical Path : 프로젝트 루트에서 파일로 향하는 relative path에서 확장자를 제거한 값
 - File Name : 확장자를 제거한 파일의 이름
+
+=== Paragraph
+--^ canonical-name: p
+
+=== Heading
+--^ canonical-name: h1, h2, h3, h4, h5, h6
+
+=== Code
+--^ canonical-name: code
 
 = Line
 
@@ -305,7 +314,6 @@ inline prefix는 두 종료가 있음
 - _underline_
 - +strike+
 - `code`
-- ~command~
 - =highlight=
 - [link text](link target)
 - [[Note link]]

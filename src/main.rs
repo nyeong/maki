@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::path::PathBuf;
 
+mod html;
 mod http;
 mod maki;
 mod parser;
@@ -69,7 +70,7 @@ fn run_serve(root: PathBuf) -> Result<(), RunError> {
 fn run_parse(file: PathBuf) -> Result<(), RunError> {
     let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
     let doc = parser::parse(&content);
-    println!("{}", doc);
+    println!("{:#?}", doc);
     Ok(())
 }
 

@@ -5,20 +5,17 @@
 이 순서대로
 
     Source
-    -> Line Scan (LineToken[])
-    -> Draft Build (BlockDraft[])
-    -> Property Consume and Body Parse (Block[])
-    -> Build (Document)
+    -> Scan Lines (LineToken[])
+    -> Build Drafts (BlockDraft[])
+    -> Build Document (Document)
 
-- Line Scan : source를 줄 단위 token으로 분류
-- Draft Build : 연속된 line token을 block으로 묶음
-- Property Consume : property line을 consume하여 대상 block에 property로 붙임
-- Body Parse : block body를 kind에 따라 파싱
+- Scan Lines : source를 줄 단위 token으로 분류
+- Build Drafts : 연속된 line token을 block으로 묶음
 - Build : 최종 Document 생성
 
-== Line Scan
+== Scan Lines
 
-주어진 문서를 줄단위로 Prefix 분석 결과로 바꿈.
+주어진 문자열을 줄단위로 Prefix 분석하여 LineToken[]으로 변환함.
 
     --v milestone: v0
     === Container Block
@@ -40,14 +37,31 @@
     Blank
     Line { prefix = "", indent = 0, body = ... }
 
-== Block Build
+== Build Drafts
 
-LineToken stream을 BlockDraft stream으로 변환함. 이제는 위치 정보까지 포함하여 Prefix -> Block으로 바꿈.
+주어진 LineToken[]을 적절한 의미단위로 묶어서 BlockDraft[]로 변환함.
 
-예:
+이 단계에서 하는 일:
 
 - `EqualsRun(1..=6)`은 Heading Block이 됨
 - Backticks으로 둘러싸인 line들은 ContainerBlock의 raw body가 됨
 - 갑자기 나온 indent 4 line은 CodeBlock임
 - List context 안에서 indent가 증가한 Hyphen line은 Nested ListItem임
+- ...
+
+== Build Document
+
+주어진 BlockDraft[]에서 Property를 consume하여 Block[]을 가진 Document로 변환함.
+
+이 단계에서 하는 일:
+
+- Properties를 Consume함
+  - Document에 Property를 붙임
+  - 각 BlockDraft에 Property를 붙이며 Block으로 승격함
+
+이 단계에서 하지 않는 일:
+
+- Property Value의 의미 해석
+- Note Link resolve
+- HTML 렌더링
 - ...
