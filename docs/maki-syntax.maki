@@ -75,13 +75,13 @@ Maki의 기본 단위.
 - 속성을 가질 수 있음
 - 인자가 필요할 수 있음
 - 각 block마다 body를 해석하는 방법이 다를 수 있음
-  - 예: src는 raw text로 두어야하지만, quote는 inline, block을 허용함
+  - 예: code는 raw text로 두어야하지만, quote는 inline, block을 허용함
 - 파일 전체도 하나의 root block임
 - Line은 Block에 대한 syntactic sugar임
 
-예를 들어 아래의 src block은
+예를 들어 아래의 code block은
 
-```src html
+```code html
 <html>
   hi!
 </html>
@@ -182,7 +182,7 @@ Maki의 기본 단위.
 
 혹은
 
-    ```src <lang>
+    ```code <lang>
     <raw text>
     ```
 

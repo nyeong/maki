@@ -5,9 +5,15 @@
 const MAKI_EXTENSION: &str = "maki";
 const MAKI_SOURCE_EXTENSION: &str = ".maki";
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
-use crate::{html, parser};
+use crate::{
+    html::{self, NoteInfo, RenderContext},
+    parser,
+};
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -78,15 +84,24 @@ fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(files)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct NoteRef {
+    canonical_path: PathBuf,
+}
+
 pub(crate) struct Maki {
-    root: PathBuf,    // canonical absolute path
-    notes: Vec<Note>, // root-relative markdown paths
+    root: PathBuf,                  // canonical absolute path
+    notes: BTreeMap<NoteRef, Note>, // root-relative markdown paths
     config: MakiConfig,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Note {
-    path: PathBuf,
+    /// 실제 파일 시스템 절대경로
+    absolute_path: PathBuf,
+
+    /// 프로젝트 root 기준 상대경로
+    project_path: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -134,19 +149,124 @@ pub(crate) enum MakiRoute {
     NoteSource(PathBuf),
 }
 
-impl Note {
-    pub(crate) fn path(&self) -> &Path {
-        self.path.as_ref()
+impl NoteRef {
+    fn new(canonical_path: impl AsRef<Path>) -> Self {
+        Self {
+            canonical_path: canonical_path.as_ref().to_path_buf(),
+        }
     }
 
-    fn load(_root: impl AsRef<Path>, relative_path: impl AsRef<Path>) -> Result<Self, Error> {
+    fn canonical_path(&self) -> &Path {
+        self.canonical_path.as_ref()
+    }
+
+    pub(crate) fn web_path(&self) -> String {
+        format!("/{}", self.canonical_path().display())
+    }
+}
+
+impl Note {
+    /// 루트로부터 파일까지의 상대경로
+    pub(crate) fn source_path(&self) -> &Path {
+        self.project_path.as_ref()
+    }
+
+    fn title(&self) -> String {
+        let content = std::fs::read_to_string(&self.absolute_path).unwrap();
+        let parsed = parser::parse(&content);
+        parsed.title().unwrap_or(self.file_stem()).to_string()
+    }
+
+    fn note_ref(&self) -> NoteRef {
+        NoteRef::new(self.canonical_path())
+    }
+
+    /// Maki 내부 identity로 쓰는 경로.
+    /// as_path에서 확장자를 생략한 것
+    fn canonical_path(&self) -> PathBuf {
+        let path = self.project_path.with_extension("");
+        path.strip_prefix(".").unwrap_or(&path).to_path_buf()
+    }
+
+    /// 파일 이름
+    fn file_stem(&self) -> &str {
+        self.project_path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+    }
+
+    fn load(root: impl AsRef<Path>, project_path: impl AsRef<Path>) -> Result<Self, Error> {
+        let root = root.as_ref();
+        let project_path = project_path.as_ref();
+        let absolute_path = root.join(project_path);
+        if !absolute_path.exists() || !absolute_path.is_file() {
+            return Err(Error::NoteNotFound(absolute_path.to_path_buf()));
+        }
+
+        let absolute_path = std::fs::canonicalize(&absolute_path)
+            .map_err(|_s| Error::NoteNotFound(absolute_path))?;
+
         Ok(Self {
-            path: relative_path.as_ref().to_path_buf(),
+            absolute_path,
+            project_path: project_path.to_path_buf(),
         })
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum NoteLinkResolution {
+    Found(NoteRef),
+    Broken,
+    Ambiguous,
+}
+
 impl Maki {
+    fn note(&self, note_ref: &NoteRef) -> Option<&Note> {
+        self.notes.get(note_ref)
+    }
+
+    pub(crate) fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
+        let target_ref = NoteRef::new(target);
+
+        if self.notes.contains_key(&target_ref) {
+            return NoteLinkResolution::Found(target_ref);
+        }
+
+        if target.starts_with('#') {
+            return NoteLinkResolution::Ambiguous;
+        }
+        // 2. sibling stem
+        if !target.contains('/')
+            && let Some(parent) = current.canonical_path().parent()
+        {
+            let sibling_ref = NoteRef::new(parent.join(target));
+            if self.notes.contains_key(&sibling_ref) {
+                return NoteLinkResolution::Found(sibling_ref);
+            }
+        }
+
+        // 3. project-wide file stem
+        let mut candidates = self
+            .notes
+            .keys()
+            .filter(|note_ref| {
+                note_ref
+                    .canonical_path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some(target)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        match candidates.len() {
+            0 => NoteLinkResolution::Broken,
+            1 => NoteLinkResolution::Found(candidates.remove(0)),
+            _ => NoteLinkResolution::Ambiguous,
+        }
+    }
+
     pub(crate) fn get_raw_content(&self, path: &Path) -> Result<String, Error> {
         let path = self.root.join(path);
 
@@ -161,8 +281,8 @@ impl Maki {
         &self.config
     }
 
-    pub(crate) fn notes(&self) -> &[Note] {
-        &self.notes
+    pub(crate) fn notes(&self) -> impl Iterator<Item = &Note> {
+        self.notes.values()
     }
 
     pub(crate) fn notes_len(&self) -> usize {
@@ -181,10 +301,13 @@ impl Maki {
             std::fs::canonicalize(root).map_err(|_source| Error::RootNotFound(root.to_owned()))?;
 
         let files = list_markdown_files(&root)?;
-        let notes = files
-            .into_iter()
-            .map(|file| Note::load(&root, &file))
-            .collect::<Result<Vec<Note>, _>>()?;
+
+        let mut notes = BTreeMap::new();
+
+        for file in &files {
+            let note = Note::load(&root, file).unwrap();
+            notes.insert(note.note_ref(), note);
+        }
 
         Ok(Self {
             root,
@@ -201,7 +324,19 @@ impl Maki {
     pub(crate) fn render_html(&self, path: &Path) -> Result<String, Error> {
         let raw = self.get_raw_content(path)?;
         let document = parser::parse(&raw);
-        Ok(html::render_document(&document))
+        let current = Note::load(&self.root, path)?.note_ref();
+
+        let resolve_note_link = |target: &str| self.resolve_note_link(&current, target);
+        let get_note_info = |note_ref: &NoteRef| {
+            self.note(note_ref).map(|note| NoteInfo {
+                title: note.title(),
+            })
+        };
+
+        Ok(html::render_document_with_context(
+            &document,
+            RenderContext::project(&resolve_note_link, &get_note_info),
+        ))
     }
 
     /// Resolves a note path relative to the root directory.
@@ -219,7 +354,7 @@ impl Maki {
             PathBuf::from(format!("{target}{MAKI_SOURCE_EXTENSION}"))
         };
 
-        if !self.notes.iter().any(|n| n.path == relative_path) {
+        if !self.notes().any(|n| n.project_path == relative_path) {
             return Err(Error::NoteNotFound(relative_path));
         }
 
@@ -246,4 +381,43 @@ impl Maki {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    #[test]
+    fn note_path() {
+        let note = Note::load(".", "docs/use-cases.maki").unwrap();
+
+        assert_eq!(note.source_path(), PathBuf::from("docs/use-cases.maki"));
+        assert_eq!(note.canonical_path(), PathBuf::from("docs/use-cases"));
+        assert_eq!(note.file_stem(), "use-cases");
+        assert_eq!(note.note_ref().web_path(), "/docs/use-cases");
+    }
+
+    #[test]
+    fn note_ref() {
+        let note = Note::load(".", "docs/use-cases.maki").unwrap();
+        let ref_ = note.note_ref();
+        assert_eq!(ref_.canonical_path(), PathBuf::from("docs/use-cases"));
+        assert_eq!(ref_.web_path(), "/docs/use-cases");
+    }
+
+    #[test]
+    fn resolve_note_link() {
+        let maki = Maki::load("docs").unwrap();
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("index"), "use-cases"),
+            NoteLinkResolution::Found(NoteRef::new("use-cases"))
+        );
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("index"), "v0"),
+            NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+        );
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("index"), "milestones/v0"),
+            NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+        );
+    }
+}

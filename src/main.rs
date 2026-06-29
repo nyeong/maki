@@ -62,7 +62,7 @@ fn run_serve(root: PathBuf) -> Result<(), RunError> {
     let maki = Maki::load(&root)?;
     println!("Found {} markdown files", maki.notes_len());
     for note in maki.notes() {
-        println!("- {}", note.path().display());
+        println!("- {}", note.source_path().display());
     }
     web::serve(&maki)
 }

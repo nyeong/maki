@@ -20,6 +20,7 @@ pub(crate) enum Inline<'a> {
     NoteLink { target: &'a str },
     Text(&'a str),
     SoftBreak,
+    Code(&'a str),
 }
 
 struct InlineCursor<'a> {
@@ -55,17 +56,30 @@ impl<'a> InlineCursor<'a> {
     }
 }
 
-const NOTE_LINK_BEGIN: &str = "[[";
-const NOTE_LINK_END: &str = "]]";
+const INLINE_NOTE_LINK_BEGIN: &str = "[[";
+const INLINE_NOTE_LINK_END: &str = "]]";
+const INLINE_CODE_BEGIN_END: &str = "`";
+
+fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let rest = cursor.rest();
+    let body = rest.strip_prefix(INLINE_CODE_BEGIN_END)?;
+    let end = body.find(INLINE_CODE_BEGIN_END)?;
+
+    let contents = &body[..end];
+
+    cursor.bump(INLINE_CODE_BEGIN_END.len() + contents.len() + INLINE_CODE_BEGIN_END.len());
+
+    Some(Inline::Code(contents))
+}
 
 fn parse_inline_note_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let rest = cursor.rest();
-    let body = rest.strip_prefix(NOTE_LINK_BEGIN)?;
-    let end = body.find(NOTE_LINK_END)?;
+    let body = rest.strip_prefix(INLINE_NOTE_LINK_BEGIN)?;
+    let end = body.find(INLINE_NOTE_LINK_END)?;
 
     let target = &body[..end];
 
-    cursor.bump(NOTE_LINK_BEGIN.len() + target.len() + NOTE_LINK_END.len());
+    cursor.bump(INLINE_NOTE_LINK_BEGIN.len() + target.len() + INLINE_NOTE_LINK_END.len());
 
     Some(Inline::NoteLink { target })
 }
@@ -92,7 +106,9 @@ fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     while !cursor.is_eol() {
         let start = cursor.pos();
 
-        if let Some(inline) = parse_inline_note_link(&mut cursor) {
+        if let Some(inline) =
+            parse_inline_code(&mut cursor).or_else(|| parse_inline_note_link(&mut cursor))
+        {
             if text_start < start {
                 inlines.push(Inline::Text(&source[text_start..start]));
             }
@@ -768,7 +784,7 @@ mod tests {
 
     This is Code Line
 
-```src
+```code
 Container Block
 ```
 
@@ -808,7 +824,7 @@ plain text"#;
                 LineToken::Line {
                     indent: 0,
                     kind: LinePrefix::Backticks,
-                    raw_line: "```src"
+                    raw_line: "```code"
                 },
                 LineToken::Line {
                     indent: 0,
@@ -841,7 +857,7 @@ plain text"#;
 
     This is Code Line
 
-```src
+```code
 Container Block
 ```
 
@@ -880,7 +896,7 @@ plain text"#;
                     raw_lines: vec!["This is Code Line"],
                 },
                 BlockDraft::Container {
-                    header: "src",
+                    header: "code",
                     raw_lines: vec!["Container Block"],
                 },
                 BlockDraft::Paragraph {
