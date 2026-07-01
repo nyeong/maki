@@ -26,11 +26,8 @@ org에서는 하위 todo의 진행도에 따라 자동으로 진행도를 계산
 ```code org
 * 이슈 [5/28]
 ** TODO NanoKVM 세팅하기 [...]
-** IN_PROGRESS 전기세 측정하기 [50%] [...]
+** IN_PROGRESS 어쩌구 저쩌구 [50%] [...]
 ** IN_PROGRESS IaC 구성하기 [77%] [...]
-```
-
-```code org
 ** IN_PROGRESS 전기세 측정하기 [50%]
 :PROPERTIES:
 :ID:       d00182f9-6ad2-43e7-9f71-2bf3448d846f

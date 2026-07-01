@@ -87,10 +87,11 @@
 - Maki 문서를 웹 서버로 서빙한다.
 - Not Found, Bad Request 등 기본 HTTP 응답을 유지한다.
 
---v status: todo
+--v status: done
 == Inline Parsing
 
 - [x] Note Link만 지원하자
+- [x] Note Link는 Resolve도 하자
 
 --v status: todo
 == Nested Block

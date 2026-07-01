@@ -1,3 +1,4 @@
 .direnv
 target
 .pre-commit-config.yaml
+docs/review-by-codex.maki
