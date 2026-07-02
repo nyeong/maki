@@ -1,3 +1,8 @@
---^ title: v3: 여기저기서 쓰기
+--^ title: v3: Tooling
+--^ status: todo
 
-- org-agenda
+편하게 maki를 작성하기 위한 주변 도구 세팅
+
+- 최소한의 syntax highlighting
+- 최소한의 LSP
+- 포매터?

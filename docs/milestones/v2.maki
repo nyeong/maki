@@ -1,7 +1,85 @@
---^ title: v2
+--^ title: v2: Publishing
+--^ status: todo
 
-편하게 maki를 작성하기 위한 주변 도구 세팅
+내 노트를 다른사람과 공유하자
 
-- 최소한의 syntax highlighting
-- 최소한의 LSP
-- 포매터?
+= 상황
+
+[[v0]]을 통해 어느정도 문법이 정해지고
+[[v1]]을 통해 내가 쓸 수 있는 도구가 되었다면
+v2에서는 다른 사람에게도 공유할 수 있는 플랫폼을 목표로 하여 Notion의 목적을 일부 대체한다.
+
+= 목표
+
+- 하나의 문서 저장소만 운영한다.
+- 두 개의 프로세스를 띄운다. 내부용, 외부용.
+- 내부용은 모든 문서를 서빙하고, tailnet 안에서만 운용한다.
+- 외부용은 공개하기로 결정한 문서만 서빙하고, 외부에서도 접근할 수 있다.
+- 공개 서버 운용에 필요한 최소 메트릭을 수집하여 추후 최적화에 참고한다.
+
+= 성공기준
+
+- [serve] 공개하기로 결정한 Maki 문서를 외부에 서빙한다
+- [html] 공개 문서에서 비공개 문서로 향하는 Note Link는 숨김처리한다.
+  - [ 데이터 말소 ]
+- [serve] 비공개 문서에 접근하면 Not Found로 응답함
+- [serve] 느린 요청에 대해 어느 phase가 오래 걸렸는지 확인할 수 있다.
+
+= 비목표
+
+- 세밀한 ACL
+- 계정 관리
+- 댓글, 편집 공유, 협업 기능
+- 검색 엔진 최적화
+- 정적 사이트 export
+- Grafana 대시보드
+- ...
+
+= 공개 정책
+
+--v status: todo
+== Publish Property
+
+각 문서는 property로 공개 여부를 선언한다.
+
+    --^ publish: all
+
+또한 publish 필드는 나중에 [[later#부분공개]]를 위해 예약한다.
+
+- 기본값 : none
+
+== Publish Mode
+
+- 서버는 실행 모드에 따라 문서 접근 정책을 달리 해야한다.
+- private mode
+- public mode
+
+--v status: todo
+== Link Boundary
+
+- public mode에서는 비공개 문서가 존재하지 않는 것처럼 동작한다.
+- 다만 링크 이름까지 숨길 것인지 고민 (redact)
+  - 옵션으로 주기?
+
+= 작업
+
+--v status: todo
+== 웹서버 퍼블리시 서빙
+
+- [ ] Cloudflare Tunnel 혹은 Tailscale Funnel
+
+--v status: todo
+== 웹서버 메트릭 수집
+
+공개되게 웹서버를 올릴 경우, 성능 측정 및 개선을 위해 메트릭을 수집해야한다.
+
+요청 처리 시간을 phase별로 측정한다.
+
+- request_read
+- route_resolve
+- access_check
+- source_read
+- parse
+- note_resolve
+- render_html
+- response_write

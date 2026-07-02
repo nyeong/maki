@@ -1,5 +1,6 @@
 --^ title: v0: PoC
---^ date: [2026-06-01]
+--^ date: [2026-06-01]--[2026-07-02]
+--^ status: done
 
 뭐라도 볼 수 있게 하기
 
@@ -14,9 +15,9 @@
 
 - [x] `maki serve <directory>`로 `.maki` 문서를 서빙할 수 있다.
 - [x] 어떤 maki 문서에서 다른 maki 문서로 NoteLink를 통해 이동할 수 있다.
-- [ ] 웹 서빙할 때 지원하지 않는 block은 내용을 잃지 않고 fallback으로 보여준다.
-  - [ ] 특히 plain text 형상을 그대로 보존해서 서빙하기
-- [ ] Nested Unordered List까지는 파싱하자
+- [-] 웹 서빙할 때 지원하지 않는 block은 내용을 잃지 않고 fallback으로 보여준다.
+  - [-] 특히 plain text 형상을 그대로 보존해서 서빙하기
+- [x] Nested Unordered List까지는 파싱하자
 - [x] property line은 기본 HTML 출력에 노출되지 않는다.
 
 = 비목표
@@ -61,31 +62,37 @@
   - `--v` property를 다음 attachable block에 붙인다.
   - v0에서는 property value를 문자열로만 보존한다.
 
---v status: in_progress
-== Note Link
+--v status: done
+== Note Link for file
 
 - [x] `[[target]]`을 프로젝트 단위로 resolve한다.
-- [ ] `[[#heading]]`을 현재 문서의 heading으로 resolve한다.
-- [ ] `[[target#heading]]`을 다른 문서의 heading으로 resolve한다.
 - [x] broken link와 ambiguous link를 구분한다.
 
---v status: in_progress
+--v status: later
+== Note Link for heading
+
+나중으로 미룸
+
+- [ ] `[[#heading]]`을 현재 문서의 heading으로 resolve한다.
+- [ ] `[[target#heading]]`을 다른 문서의 heading으로 resolve한다.
+
+--v status: done
 == HTML Render
 
 - [x] File, Heading, Paragraph, List, Code를 HTML로 렌더링한다.
 - [x] Note Link를 `<a>`로 렌더링한다.
   - [x] broken link, ambiguous link를 구분한다.
-- 구현되지 않은 block은 fallback으로 출력한다.
-- nested list를 의미를 보존하여 구조적으로 렌더링한다
-- heading link를 지원한다.
+- [-] 구현되지 않은 block은 fallback으로 출력한다.
+- [x] nested list를 의미를 보존하여 구조적으로 렌더링한다
+- [ ] heading link를 지원한다.
 - [x] 코드 퀄리티는 신경쓰지 말고 일단 돌아가게 한다.
 
 --v status: done
 == Web Serve
 
-- `.maki` source route와 HTML rendered route를 구분한다.
-- Maki 문서를 웹 서버로 서빙한다.
-- Not Found, Bad Request 등 기본 HTTP 응답을 유지한다.
+- [x] `.maki` source route와 HTML rendered route를 구분한다.
+- [x] Maki 문서를 웹 서버로 서빙한다.
+- [x] Not Found, Bad Request 등 기본 HTTP 응답을 유지한다.
 
 --v status: done
 == Inline Parsing
@@ -93,7 +100,7 @@
 - [x] Note Link만 지원하자
 - [x] Note Link는 Resolve도 하자
 
---v status: todo
-== Nested Block
+--v status: done
+== Unordered Nested List
 
-- [ ] List에 대해 Nested를 지원하여 중첩 구조를 표현한다
+- [x] Unordered List에 대해 Nested를 지원하여 중첩 구조를 표현한다

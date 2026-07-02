@@ -1,6 +1,12 @@
 //! Maki domain.
 //!
-//! Owns note/indexing errors. It does not decide HTTP status codes.
+//! ### Properties
+//!
+//! Parser가 해석한 maki 문서의 properties 중 일부에 의미를 담아 활용함
+//!
+//! 예)
+//! - 문서의 `title`을 문서의 제목으로 활용함
+//! - 문서의 `publish`를 publish 정책으로 활용함
 
 const MAKI_EXTENSION: &str = "maki";
 const MAKI_SOURCE_EXTENSION: &str = ".maki";
@@ -50,11 +56,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-fn collect_markdown_files(
-    root: &Path,
-    current: &Path,
-    acc: &mut Vec<PathBuf>,
-) -> Result<(), Error> {
+fn collect_maki_files(root: &Path, current: &Path, acc: &mut Vec<PathBuf>) -> Result<(), Error> {
     let entries = std::fs::read_dir(current)
         .map_err(|_s| Error::ReadDirectoryFailed(current.to_path_buf()))?;
 
@@ -68,7 +70,7 @@ fn collect_markdown_files(
         let path = entry.path();
 
         if path.is_dir() {
-            collect_markdown_files(root, &path, acc)?;
+            collect_maki_files(root, &path, acc)?;
         } else if path.is_file() && path.extension().is_some_and(|ext| ext == MAKI_EXTENSION) {
             acc.push(get_relative_path(root, &path)?);
         }
@@ -77,9 +79,9 @@ fn collect_markdown_files(
 }
 
 /// Lists all markdown files in the given directory.
-fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, Error> {
+fn list_maki_files(root: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut files = Vec::new();
-    collect_markdown_files(root, root, &mut files)?;
+    collect_maki_files(root, root, &mut files)?;
     files.sort();
     Ok(files)
 }
@@ -91,7 +93,7 @@ pub(crate) struct NoteRef {
 
 pub(crate) struct Maki {
     root: PathBuf,                  // canonical absolute path
-    notes: BTreeMap<NoteRef, Note>, // root-relative markdown paths
+    notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     config: MakiConfig,
 }
 
@@ -300,7 +302,7 @@ impl Maki {
         let root =
             std::fs::canonicalize(root).map_err(|_source| Error::RootNotFound(root.to_owned()))?;
 
-        let files = list_markdown_files(&root)?;
+        let files = list_maki_files(&root)?;
 
         let mut notes = BTreeMap::new();
 

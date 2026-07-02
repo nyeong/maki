@@ -2,7 +2,7 @@
 
 use crate::{
     maki::{NoteLinkResolution, NoteRef},
-    parser::{BlockKind, Document, Inline},
+    parser::{BlockKind, Document, Inline, ListItem},
 };
 
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
@@ -102,16 +102,23 @@ impl<'a> Renderer<'a> {
                 // 문서의 title이 h1이 될 거라서 하나씩 올려줌
                 self.render_heading(level + 1, body);
             }
-            BlockKind::List { items } => {
-                self.html.push_str("<ul>");
-                for item in items {
-                    self.html.push_str("<li>");
-                    self.render_inlines(&item.body);
-                    self.html.push_str("</li>");
-                }
-                self.html.push_str("</ul>");
-            }
+            BlockKind::List { items } => self.render_list(items),
         }
+    }
+
+    fn render_list(&mut self, items: &[ListItem<'_>]) {
+        self.html.push_str("<ul>");
+        for item in items {
+            self.html.push_str("<li>");
+            self.render_inlines(&item.body);
+            if !item.children.is_empty() {
+                for block in &item.children {
+                    self.render_block(&block.kind);
+                }
+            }
+            self.html.push_str("</li>");
+        }
+        self.html.push_str("</ul>");
     }
 
     fn render_heading(&mut self, level: usize, body: &str) {
@@ -252,6 +259,25 @@ hello <maki> & friends
             "<pre><code class=\"language-html\">&lt;main&gt;\n&lt;/main&gt;</code></pre>"
         ));
         assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
+    }
+
+    #[test]
+    fn nested_unordered_list() {
+        let source = r#"- first
+  - second
+  - second-sibling
+    - third
+    - third-sibling
+  - fourth but second depth
+
+- another list"#;
+
+        let doc = parser::parse(source);
+        let html = render_document(&doc);
+
+        assert!(html.contains(
+            "<ul><li>first<ul><li>second</li><li>second-sibling<ul><li>third</li><li>third-sibling</li></ul></li><li>fourth but second depth</li></ul></li></ul><ul><li>another list</li></ul>"
+        ));
     }
 
     #[test]

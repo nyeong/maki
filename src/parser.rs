@@ -1,14 +1,12 @@
 //! Maki parser
+//!
+//! ### Properties
+//!
+//! 문법적으로, 각 property에는 별 의미가 없다.
+//! 그러나 maki, renderer 등에서 특별한 의미를 담을 수도 있다.
 
 use std::collections::BTreeMap;
 
-/// source
-///   -> LineToken[]
-///   -> BlockDraft[]
-///
-/// Later:
-///   -> Block[]
-///   -> Document
 pub(crate) fn parse(source: &str) -> Document<'_> {
     let lines = scan_lines(source);
     let drafts = build_drafts(&lines);
@@ -165,6 +163,84 @@ fn build_documents<'a>(drafts: &[BlockDraft<'a>]) -> Document<'a> {
     }
 }
 
+fn build_list_item<'a>(draft: &ListItemDraft<'a>) -> ListItem<'a> {
+    ListItem {
+        body: parse_inline(draft.body),
+        kind: draft.kind,
+        children: vec![],
+    }
+}
+
+fn build_list_items_at<'a>(
+    items: &[ListItemDraft<'a>],
+    index: &mut usize,
+    indent: usize,
+) -> Vec<ListItem<'a>> {
+    let mut result: Vec<ListItem<'a>> = vec![];
+
+    while let Some(draft) = items.get(*index) {
+        match draft.indent.cmp(&indent) {
+            std::cmp::Ordering::Less => break,
+            std::cmp::Ordering::Greater => {
+                let Some(last) = result.last_mut() else {
+                    break;
+                };
+                let child_indent = draft.indent;
+                let child_items = build_list_items_at(items, index, child_indent);
+
+                last.children.push(Block {
+                    kind: BlockKind::List { items: child_items },
+                    props: Properties::default(),
+                });
+
+                continue;
+            }
+            std::cmp::Ordering::Equal => {
+                let mut item = build_list_item(draft);
+                *index += 1;
+                while let Some(next) = items.get(*index) {
+                    if next.indent <= indent {
+                        break;
+                    }
+
+                    let child_indent = next.indent;
+                    let child_items = build_list_items_at(items, index, child_indent);
+
+                    item.children.push(Block {
+                        kind: BlockKind::List { items: child_items },
+                        props: Properties::default(),
+                    });
+                }
+
+                result.push(item);
+            }
+        }
+    }
+    result
+}
+
+fn build_list_items<'a>(items: &[ListItemDraft<'a>]) -> Vec<ListItem<'a>> {
+    if items.is_empty() {
+        vec![]
+    } else {
+        let mut index = 0;
+        build_list_items_at(items, &mut index, items[0].indent)
+    }
+}
+
+fn build_list_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Option<Block<'a>> {
+    let BlockDraft::List { items } = draft else {
+        return None;
+    };
+
+    Some(Block {
+        kind: BlockKind::List {
+            items: build_list_items(items),
+        },
+        props,
+    })
+}
+
 fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
     match draft {
         BlockDraft::Property { .. } => panic!("No Property Block!"),
@@ -198,19 +274,7 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             },
             props,
         },
-        BlockDraft::List { items } => Block {
-            kind: BlockKind::List {
-                items: items
-                    .iter()
-                    .map(|draft| ListItem {
-                        kind: draft.kind,
-                        indent: draft.indent,
-                        body: parse_inline(draft.body),
-                    })
-                    .collect(),
-            },
-            props,
-        },
+        BlockDraft::List { .. } => build_list_block(draft, props).unwrap(),
         BlockDraft::Tbd { items } => Block {
             kind: BlockKind::Code {
                 lines: items.clone(),
@@ -286,8 +350,8 @@ pub(crate) enum BlockKind<'a> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct ListItem<'a> {
     pub(crate) body: Vec<Inline<'a>>,
-    indent: usize,
     kind: ListKind,
+    pub(crate) children: Vec<Block<'a>>, // List를 포함하기 위함
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -774,6 +838,61 @@ fn build_drafts<'a>(lines: &[LineToken<'a>]) -> Vec<BlockDraft<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_unordered_list() {
+        let source = r#"- first
+  - second
+  - second-sibling
+    - third
+    - third-sibling
+  - fourth but second depth
+
+- another list"#;
+
+        let doc = parse(source);
+
+        assert_eq!(doc.blocks.len(), 2);
+
+        let BlockKind::List { items } = &doc.blocks[0].kind else {
+            panic!("expected first block to be a list");
+        };
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, vec![Inline::Text("first")]);
+        assert_eq!(items[0].children.len(), 1);
+
+        let BlockKind::List { items } = &items[0].children[0].kind else {
+            panic!("expected first item to contain a nested list");
+        };
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].body, vec![Inline::Text("second")]);
+        assert_eq!(items[1].body, vec![Inline::Text("second-sibling")]);
+        assert_eq!(items[2].body, vec![Inline::Text("fourth but second depth")]);
+        assert!(items[0].children.is_empty());
+        assert!(items[2].children.is_empty());
+        assert_eq!(items[1].children.len(), 1);
+
+        let BlockKind::List { items } = &items[1].children[0].kind else {
+            panic!("expected second-sibling to contain a nested list");
+        };
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].body, vec![Inline::Text("third")]);
+        assert_eq!(items[1].body, vec![Inline::Text("third-sibling")]);
+        assert!(items[0].children.is_empty());
+        assert!(items[1].children.is_empty());
+
+        let BlockKind::List { items } = &doc.blocks[1].kind else {
+            panic!("expected blank-separated list to become a separate block");
+        };
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, vec![Inline::Text("another list")]);
+        assert!(items[0].children.is_empty());
+    }
+
     #[test]
     fn test_scan_lines() {
         let source = r#"--^ title: Maki

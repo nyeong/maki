@@ -1,5 +1,7 @@
---^ title: v1: 집밥먹기
+--^ title: v1: Dog Fooding
 --^ date: [2026-06-29]
+--^ status: todo
+
 
 집밥먹기 루프 만들기.
 내가 매일 쓸 수 있는 도구가 되어야한다.
@@ -12,7 +14,8 @@
 = 목표
 
 - maki는 홈서버에서 개인 노트를 상시 서빙할 수 있어야함
-- 파일을 수정하면 별 다른 노력 없이 바로 반영되어야함
+- maki 파일을 수정하면 별 다른 노력 없이 바로 수정된 문서로 maki serve가 반영되어야함
+- maki 앱을 수정하면 별 노력 없이 바로 배포가 되어야함
 
 = 성공 기준
 
@@ -22,26 +25,15 @@
 - [ ] 파일 변경 후 브라우저가 자동으로 reload 되어야
 - [ ] [[#집밥먹기 루프]]를 돌릴 수 있어야
 
-= 집밥먹기 루프
+= 집밥먹기 루프 시나리오
 
 1. Zed나 Helix에서 hanassig을 수정한다
 2. Syncthing이 홈서버에 수정 내용을 동기화한다
-3. 홈서버의 maki server가 파일 변경을 감지한다
+3. 홈서버의 maki server가 파일 변경 혹은 파일 추가를 감지한다
 4. 접속 중인 브라우저가 live reload한다
 5. 사이트가 즉각 최신화
 
-= 구현 필요
-
---v status: todo
-== Live Reload
-
---v status: todo
-== Server Binding
-
---v status: todo
-== Nix Package
-
-== 파일 생성 규칙
+= 제약
 
 - Maki server가 서빙 대상(프로젝트)와 충돌하는 파일을 생성해선 안된다
 - cache, index 등이 필요하면 hanassig 밖에 둔다
@@ -51,3 +43,22 @@
 - Markdown 문서 완전 렌더링
 - Query
 - 성능 최적화 등등
+
+= 작업
+
+--v status: todo
+== Server Options
+
+- [ ] 사용자가 설정한 address, port로 서버를 띄울 수 있도록 한다.
+- [ ] 사용자가 설정한 문서로 `/`를 리다이렉션한다.
+
+--v status: todo
+== Nix Package
+
+--v status: todo
+== Live Reload
+
+--v status: todo
+== 홈서버에 배포
+
+Tailscale network 내에 배포하여 개인적인 용도로 사용

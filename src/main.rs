@@ -60,7 +60,7 @@ impl Display for RunError {
 
 fn run_serve(root: PathBuf) -> Result<(), RunError> {
     let maki = Maki::load(&root)?;
-    println!("Found {} markdown files", maki.notes_len());
+    println!("Found {} files", maki.notes_len());
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
@@ -142,9 +142,9 @@ mod tests {
     #[test]
     fn test_parse_serve_command() {
         assert_eq!(
-            parse_args(&args(&["maki", "serve", "path/to/markdown"])),
+            parse_args(&args(&["maki", "serve", "path/to/maki"])),
             Ok(Command::Serve {
-                root: PathBuf::from("path/to/markdown"),
+                root: PathBuf::from("path/to/maki"),
             })
         )
     }
