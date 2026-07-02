@@ -9,6 +9,7 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 - 개인 위키
 - ICS, Reminder export
 - 이력서 작성에 활용하기
+- 내 개인적인 목적을 대상으로 Notion, org를 대체하는 것
 - 등등
 
 ## 비목표
