@@ -1,6 +1,6 @@
 --^ title: v1: Dog Fooding
---^ date: [2026-06-29]
---^ status: todo
+--^ date: [2026-07-03]
+--^ status: in_progress
 
 
 집밥먹기 루프 만들기.
@@ -50,13 +50,20 @@
 == Server Options
 
 - [ ] 사용자가 설정한 address, port로 서버를 띄울 수 있도록 한다.
+  - `--host <hostname>`
+  - `--port <port>`
 - [ ] 사용자가 설정한 문서로 `/`를 리다이렉션한다.
+  - `--index-redirect <file>`
 
 --v status: todo
 == Nix Package
 
 --v status: todo
 == Live Reload
+
+- file watcher
+- thread-per-connection
+- limit sse connection
 
 --v status: todo
 == 홈서버에 배포

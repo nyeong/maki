@@ -1,0 +1,26 @@
+--^ title: Later
+
+언젠간 할 수도 있는 기능들
+
+= 부분공개
+
+- 어떤 문서는 부분공개로, email을 이용한 OTP 인증으로만 볼 수 있어야한다.
+- 링크를 복사해서 보내주면, 링크로 접속시 email을 통한 OTP 인증을 거쳐야
+
+== 시나리오
+
+아래처럼 문서를 작성한다.
+
+    --^ title: 부분 공개 문서
+    --^ publish: email@example.com, user@example.com
+
+혹은
+
+    --^ title: 부분 공개 문서
+    --^ publish+: email@example.com
+    --^ publish+: user@example.com
+
+- maki를 public하게 serve한다.
+- 위 링크를 소유한 사람은 링크로 접속하면 이메일을 입력할 수 있는 필드를 받는다.
+- 필드에 이메일을 입력하면 이메일로 OTP 코드를 받는다.
+- 이메일로 받은 OTP 코드를 입력하면 문서 내용을 볼 수 있다.
