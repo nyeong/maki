@@ -116,6 +116,13 @@ impl MakiConfig {
     pub(crate) fn home_mode(&self) -> &HomeMode {
         &self.home_mode
     }
+
+    pub(crate) fn with_home_redirect(path: impl Into<String>) -> Self {
+        Self {
+            home_mode: HomeMode::Redirect(path.into()),
+            ..Default::default()
+        }
+    }
 }
 
 impl Default for MakiConfig {
@@ -319,6 +326,7 @@ impl Maki {
     }
 
     // root: absolute or relative to the project directory
+    #[allow(dead_code)]
     pub(crate) fn load(root: impl AsRef<Path>) -> Result<Self, Error> {
         Self::load_with_config(root.as_ref(), MakiConfig::default())
     }

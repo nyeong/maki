@@ -27,8 +27,6 @@ use crate::maki::{HomeMode, Maki, MakiRoute};
 use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
-const ADDRESS: &str = "127.0.0.1";
-const PORT: u16 = 4000;
 
 #[derive(Debug)]
 enum Error {
@@ -197,11 +195,11 @@ where
         .map_err(|source| RunError::IoError { source })
 }
 
-pub(crate) fn serve(maki: &Maki) -> Result<(), RunError> {
+pub(crate) fn serve(maki: &Maki, host: &str, port: u16) -> Result<(), RunError> {
     let listener =
-        TcpListener::bind((ADDRESS, PORT)).map_err(|source| RunError::IoError { source })?;
+        TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
 
-    println!("Listening on http://{}:{}", ADDRESS, PORT);
+    println!("Listening on http://{}:{}", host, port);
 
     for stream in listener.incoming() {
         let mut stream = match stream {
