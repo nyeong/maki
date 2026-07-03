@@ -55,8 +55,18 @@
 - [x] 사용자가 설정한 문서로 `/`를 리다이렉션한다.
   - `--index-redirect <file>`
 
---v status: todo
+--v status: done
 == Nix Package
+
+- [x] `packages.<system>.maki`와 `packages.<system>.default`를 제공한다.
+- [x] `nix build .#maki` 결과물에 `bin/maki`가 포함된다.
+- [x] package binary로 `maki build docs/index.maki` smoke test가 성공한다.
+- [x] `nixosModules.maki`와 `nixosModules.default`를 제공한다.
+- [x] `services.maki.enable = true`로 `maki.service`가 생성된다.
+- [x] `services.maki.source`, `host`, `port`, `indexRedirect`가 `ExecStart`에 반영된다.
+- [x] `source`는 Nix store로 복사하지 않고 runtime path 문자열로 전달한다.
+- [x] `services.maki.openFirewall = true`일 때 설정 port를 firewall에 연다.
+- [x] `nix flake check`가 package build, package smoke, NixOS module evaluation을 검증한다.
 
 --v status: todo
 == Live Reload
