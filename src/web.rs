@@ -15,18 +15,160 @@
 //! io::Error   ─┘
 //! ```
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use percent_encoding::percent_decode_str;
 
 use crate::http::Response;
 use crate::maki;
-use crate::maki::{HomeMode, Maki, MakiRoute};
+use crate::maki::{HomeMode, Maki, MakiConfig, MakiRoute};
 use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
+const LIVE_RELOAD_PATH: &str = "/.maki/events";
+const MAX_SSE_CLIENTS: usize = 16;
+const FILE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
+const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
+const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+struct AppState {
+    root: PathBuf,
+    config: MakiConfig,
+    maki: RwLock<Maki>,
+    live_reload: LiveReload,
+}
+
+impl AppState {
+    fn new(maki: Maki) -> Self {
+        Self {
+            root: maki.root().to_path_buf(),
+            config: maki.config().clone(),
+            maki: RwLock::new(maki),
+            live_reload: LiveReload::new(MAX_SSE_CLIENTS),
+        }
+    }
+
+    fn reload(&self) -> Result<(), maki::Error> {
+        let next = Maki::load_with_config(&self.root, self.config.clone())?;
+        let mut maki = self
+            .maki
+            .write()
+            .map_err(|_| maki::Error::ReadDirectoryFailed(self.root.to_path_buf()))?;
+        *maki = next;
+        self.live_reload.broadcast_reload();
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum LiveReloadEvent {
+    Reload { version: u64 },
+}
+
+#[derive(Debug, PartialEq)]
+enum LiveReloadError {
+    TooManyClients,
+    StatePoisoned,
+}
+
+struct LiveClient {
+    id: u64,
+    sender: mpsc::Sender<LiveReloadEvent>,
+}
+
+struct LiveReload {
+    boot_id: u128,
+    version: AtomicU64,
+    next_client_id: AtomicU64,
+    max_clients: usize,
+    clients: Mutex<Vec<LiveClient>>,
+}
+
+impl LiveReload {
+    fn new(max_clients: usize) -> Self {
+        Self {
+            boot_id: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0),
+            version: AtomicU64::new(0),
+            next_client_id: AtomicU64::new(1),
+            max_clients,
+            clients: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn version(&self) -> u64 {
+        self.version.load(Ordering::SeqCst)
+    }
+
+    fn token(&self) -> String {
+        self.token_for(self.version())
+    }
+
+    fn token_for(&self, version: u64) -> String {
+        format!("{}:{version}", self.boot_id)
+    }
+
+    fn register_client(
+        &self,
+    ) -> Result<(u64, String, mpsc::Receiver<LiveReloadEvent>), LiveReloadError> {
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| LiveReloadError::StatePoisoned)?;
+
+        if clients.len() >= self.max_clients {
+            return Err(LiveReloadError::TooManyClients);
+        }
+
+        let id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = mpsc::channel();
+        clients.push(LiveClient { id, sender });
+
+        Ok((id, self.token(), receiver))
+    }
+
+    fn unregister_client(&self, id: u64) {
+        let Ok(mut clients) = self.clients.lock() else {
+            return;
+        };
+
+        clients.retain(|client| client.id != id);
+    }
+
+    fn broadcast_reload(&self) {
+        let version = self.version.fetch_add(1, Ordering::SeqCst) + 1;
+        let Ok(mut clients) = self.clients.lock() else {
+            return;
+        };
+
+        clients.retain(|client| {
+            client
+                .sender
+                .send(LiveReloadEvent::Reload { version })
+                .is_ok()
+        });
+    }
+}
+
+struct LiveClientRegistration<'a> {
+    live_reload: &'a LiveReload,
+    id: u64,
+}
+
+impl Drop for LiveClientRegistration<'_> {
+    fn drop(&mut self) {
+        self.live_reload.unregister_client(self.id);
+    }
+}
 
 #[derive(Debug)]
 enum Error {
@@ -106,7 +248,34 @@ impl From<http::Error> for Error {
     }
 }
 
-fn handle_request(maki: &Maki, request: &http::Request) -> Result<http::Response, Error> {
+fn live_reload_script(token: &str) -> String {
+    format!(
+        r#"<script>(() => {{
+const initialToken = "{token}";
+const source = new EventSource("/.maki/events");
+source.addEventListener("hello", event => {{
+  if (event.data && event.data !== initialToken) {{
+    location.reload();
+  }}
+}});
+source.addEventListener("reload", () => location.reload());
+}})();</script>"#
+    )
+}
+
+fn inject_live_reload_script(mut html: String, token: &str) -> String {
+    let script = live_reload_script(token);
+
+    if let Some(index) = html.rfind("</body>") {
+        html.insert_str(index, &script);
+    } else {
+        html.push_str(&script);
+    }
+
+    html
+}
+
+fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Response, Error> {
     let target = percent_decode_str(request.target())
         .decode_utf8()
         .map_err(|_e| Error::BadRequest)?
@@ -119,10 +288,17 @@ fn handle_request(maki: &Maki, request: &http::Request) -> Result<http::Response
         return Err(Error::BadRequest);
     }
 
+    let maki = state.maki.read().map_err(|_| Error::Maki {
+        source: maki::Error::ReadDirectoryFailed(state.root.clone()),
+    })?;
+
     match maki.resolve_route(&target) {
-        Ok(MakiRoute::NotePage(path)) => Ok(http::Response::new(http::StatusCode::Ok)
-            .set_header("Content-Type", "text/html; charset=utf-8")
-            .set_body(maki.render_html(&path)?)),
+        Ok(MakiRoute::NotePage(path)) => {
+            let html = maki.render_html(&path)?;
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(inject_live_reload_script(html, &state.live_reload.token())))
+        }
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
             .set_body(maki.get_raw_content(&path)?)),
@@ -172,32 +348,203 @@ fn read_request(stream: &mut impl Read) -> Result<http::Request, Error> {
     Ok(request)
 }
 
-fn create_response_from_connection(maki: &Maki, stream: &mut impl Read) -> http::Response {
-    let request = match read_request(stream) {
-        Ok(request) => request,
-        Err(err) => return err.into_response(),
+fn service_unavailable(message: &str) -> Response {
+    Response::new(http::StatusCode::ServiceUnavailable)
+        .set_header("Content-Type", "text/plain; charset=utf-8")
+        .set_body(message.to_string())
+}
+
+fn write_sse_event(
+    stream: &mut impl Write,
+    event: &str,
+    data: impl std::fmt::Display,
+) -> Result<(), RunError> {
+    write!(stream, "event: {event}\ndata: {data}\n\n")
+        .map_err(|source| RunError::IoError { source })
+}
+
+fn write_sse_keepalive(stream: &mut impl Write) -> Result<(), RunError> {
+    stream
+        .write_all(b": keepalive\n\n")
+        .map_err(|source| RunError::IoError { source })
+}
+
+fn handle_live_reload_connection<S>(state: &AppState, stream: &mut S) -> Result<(), RunError>
+where
+    S: Write,
+{
+    let (client_id, token, receiver) = match state.live_reload.register_client() {
+        Ok(client) => client,
+        Err(LiveReloadError::TooManyClients) => {
+            let response = service_unavailable("Too many live reload clients");
+            return stream
+                .write_all(&response.to_bytes())
+                .map_err(|source| RunError::IoError { source });
+        }
+        Err(LiveReloadError::StatePoisoned) => {
+            let response = internal_server_error(&Error::Maki {
+                source: maki::Error::ReadDirectoryFailed(state.root.clone()),
+            });
+            return stream
+                .write_all(&response.to_bytes())
+                .map_err(|source| RunError::IoError { source });
+        }
+    };
+    let _registration = LiveClientRegistration {
+        live_reload: &state.live_reload,
+        id: client_id,
     };
 
-    match handle_request(maki, &request) {
-        Ok(response) => response,
-        Err(err) => err.into_response(),
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
+        )
+        .map_err(|source| RunError::IoError { source })?;
+    write_sse_event(stream, "hello", token)?;
+
+    loop {
+        match receiver.recv_timeout(SSE_KEEPALIVE_INTERVAL) {
+            Ok(LiveReloadEvent::Reload { version }) => {
+                write_sse_event(stream, "reload", state.live_reload.token_for(version))?;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                write_sse_keepalive(stream)?;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
     }
 }
 
-fn handle_connection<S>(maki: &Maki, stream: &mut S) -> Result<(), RunError>
+fn handle_connection<S>(state: &AppState, stream: &mut S) -> Result<(), RunError>
 where
     S: Write + Read,
 {
-    let response = create_response_from_connection(maki, stream);
+    let request = match read_request(stream) {
+        Ok(request) => request,
+        Err(err) => {
+            let response = err.into_response();
+            return stream
+                .write_all(&response.to_bytes())
+                .map_err(|source| RunError::IoError { source });
+        }
+    };
+
+    if request.target() == LIVE_RELOAD_PATH {
+        return handle_live_reload_connection(state, stream);
+    }
+
+    let response = match handle_request(state, &request) {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    };
 
     stream
         .write_all(&response.to_bytes())
         .map_err(|source| RunError::IoError { source })
 }
 
-pub(crate) fn serve(maki: &Maki, host: &str, port: u16) -> Result<(), RunError> {
+#[derive(Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+type FileSnapshot = BTreeMap<PathBuf, FileStamp>;
+
+fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Error> {
+    fn collect(root: &Path, current: &Path, acc: &mut FileSnapshot) -> Result<(), std::io::Error> {
+        for entry in std::fs::read_dir(current)? {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            if file_name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+
+            let path = entry.path();
+            if path.is_dir() {
+                collect(root, &path, acc)?;
+                continue;
+            }
+
+            if !path.is_file() || path.extension().is_none_or(|ext| ext != "maki") {
+                continue;
+            }
+
+            let metadata = path.metadata()?;
+            let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            acc.insert(
+                relative_path,
+                FileStamp {
+                    modified: metadata.modified().ok(),
+                    len: metadata.len(),
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    let mut snapshot = BTreeMap::new();
+    collect(root, root, &mut snapshot)?;
+    Ok(snapshot)
+}
+
+fn spawn_file_watcher(state: Arc<AppState>) {
+    thread::spawn(move || {
+        let mut snapshot = match collect_maki_file_snapshot(&state.root) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                eprintln!("Failed to initialize file watcher: {}", error);
+                FileSnapshot::new()
+            }
+        };
+
+        loop {
+            thread::sleep(FILE_WATCH_INTERVAL);
+
+            let next_snapshot = match collect_maki_file_snapshot(&state.root) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    eprintln!("Failed to scan maki files: {}", error);
+                    continue;
+                }
+            };
+
+            if next_snapshot == snapshot {
+                continue;
+            }
+
+            thread::sleep(FILE_WATCH_DEBOUNCE);
+
+            let stable_snapshot = match collect_maki_file_snapshot(&state.root) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    eprintln!("Failed to scan maki files after debounce: {}", error);
+                    continue;
+                }
+            };
+
+            if stable_snapshot != next_snapshot {
+                continue;
+            }
+
+            match state.reload() {
+                Ok(()) => {
+                    snapshot = stable_snapshot;
+                }
+                Err(error) => {
+                    eprintln!("Failed to reload maki files: {}", error);
+                }
+            }
+        }
+    });
+}
+
+pub(crate) fn serve(maki: Maki, host: &str, port: u16) -> Result<(), RunError> {
     let listener =
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
+    let state = Arc::new(AppState::new(maki));
+    spawn_file_watcher(Arc::clone(&state));
 
     println!("Listening on http://{}:{}", host, port);
 
@@ -210,9 +557,12 @@ pub(crate) fn serve(maki: &Maki, host: &str, port: u16) -> Result<(), RunError> 
             }
         };
 
-        if let Err(error) = handle_connection(maki, &mut stream) {
-            eprintln!("Failed to handle connection: {}", error);
-        }
+        let state = Arc::clone(&state);
+        thread::spawn(move || {
+            if let Err(error) = handle_connection(&state, &mut stream) {
+                eprintln!("Failed to handle connection: {}", error);
+            }
+        });
     }
 
     Ok(())
@@ -221,6 +571,7 @@ pub(crate) fn serve(maki: &Maki, host: &str, port: u16) -> Result<(), RunError> 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use crate::web::*;
 
@@ -249,8 +600,9 @@ mod tests {
         let request = http::Request::get("/missing");
 
         let maki = Maki::load(PathBuf::from(".")).unwrap();
+        let state = AppState::new(maki);
 
-        let response = handle_request(&maki, &request);
+        let response = handle_request(&state, &request);
 
         assert!(matches!(
             response,
@@ -258,6 +610,55 @@ mod tests {
                 source: maki::Error::NoteNotFound(..)
             })
         ));
+    }
+
+    #[test]
+    fn test_rendered_note_includes_live_reload_script() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/index");
+
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        assert!(body.contains("new EventSource(\"/.maki/events\")"));
+        assert!(body.contains("</script></body>"));
+    }
+
+    #[test]
+    fn test_source_note_does_not_include_live_reload_script() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/index.maki");
+
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        assert!(!body.contains("new EventSource(\"/.maki/events\")"));
+    }
+
+    #[test]
+    fn test_live_reload_rejects_clients_over_limit() {
+        let live_reload = LiveReload::new(1);
+
+        assert!(live_reload.register_client().is_ok());
+        assert!(matches!(
+            live_reload.register_client(),
+            Err(LiveReloadError::TooManyClients)
+        ));
+    }
+
+    #[test]
+    fn test_live_reload_broadcasts_reload() {
+        let live_reload = LiveReload::new(1);
+        let (_client_id, _version, receiver) = live_reload.register_client().unwrap();
+
+        live_reload.broadcast_reload();
+
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(100)).unwrap(),
+            LiveReloadEvent::Reload { version: 1 }
+        );
     }
 
     #[test]

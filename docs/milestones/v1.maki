@@ -68,12 +68,12 @@
 - [x] `services.maki.openFirewall = true`일 때 설정 port를 firewall에 연다.
 - [x] `nix flake check`가 package build, package smoke, NixOS module evaluation을 검증한다.
 
---v status: todo
+--v status: done
 == Live Reload
 
-- file watcher
-- thread-per-connection
-- limit sse connection
+- [x] file watcher
+- [x] thread-per-connection
+- [x] limit sse connection
 
 --v status: todo
 == 홈서버에 배포

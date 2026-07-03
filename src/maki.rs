@@ -106,7 +106,7 @@ pub(crate) struct Note {
     project_path: PathBuf,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct MakiConfig {
     home_mode: HomeMode,
     publish_policy: PublishPolicy,
@@ -134,13 +134,13 @@ impl Default for MakiConfig {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum PublishPolicy {
     PublishAll,
     // TODO: TaggedOnly: publish 설정한 파일만 접근 가능하게 하기,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum HomeMode {
     Redirect(String),
 }
@@ -181,7 +181,10 @@ impl Note {
     }
 
     fn title(&self) -> String {
-        let content = std::fs::read_to_string(&self.absolute_path).unwrap();
+        let content = match std::fs::read_to_string(&self.absolute_path) {
+            Ok(content) => content,
+            Err(_) => return self.file_stem().to_string(),
+        };
         let parsed = parser::parse(&content);
         parsed.title().unwrap_or(self.file_stem()).to_string()
     }
@@ -290,6 +293,10 @@ impl Maki {
         &self.config
     }
 
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(crate) fn notes(&self) -> impl Iterator<Item = &Note> {
         self.notes.values()
     }
@@ -314,7 +321,7 @@ impl Maki {
         let mut notes = BTreeMap::new();
 
         for file in &files {
-            let note = Note::load(&root, file).unwrap();
+            let note = Note::load(&root, file)?;
             notes.insert(note.note_ref(), note);
         }
 

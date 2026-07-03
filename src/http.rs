@@ -27,6 +27,7 @@ pub(crate) enum StatusCode {
     NotFound, // 404
     BadRequest, // 400
     InternalServerError, // 500
+    ServiceUnavailable, // 503
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -159,6 +160,7 @@ impl Display for StatusCode {
             StatusCode::Found => write!(f, "302 Found"),
             StatusCode::MovedPermanently => write!(f, "301 Moved Permanently"),
             StatusCode::InternalServerError => write!(f, "500 Internal Server Error"),
+            StatusCode::ServiceUnavailable => write!(f, "503 Service Unavailable"),
             StatusCode::BadRequest => write!(f, "400 Bad Request"),
         }
     }

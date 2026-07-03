@@ -87,7 +87,7 @@ fn run_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
-    web::serve(&maki, &options.host, options.port)
+    web::serve(maki, &options.host, options.port)
 }
 
 fn run_build(file: PathBuf) -> Result<(), RunError> {
