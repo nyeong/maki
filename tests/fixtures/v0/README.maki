@@ -1,0 +1,29 @@
+--^ title: v0 Quality Fixture
+--^ hidden: should-not-render-property
+
+This fixture captures the v0 PoC contract: parse a small project,
+serve rendered pages, preserve unsupported text, and resolve note links.
+
+= Links
+
+Go to [[daily]], [[nested/홈랩]], [[ghost]], [[ambiguous]].
+
+= Nested List
+
+- top
+  - child
+    - grandchild
+  - sibling
+- second top
+
+= Unsupported Fallback
+
+1. unsupported numbered fallback
+2. preserve this raw shape
+
+= Code
+
+--v lang: html
+    <main>
+      fixture code
+    </main>
