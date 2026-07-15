@@ -2,12 +2,11 @@
 
 = Maki
 
-현재 마일스톤: [[milestones/v1]]
+현재 마일스톤: [[milestones/v2]]
 
 - [[use-cases]]
 - [[issues]]
 - [[architecture]]
-- [[issues]]
 - [[maki-syntax]]
 - 마일스톤
   - [[milestones/later]]
@@ -15,3 +14,4 @@
   - [[milestones/v1]]
   - [[milestones/v2]]
   - [[milestones/v3]]
+  - [[milestones/v4]]

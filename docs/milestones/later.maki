@@ -24,3 +24,39 @@
 - 위 링크를 소유한 사람은 링크로 접속하면 이메일을 입력할 수 있는 필드를 받는다.
 - 필드에 이메일을 입력하면 이메일로 OTP 코드를 받는다.
 - 이메일로 받은 OTP 코드를 입력하면 문서 내용을 볼 수 있다.
+
+= ToC
+
+maki serve로 나오는 HTML에 ToC를 추가한다.
+
+= 검색
+
+maki serve에 검색 기능을 추가한다.
+
+1. title 기반으로 fuzzy하게 <- 이것만 돼도 good할듯
+2. heading까지도
+
+= org TODO percentage 옮기기
+
+org에서는 하위 todo의 진행도에 따라 자동으로 진행도를 계산해주는 기능이 있다:
+
+```code org
+* 이슈 [5/28]
+** TODO NanoKVM 세팅하기 [...]
+** IN_PROGRESS 어쩌구 저쩌구 [50%] [...]
+** IN_PROGRESS IaC 구성하기 [77%] [...]
+** IN_PROGRESS 전기세 측정하기 [50%]
+:PROPERTIES:
+:ID:       d00182f9-6ad2-43e7-9f71-2bf3448d846f
+:END:
+- [X] Tapo P115 달기
+- [ ] 서버에서 Tapo P115 값 읽기
+
+   Grafana? HomeAssistant?
+```
+
+어떻게 문법으로 넣을까 🤔
+
+= 다이어그램 블록
+
+mermaid 혹은 d2를 사용하여 다이어그램을 그릴 수 있도록

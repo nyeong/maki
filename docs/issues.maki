@@ -19,23 +19,26 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 - 커서 올리면 미구현이라고 띄우기
 
 --v status: todo
-= org TODO percentage 옮기기
+--v type: feature
+= 네비 헤더 추가
 
-org에서는 하위 todo의 진행도에 따라 자동으로 진행도를 계산해주는 기능이 있다:
+네비게이션 헤더 추가하여 편하게 `/`로 돌아올 수 있도록
 
-```code org
-* 이슈 [5/28]
-** TODO NanoKVM 세팅하기 [...]
-** IN_PROGRESS 어쩌구 저쩌구 [50%] [...]
-** IN_PROGRESS IaC 구성하기 [77%] [...]
-** IN_PROGRESS 전기세 측정하기 [50%]
-:PROPERTIES:
-:ID:       d00182f9-6ad2-43e7-9f71-2bf3448d846f
-:END:
-- [X] Tapo P115 달기
-- [ ] 서버에서 Tapo P115 값 읽기
+--v status: todo
+--v type: feature
+= sitemap 추가
 
-   Grafana? HomeAssistant?
-```
+- [ ] sitemap.xml
+- [ ] /@/sitemap
+  - 사람이 읽을 수 있게
 
-어떻게 문법으로 넣을까 🤔
+--v status: todo
+--v type: bug
+= wikilink가 case-insensitive하지 않음
+
+아래처럼 있을 때:
+
+    - nix.maki
+    - devenv.maki
+
+`devenv.maki`에서 `[[Nix]]`로 링크하면 `nix.maki`로 연결되어야 하나, broken link가 되어버림.
