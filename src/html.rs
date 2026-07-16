@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_render_document() {
-        let document = parser::parse(
+        let parsed = parser::parse(
             r#"--^ title: Maki
 
 = Heading
@@ -250,7 +250,7 @@ hello <maki> & friends
 - two"#,
         );
 
-        let html = render_document(&document);
+        let html = render_document(&parsed.document);
 
         assert!(html.contains("<title>Maki</title>"));
         assert!(html.contains("<h2"));
@@ -272,8 +272,8 @@ hello <maki> & friends
 
 - another list"#;
 
-        let doc = parser::parse(source);
-        let html = render_document(&doc);
+        let parsed = parser::parse(source);
+        let html = render_document(&parsed.document);
 
         assert!(html.contains(
             "<ul><li>first<ul><li>second</li><li>second-sibling<ul><li>third</li><li>third-sibling</li></ul></li><li>fourth but second depth</li></ul></li></ul><ul><li>another list</li></ul>"
@@ -282,13 +282,13 @@ hello <maki> & friends
 
     #[test]
     fn test_render_tbd_as_preformatted_text() {
-        let document = parser::parse(
+        let parsed = parser::parse(
             r#"1. 블록에 property를 붙일 수 있음
 2. 쿼리를 통해 검색할 수 있음
 3. 컴파일, 서빙을 통해 다른 포맷이나 서비스에 붙일 수 있음"#,
         );
 
-        let html = render_document(&document);
+        let html = render_document(&parsed.document);
 
         assert!(html.contains(
             "<pre><code class=\"language-maki\">1. 블록에 property를 붙일 수 있음\n2. 쿼리를 통해 검색할 수 있음\n3. 컴파일, 서빙을 통해 다른 포맷이나 서비스에 붙일 수 있음</code></pre>"

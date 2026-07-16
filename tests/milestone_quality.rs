@@ -69,6 +69,12 @@ fn temp_project_from_fixture(name: &str, fixture: &str) -> TestProject {
     TestProject { root }
 }
 
+fn temp_project(name: &str) -> TestProject {
+    let root = unique_temp_dir(name);
+    fs::create_dir_all(&root).unwrap();
+    TestProject { root }
+}
+
 fn start_server(root: &Path, port: u16, index_redirect: &str) -> TestServer {
     let child = Command::new(BIN)
         .arg("serve")
@@ -205,6 +211,39 @@ fn read_until_contains(stream: &mut TcpStream, needle: &str, timeout: Duration) 
     }
 
     panic!("timed out waiting for {needle:?}; received:\n{output}");
+}
+
+#[test]
+fn maki_build_reports_parser_warnings_to_stderr() {
+    let project = temp_project("build-warnings");
+    let file = project.root.join("warning.maki");
+    fs::write(
+        &file,
+        "--^ invalid-property\n--^ title: Warning Fixture\n\n= Heading\n\n1. fallback\n",
+    )
+    .unwrap();
+
+    let output = Command::new(BIN).arg("build").arg(&file).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "maki build failed with stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(stdout.contains("<title>Warning Fixture</title>"));
+    assert!(!stdout.contains("warning:"));
+    assert!(stderr.contains(&format!(
+        "warning: {}:1: invalid property: --^ invalid-property",
+        file.display()
+    )));
+    assert!(stderr.contains(&format!(
+        "warning: {}:6: unsupported numbered block rendered as fallback: 1. fallback",
+        file.display()
+    )));
 }
 
 #[test]

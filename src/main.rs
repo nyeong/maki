@@ -1,5 +1,5 @@
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod html;
 mod http;
@@ -92,9 +92,39 @@ fn run_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
 
 fn run_build(file: PathBuf) -> Result<(), RunError> {
     let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
-    let doc = parser::parse(&content);
-    println!("{}", html::render_document(&doc));
+    let parsed = parser::parse(&content);
+    emit_parse_warnings(&file, &parsed.diagnostics);
+    println!("{}", html::render_document(&parsed.document));
     Ok(())
+}
+
+fn emit_parse_warnings(file: &Path, diagnostics: &[parser::ParseDiagnostic<'_>]) {
+    for diagnostic in diagnostics {
+        eprintln!("{}", format_parse_warning(file, diagnostic));
+    }
+}
+
+fn format_parse_warning(file: &Path, diagnostic: &parser::ParseDiagnostic<'_>) -> String {
+    format!(
+        "warning: {}:{}: {}",
+        file.display(),
+        diagnostic.line,
+        format_parse_warning_kind(&diagnostic.kind)
+    )
+}
+
+fn format_parse_warning_kind(kind: &parser::ParseDiagnosticKind<'_>) -> String {
+    match kind {
+        parser::ParseDiagnosticKind::InvalidProperty { raw_line } => {
+            format!("invalid property: {raw_line}")
+        }
+        parser::ParseDiagnosticKind::UnclosedContainer { raw_line } => {
+            format!("unclosed container block: {raw_line}")
+        }
+        parser::ParseDiagnosticKind::UnsupportedNumberedBlock { raw_line } => {
+            format!("unsupported numbered block rendered as fallback: {raw_line}")
+        }
+    }
 }
 
 fn run_command(command: Command) -> Result<(), RunError> {
@@ -208,6 +238,21 @@ mod tests {
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_format_parse_warning() {
+        let diagnostic = parser::ParseDiagnostic {
+            line: 3,
+            kind: parser::ParseDiagnosticKind::InvalidProperty {
+                raw_line: "--^ invalid-property",
+            },
+        };
+
+        assert_eq!(
+            format_parse_warning(Path::new("docs/example.maki"), &diagnostic),
+            "warning: docs/example.maki:3: invalid property: --^ invalid-property"
+        );
     }
 
     #[test]

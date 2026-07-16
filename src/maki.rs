@@ -186,7 +186,11 @@ impl Note {
             Err(_) => return self.file_stem().to_string(),
         };
         let parsed = parser::parse(&content);
-        parsed.title().unwrap_or(self.file_stem()).to_string()
+        parsed
+            .document
+            .title()
+            .unwrap_or(self.file_stem())
+            .to_string()
     }
 
     pub(crate) fn note_ref(&self) -> NoteRef {
@@ -340,7 +344,7 @@ impl Maki {
 
     pub(crate) fn render_html(&self, path: &Path) -> Result<String, Error> {
         let raw = self.get_raw_content(path)?;
-        let document = parser::parse(&raw);
+        let parsed = parser::parse(&raw);
         let current = Note::load(&self.root, path)?.note_ref();
 
         let resolve_note_link = |target: &str| self.resolve_note_link(&current, target);
@@ -351,7 +355,7 @@ impl Maki {
         };
 
         Ok(html::render_document_with_context(
-            &document,
+            &parsed.document,
             RenderContext::project(&resolve_note_link, &get_note_info),
         ))
     }

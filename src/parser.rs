@@ -7,10 +7,35 @@
 
 use std::collections::BTreeMap;
 
-pub(crate) fn parse(source: &str) -> Document<'_> {
+pub(crate) fn parse(source: &str) -> ParseResult<'_> {
     let lines = scan_lines(source);
-    let drafts = build_drafts(&lines);
-    build_documents(&drafts)
+    let mut diagnostics = vec![];
+    let drafts = build_drafts(&lines, &mut diagnostics);
+    let document = build_documents(&drafts);
+
+    ParseResult {
+        document,
+        diagnostics,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ParseResult<'a> {
+    pub(crate) document: Document<'a>,
+    pub(crate) diagnostics: Vec<ParseDiagnostic<'a>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ParseDiagnostic<'a> {
+    pub(crate) line: usize,
+    pub(crate) kind: ParseDiagnosticKind<'a>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum ParseDiagnosticKind<'a> {
+    InvalidProperty { raw_line: &'a str },
+    UnclosedContainer { raw_line: &'a str },
+    UnsupportedNumberedBlock { raw_line: &'a str },
 }
 
 #[derive(Debug, PartialEq)]
@@ -311,7 +336,7 @@ impl<'a> Properties<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Document<'a> {
     props: Properties<'a>,
     pub(crate) blocks: Vec<Block<'a>>,
@@ -601,6 +626,10 @@ impl<'tokens, 'src> LineCursor<'tokens, 'src> {
         self.lines.get(self.pos)
     }
 
+    fn line_number(&self) -> usize {
+        self.pos + 1
+    }
+
     fn next(&mut self) -> Option<&LineToken<'src>> {
         let line = self.lines.get(self.pos)?;
         self.pos += 1;
@@ -630,7 +659,10 @@ fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDra
     Some(BlockDraft::Paragraph { raw_lines })
 }
 
-fn parse_container_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+fn parse_container_draft<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) -> Option<BlockDraft<'a>> {
     if !matches!(
         cursor.peek(),
         Some(LineToken::Line {
@@ -643,7 +675,10 @@ fn parse_container_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDra
     };
 
     let mut raw_lines = vec![];
+    let line = cursor.line_number();
+    let raw_line = cursor.peek()?.raw_line();
     let header = cursor.next()?.body()?;
+    let mut closed = false;
 
     while let Some(line) = cursor.next() {
         if matches!(
@@ -653,16 +688,27 @@ fn parse_container_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDra
                 ..
             }
         ) {
+            closed = true;
             break;
         }
         raw_lines.push(line.raw_line());
+    }
+
+    if !closed {
+        diagnostics.push(ParseDiagnostic {
+            line,
+            kind: ParseDiagnosticKind::UnclosedContainer { raw_line },
+        });
     }
 
     Some(BlockDraft::Container { header, raw_lines })
 }
 
 // TODO: parse.. 함수들 모두 Result<Option<T>, E> 타입으로 바꾸기. Ok(None), Ok(Some(...)), Err(..)
-fn parse_property_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+fn parse_property_draft<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) -> Option<BlockDraft<'a>> {
     let LineToken::Line { kind, indent, .. } = cursor.peek()? else {
         return None;
     };
@@ -680,10 +726,19 @@ fn parse_property_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraf
         if *line_indent != indent || kind != *line_kind {
             break;
         }
-        let raw_line = cursor.next()?.body()?;
-        let (key, value) = raw_line
-            .split_once(':')
-            .unwrap_or_else(|| panic!("invalid property: {:?}", raw_line));
+        let line = cursor.line_number();
+        let token = cursor.next()?;
+        let raw_line = token.raw_line();
+        let body = token.body()?;
+
+        let Some((key, value)) = body.split_once(':') else {
+            diagnostics.push(ParseDiagnostic {
+                line,
+                kind: ParseDiagnosticKind::InvalidProperty { raw_line },
+            });
+            continue;
+        };
+
         items.push(PropertyItemDraft::new(key.trim(), value.trim()))
     }
 
@@ -756,7 +811,10 @@ fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a
     Some(BlockDraft::List { items })
 }
 
-fn parse_tbd_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+fn parse_tbd_draft<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) -> Option<BlockDraft<'a>> {
     if !matches!(
         cursor.peek(),
         Some(LineToken::Line {
@@ -769,6 +827,12 @@ fn parse_tbd_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>
     }
 
     let mut items = vec![];
+    diagnostics.push(ParseDiagnostic {
+        line: cursor.line_number(),
+        kind: ParseDiagnosticKind::UnsupportedNumberedBlock {
+            raw_line: cursor.peek()?.raw_line(),
+        },
+    });
 
     while let Some(LineToken::Line {
         indent: 0,
@@ -808,22 +872,25 @@ fn parse_code_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a
     Some(BlockDraft::Code { raw_lines })
 }
 
-fn build_drafts<'a>(lines: &[LineToken<'a>]) -> Vec<BlockDraft<'a>> {
+fn build_drafts<'a>(
+    lines: &[LineToken<'a>],
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) -> Vec<BlockDraft<'a>> {
     let mut cursor = LineCursor::new(lines);
     let mut drafts = vec![];
 
     while !cursor.is_eof() {
-        if let Some(draft) = parse_container_draft(&mut cursor) {
+        if let Some(draft) = parse_container_draft(&mut cursor, diagnostics) {
             drafts.push(draft);
         } else if let Some(draft) = parse_code_draft(&mut cursor) {
             drafts.push(draft);
-        } else if let Some(draft) = parse_property_draft(&mut cursor) {
+        } else if let Some(draft) = parse_property_draft(&mut cursor, diagnostics) {
             drafts.push(draft);
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_list_draft(&mut cursor) {
             drafts.push(draft);
-        } else if let Some(draft) = parse_tbd_draft(&mut cursor) {
+        } else if let Some(draft) = parse_tbd_draft(&mut cursor, diagnostics) {
             drafts.push(draft);
         } else if cursor.consume_blank() {
             continue;
@@ -850,7 +917,8 @@ mod tests {
 
 - another list"#;
 
-        let doc = parse(source);
+        let parsed = parse(source);
+        let doc = parsed.document;
 
         assert_eq!(doc.blocks.len(), 2);
 
@@ -982,8 +1050,11 @@ Container Block
 
 plain text"#;
 
+        let lines = scan_lines(source);
+        let mut diagnostics = vec![];
+
         assert_eq!(
-            build_drafts(&scan_lines(source)),
+            build_drafts(&lines, &mut diagnostics),
             vec![
                 BlockDraft::Property {
                     indent: 0,
@@ -1022,6 +1093,82 @@ plain text"#;
                     raw_lines: vec!["plain text"],
                 },
             ]
+        );
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn parse_reports_no_diagnostics_for_supported_document() {
+        let parsed = parse(
+            r#"--^ title: Maki
+
+= Heading
+
+- list
+  - nested
+
+--v lang: html
+    <main></main>"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.title(), Some("Maki"));
+    }
+
+    #[test]
+    fn parse_reports_invalid_property_without_panicking() {
+        let parsed = parse(
+            r#"--^ invalid-property
+--^ title: Maki
+
+= Heading"#,
+        );
+
+        assert_eq!(parsed.document.title(), Some("Maki"));
+        assert_eq!(
+            parsed.diagnostics,
+            vec![ParseDiagnostic {
+                line: 1,
+                kind: ParseDiagnosticKind::InvalidProperty {
+                    raw_line: "--^ invalid-property"
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_reports_unclosed_container() {
+        let parsed = parse(
+            r#"```code
+fn main() {}"#,
+        );
+
+        assert_eq!(
+            parsed.diagnostics,
+            vec![ParseDiagnostic {
+                line: 1,
+                kind: ParseDiagnosticKind::UnclosedContainer {
+                    raw_line: "```code"
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_reports_numbered_fallback() {
+        let parsed = parse(
+            r#"1. unsupported
+2. fallback"#,
+        );
+
+        assert_eq!(
+            parsed.diagnostics,
+            vec![ParseDiagnostic {
+                line: 1,
+                kind: ParseDiagnosticKind::UnsupportedNumberedBlock {
+                    raw_line: "1. unsupported"
+                },
+            }]
         );
     }
 }

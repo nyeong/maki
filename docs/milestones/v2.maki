@@ -11,10 +11,12 @@
 
 각 마일스톤별로 통합 테스트를 위한 test fixture를 만든다.
 
---v status: todo
+--v status: done
 == Parser API 바꾸기
 
 - `parser(source) -> Document` 대신 파싱 가능한만큼 파싱하고, diagnostics를 같이 내보내기
+- `ParseResult { document, diagnostics }` 반환
+- `maki build`에서 diagnostics를 stderr warning으로 출력
 
 --v status: todo
 == AST? CST? 중심으로 파서 바꾸기
