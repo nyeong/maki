@@ -75,6 +75,29 @@ fn temp_project(name: &str) -> TestProject {
     TestProject { root }
 }
 
+fn temp_project_with_maki_toml(name: &str) -> (TestProject, PathBuf) {
+    let project = temp_project(name);
+    let notes = project.root.join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    fs::write(
+        project.root.join("maki.toml"),
+        "[project]\ntitle = \"Project Fixture\"\nhome = \"start\"\n",
+    )
+    .unwrap();
+    fs::write(
+        project.root.join("start.maki"),
+        "--^ title: Start\n\nProject home.\n",
+    )
+    .unwrap();
+    fs::write(
+        notes.join("page.maki"),
+        "--^ title: Page\n\nSee [[start]].\n",
+    )
+    .unwrap();
+
+    (project, notes)
+}
+
 fn start_server(root: &Path, port: u16, index_redirect: &str) -> TestServer {
     let child = Command::new(BIN)
         .arg("serve")
@@ -85,6 +108,24 @@ fn start_server(root: &Path, port: u16, index_redirect: &str) -> TestServer {
         .arg(port.to_string())
         .arg("--index-redirect")
         .arg(index_redirect)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let server = TestServer { child };
+    wait_until_serving(port);
+    server
+}
+
+fn start_server_with_project_config(root: &Path, port: u16) -> TestServer {
+    let child = Command::new(BIN)
+        .arg("serve")
+        .arg(root)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -244,6 +285,46 @@ fn maki_build_reports_parser_warnings_to_stderr() {
         "warning: {}:6: unsupported numbered block rendered as fallback: 1. fallback",
         file.display()
     )));
+}
+
+#[test]
+fn maki_build_discovers_project_root_from_maki_toml() {
+    let (_project, notes) = temp_project_with_maki_toml("build-project-root");
+
+    let output = Command::new(BIN)
+        .current_dir(&notes)
+        .arg("build")
+        .arg("page.maki")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "maki build failed with stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("<a href=\"/start\">Start</a>"));
+}
+
+#[test]
+fn maki_serve_discovers_project_root_from_maki_toml() {
+    let (_project, notes) = temp_project_with_maki_toml("serve-project-root");
+
+    let port = free_port();
+    let _server = start_server_with_project_config(&notes, port);
+
+    let home = http_get(port, "/");
+    home.assert_status("HTTP/1.1 302 Found");
+    home.assert_header_contains("location: /start");
+
+    let root_page = http_get(port, "/start");
+    root_page.assert_status("HTTP/1.1 200 OK");
+
+    let nested_page = http_get(port, "/notes/page");
+    nested_page.assert_status("HTTP/1.1 200 OK");
+    nested_page.assert_body_contains("<a href=\"/start\">Start</a>");
 }
 
 #[test]

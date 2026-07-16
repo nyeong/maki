@@ -7,7 +7,7 @@ mod maki;
 mod parser;
 mod web;
 
-use maki::{Maki, MakiConfig};
+use maki::{Maki, MakiConfig, MakiConfigOverrides};
 
 #[derive(Debug, PartialEq)]
 enum Command {
@@ -24,7 +24,7 @@ enum Command {
 struct ServeOptions {
     host: String,
     port: u16,
-    index_redirect: String,
+    index_redirect: Option<String>,
 }
 
 impl Default for ServeOptions {
@@ -32,7 +32,7 @@ impl Default for ServeOptions {
         Self {
             host: "127.0.0.1".to_string(),
             port: 4000,
-            index_redirect: "/README".to_string(),
+            index_redirect: None,
         }
     }
 }
@@ -81,20 +81,37 @@ impl Display for RunError {
 }
 
 fn run_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
-    let config = MakiConfig::with_home_redirect(options.index_redirect.clone());
+    let root = Maki::find_project_root(&root)?.unwrap_or(root);
+    let mut config = MakiConfig::load_project(&root)?;
+    let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
+    config_overrides.apply_to(&mut config);
+
     let maki = Maki::load_with_config(&root, config)?;
+    if let Some(project_title) = maki.config().project_title() {
+        println!("Project: {project_title}");
+    }
     println!("Found {} files", maki.notes_len());
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
-    web::serve(maki, &options.host, options.port)
+    web::serve(maki, &options.host, options.port, config_overrides)
 }
 
 fn run_build(file: PathBuf) -> Result<(), RunError> {
     let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
     let parsed = parser::parse(&content);
     emit_parse_warnings(&file, &parsed.diagnostics);
-    println!("{}", html::render_document(&parsed.document));
+
+    let html = match Maki::find_project_root(&file)? {
+        Some(root) => {
+            let config = MakiConfig::load_project(&root)?;
+            let maki = Maki::load_with_config(&root, config)?;
+            maki.render_file_html(&file)?
+        }
+        None => html::render_document(&parsed.document),
+    };
+
+    println!("{html}");
     Ok(())
 }
 
@@ -193,7 +210,7 @@ fn parse_serve_args(args: &[String]) -> Result<Command, CliError> {
                 let target = args
                     .get(index)
                     .ok_or_else(|| CliError::MissingOptionValue("--index-redirect".to_string()))?;
-                options.index_redirect = normalize_redirect_target(target);
+                options.index_redirect = Some(normalize_redirect_target(target));
             }
             option if option.starts_with("--") => {
                 return Err(CliError::UnknownOption(option.to_string()));
@@ -301,7 +318,7 @@ mod tests {
                 options: ServeOptions {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
-                    index_redirect: "/docs/index".to_string(),
+                    index_redirect: Some("/docs/index".to_string()),
                 },
             })
         )
@@ -324,7 +341,7 @@ mod tests {
                 options: ServeOptions {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
-                    index_redirect: "/README".to_string(),
+                    index_redirect: None,
                 },
             })
         )

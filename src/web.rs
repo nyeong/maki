@@ -28,7 +28,7 @@ use percent_encoding::percent_decode_str;
 
 use crate::http::Response;
 use crate::maki;
-use crate::maki::{HomeMode, Maki, MakiConfig, MakiRoute};
+use crate::maki::{HomeMode, Maki, MakiConfigOverrides, MakiRoute};
 use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
@@ -40,23 +40,30 @@ const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 struct AppState {
     root: PathBuf,
-    config: MakiConfig,
+    config_overrides: MakiConfigOverrides,
     maki: RwLock<Maki>,
     live_reload: LiveReload,
 }
 
 impl AppState {
+    #[cfg(test)]
     fn new(maki: Maki) -> Self {
+        Self::new_with_overrides(maki, MakiConfigOverrides::default())
+    }
+
+    fn new_with_overrides(maki: Maki, config_overrides: MakiConfigOverrides) -> Self {
         Self {
             root: maki.root().to_path_buf(),
-            config: maki.config().clone(),
+            config_overrides,
             maki: RwLock::new(maki),
             live_reload: LiveReload::new(MAX_SSE_CLIENTS),
         }
     }
 
     fn reload(&self) -> Result<(), maki::Error> {
-        let next = Maki::load_with_config(&self.root, self.config.clone())?;
+        let mut config = maki::MakiConfig::load_project(&self.root)?;
+        self.config_overrides.apply_to(&mut config);
+        let next = Maki::load_with_config(&self.root, config)?;
         let mut maki = self
             .maki
             .write()
@@ -466,12 +473,18 @@ fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Erro
                 continue;
             }
 
-            if !path.is_file() || path.extension().is_none_or(|ext| ext != "maki") {
+            if !path.is_file() {
+                continue;
+            }
+
+            let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            let is_maki_note = path.extension().is_some_and(|ext| ext == "maki");
+            let is_project_file = relative_path == Path::new(maki::PROJECT_FILE_NAME);
+            if !is_maki_note && !is_project_file {
                 continue;
             }
 
             let metadata = path.metadata()?;
-            let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
             acc.insert(
                 relative_path,
                 FileStamp {
@@ -540,10 +553,15 @@ fn spawn_file_watcher(state: Arc<AppState>) {
     });
 }
 
-pub(crate) fn serve(maki: Maki, host: &str, port: u16) -> Result<(), RunError> {
+pub(crate) fn serve(
+    maki: Maki,
+    host: &str,
+    port: u16,
+    config_overrides: MakiConfigOverrides,
+) -> Result<(), RunError> {
     let listener =
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
-    let state = Arc::new(AppState::new(maki));
+    let state = Arc::new(AppState::new_with_overrides(maki, config_overrides));
     spawn_file_watcher(Arc::clone(&state));
 
     println!("Listening on http://{}:{}", host, port);
