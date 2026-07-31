@@ -3,12 +3,12 @@
 = 양식
 
 --v lang: maki
-    --v status: todo
-    --v type: bug
-    --v milestone: v0
-    = 이슈 제목
+: --v status: todo
+: --v type: bug
+: --v milestone: v0
+: = 이슈 제목
 
-    이슈 내용
+: 이슈 내용
 
 --v status: todo
 = TBD
@@ -45,9 +45,9 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 == 설정 초안
 
 --v lang: toml
-    [project]
-    title = "My Maki Notes"
-    home = "README"
+: [project]
+: title = "My Maki Notes"
+: home = "README"
 
 초기 구현 범위는 `project.title`, `project.home`만 포함한다.
 `project.home`은 source path가 아니라 note ref 기준이다.
@@ -75,6 +75,119 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 
 --v status: todo
 --v type: feature
+= container block을 line-first 문법의 보조 form으로 재정의
+
+현재 문법 문서에는 모든 Maki 블록이 container block으로 기술 가능해야 하고, line은 block의 syntactic sugar라는 방향이 남아 있다.
+하지만 이 모델은 구현을 실질적으로 줄이지 않고, 실제 사용성도 line-first 문법과 잘 맞지 않는다.
+
+container block은 canonical form이 아니라, 긴 body를 편하게 입력하기 위한 보조 문법으로 재정의한다.
+paragraph, heading, list, property, code line 등 일반 블록은 line prefix로 해석한다.
+container block은 code, formatted quote, raw text처럼 매 줄 prefix를 붙이기 귀찮거나 body 해석 모드가 명확히 다른 경우에 사용한다.
+
+== 의도
+
+- Maki의 기본 멘탈 모델을 "line이 기본 단위"로 고정한다.
+- 모든 블록을 container canonical form으로 환원하려는 요구를 없앤다.
+- LLM이나 Markdown 문서 안에서 Maki를 설명할 때 backtick fence가 깨지는 문제를 피한다.
+- code, quote, raw text처럼 block form이 실제로 편한 경우는 유지한다.
+- Maki core가 Typst, Mermaid, Graphviz 같은 외부 도구 구현을 직접 떠안지 않게 한다.
+
+== fence 문법 초안
+
+backtick fence 대신 hyphen fence를 사용한다.
+
+--v lang: maki
+: --- code rust
+: fn main() {
+:     println!("hello");
+: }
+: ---
+:
+: --- quote
+: = 인용 안의 제목
+:
+: - 내부는 maki block으로 파싱된다.
+: - wikilink도 [[README]]처럼 동작한다.
+: ---
+:
+: --- text
+: 이 블록은 줄바꿈과 공백을 보존한다.
+: 시, 편지, 원문 인용에 적합하다.
+: ---
+
+충돌을 줄이기 위해 fence 길이는 3개 이상 hyphen run으로 허용할 수 있다.
+닫는 fence는 같은 길이의 hyphen만 있는 줄로 제한한다.
+
+--v lang: maki
+: ----- code
+: ---
+: 이 줄은 body다.
+: ---
+: -----
+
+== 기본 container 종류
+
+- `code [lang]`: body를 raw text로 보존하고 `<pre><code>`로 렌더링한다.
+- `quote`: body를 Maki block으로 다시 파싱하고 `<blockquote>` 안에 렌더링한다.
+- `text` 또는 `pre`: body를 raw text로 보존하고 `<pre>`로 렌더링한다.
+- 미지원 container: body를 보존하고 diagnostic 또는 fallback HTML을 낸다.
+
+== 외부 command 기반 확장
+
+Maki 내부에 Typst, Mermaid, Graphviz, D2 같은 도구별 구현을 넣지 않는다.
+대신 `maki.toml`에서 container kind별 command adapter를 등록한다.
+
+--v lang: toml
+: [container.typst]
+: body = "raw"
+: input_extension = "typ"
+: output_extension = "svg"
+: command = ["typst", "compile", "$input", "$output"]
+: html = "inline-svg"
+
+사용 예:
+
+--v lang: maki
+: --- typst
+: #set page(width: auto, height: auto)
+: $ E = m c^2 $
+: ---
+
+export/build 단계에서 Maki는 body를 임시 input 파일에 쓰고, command를 실행한 뒤, output을 HTML에 삽입하거나 asset으로 복사한다.
+parser는 외부 command를 실행하지 않고 container block의 kind, args, body만 보존한다.
+
+command는 shell string이 아니라 argv 배열로 받는다.
+`$input`, `$output`, `$assets_dir` 같은 제한된 placeholder만 치환한다.
+
+== 실행 정책
+
+- 외부 command 실행은 기본적으로 명시적이어야 한다.
+- 예: `maki build --allow-container-commands`
+- 개인 프로젝트 config에서 허용할 수는 있지만, 외부 문서를 빌드할 때 임의 command가 실행되면 안 된다.
+- command 결과는 body, command 설정, 관련 config를 기준으로 캐시할 수 있어야 한다.
+- live preview에서는 debounce와 캐시 없이 매 변경마다 command를 실행하지 않는다.
+- 실패 시 build fail로 볼지, HTML에 diagnostic block을 렌더링할지 정책을 정해야 한다.
+
+== 구현 메모
+
+- `LinePrefix::Backticks`를 제거하고 hyphen fence로 대체한다.
+- `BlockDraft::Container { kind, args, raw_lines }`로 container header를 분리한다.
+- container fallback을 `BlockKind::Code`로 위장하지 말고 별도 `BlockKind::Container` 또는 fallback block으로 보존한다.
+- built-in container는 renderer가 직접 처리한다.
+- config 기반 external container는 export/build 단계에서만 처리한다.
+- 첫 vertical slice는 `typst` 하나로 충분하다.
+
+== 성공 기준
+
+- Maki 문서 안에서 backtick fence 없이 code block을 쓸 수 있다.
+- `quote` container 안의 body는 Maki block으로 파싱된다.
+- `text` 또는 `pre` container는 body를 그대로 보존한다.
+- unknown container는 손실 없이 보존되고, HTML에서 명확한 fallback 또는 diagnostic을 낸다.
+- `maki.toml`에 등록된 `typst` container를 build/export 단계에서 외부 command로 렌더링할 수 있다.
+- command 실행을 허용하지 않은 경우 외부 command는 실행되지 않는다.
+
+--v status: todo
+--v type: feature
 = 네비 헤더 추가
 
 네비게이션 헤더 추가하여 편하게 `/`로 돌아올 수 있도록
@@ -93,7 +206,7 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 
 아래처럼 있을 때:
 
-    - nix.maki
-    - devenv.maki
+: - nix.maki
+: - devenv.maki
 
 `devenv.maki`에서 `[[Nix]]`로 링크하면 `nix.maki`로 연결되어야 하나, broken link가 되어버림.

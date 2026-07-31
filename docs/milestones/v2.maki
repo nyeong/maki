@@ -37,9 +37,10 @@
 
 == Renderer 트레잇으로 분리하기
 
-    pub trait Renderer {
-        fn render(&self, document: &Document, ctx: &RenderContext) -> std::fmt::Result;
-    }
+--v lang: rust
+: pub trait Renderer {
+:     fn render(&self, document: &Document, ctx: &RenderContext) -> std::fmt::Result;
+: }
 
 --v status: todo
 == 빠진 문법 구현
@@ -79,14 +80,14 @@
 
 --v lang: rust
 : fn main() {
--     old_call();
-+     new_call();
->     강조할 줄
+: -     old_call();
+: +     new_call();
+: >     강조할 줄
 :     done();
 : }
 
 == Code Block의 prefix token 변경
 
-`whitespace{4}`는 문제가 있음.
+기존 `whitespace{4}` 대신 `: ` prefix를 code line prefix로 사용한다.
 
 코드 블록이 연속 될 때 어디서 끊을지 명확하지 않음. "4-indent만 있고 빈 줄"은 보통 텍스트 에디터에서 제거하므로.

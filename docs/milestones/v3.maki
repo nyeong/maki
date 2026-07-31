@@ -42,7 +42,7 @@ v3에서는 다른 사람에게도 공유할 수 있는 플랫폼을 목표로 �
 
 각 문서는 property로 공개 여부를 선언한다.
 
-    --^ publish: all
+: --^ publish: all
 
 또한 publish 필드는 나중에 [[later#부분공개]]를 위해 예약한다.
 

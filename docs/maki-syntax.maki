@@ -20,8 +20,8 @@
 == 설계적 멘탈모델
 
 - Block 단위 IR
-- Container Block이 기본 단위임.
-- Line은 syntactic sugar임.
+- Line이 기본 source syntax임.
+- Container Block은 긴 body 또는 별도 content mode가 필요한 경우의 보조 form임.
 - Project 단위로 컴파일됨 = 의미 단위를 가짐
   - 링크 땜시
 
@@ -77,22 +77,23 @@ Maki의 기본 단위.
 - 각 block마다 body를 해석하는 방법이 다를 수 있음
   - 예: code는 raw text로 두어야하지만, quote는 inline, block을 허용함
 - 파일 전체도 하나의 root block임
-- Line은 Block에 대한 syntactic sugar임
+- Line prefix가 일반 block을 구성하는 기본 문법임
+- Container Block은 모든 block의 canonical form이 아니라 일부 block의 보조 입력 문법임
 
 예를 들어 아래의 code block은
 
-```code html
+--- code html
 <html>
   hi!
 </html>
-```
+---
 
 아래의 code line과 동치이다
 
 --v lang: html
-    <html>
-      hi!
-    </html>
+: <html>
+:   hi!
+: </html>
 
 아래의 특성이 각각 직교함
 
@@ -116,16 +117,18 @@ Maki의 기본 단위.
 - table
 - ...
 
---v milestone: v0
+--v milestone: v2
 === Container Block
 
-    ```<block-canonical-name> [<args>]
-    <body>
-    ```
+: --- <container-kind> [<args>]
+: <body>
+: ---
 
 - 유일하게 시작-종료가 있는 구문
-- 모든 Maki 블록은 Container Block으로 기술할 수 있어야함
-  - 다만 자주 쓰는 것들은 line-prefix 문법을 선호함
+- 모든 Maki 블록의 canonical form이 아님
+- code, quote, text/pre처럼 긴 body나 별도 content mode가 필요한 경우에 사용함
+- opening fence는 `---`처럼 3개 이상의 hyphen run 뒤에 kind와 args를 둔다
+- closing fence는 opening fence와 같은 길이의 hyphen만 있는 줄이다
 - 엇갈려 닫는 구문은 지원하지 않음
   - 예: `{ [ } ]` 이런식은 지원하지 않음
   - 무조건 스택식
@@ -164,7 +167,7 @@ Maki의 기본 단위.
 - heading (`=`)
 - property block (`--^`, `--v`)
 - quote block (`>`)
-- code block (`<whitespace>{4}`)
+- code block (`: `)
 - list (ordered (`1.`), unordered (`-`), definition (`:`))
 - table (`|`)
 
@@ -175,22 +178,24 @@ Maki의 기본 단위.
 - [[#Inline]]을 파싱함
 - 다른 문단으로 판단되지 않으면 Paragraph로 파싱됨.
 
---v milestone: v0
+--v milestone: v2
 === Code Block
 
-    <whitespace>{4}
+: : <raw text>
+: :
+: : <raw text>
 
 혹은
 
-    ```code <lang>
-    <raw text>
-    ```
+: --- code <lang>
+: <raw text>
+: ---
 
 
 --v milestone: v0
 === Heading
 
-    ={1-6}<whitespace>+<heading text>
+: ={1-6}<whitespace>+<heading text>
 
 - Atomic.
 - `=`으로 heading level을 지정한다.
@@ -206,8 +211,8 @@ Maki의 기본 단위.
 --v milestone: v0
 === Property Line
 
-    --^ <key><whitespace>*:<whitespace>*<value>
-    --v <key><whitespace>*:<whitespace>*<value>
+: --^ <key><whitespace>*:<whitespace>*<value>
+: --v <key><whitespace>*:<whitespace>*<value>
 
 - Cluster.
 - Property Line으로 다른 블록에 속성을 지정할 수 있음.
@@ -238,38 +243,38 @@ inline prefix는 두 종료가 있음
 --v status: todo
 - 멀티라인
 
-    --v key:
-        multiline value
-        continues while indented
+: --v key:
+: : multiline value
+: : continues while indented
 
 혹은
 
-    --v key: multiline value
-             continues while indented
+: --v key: multiline value
+:          continues while indented
 
 ==== List와 함께 쓸 경우
 
-    - list a
-    - list b
-    --^ key: value
-
-    --v key: value
-    - list a
-    - list b
+: - list a
+: - list b
+: --^ key: value
+:
+: --v key: value
+: - list a
+: - list b
 
 위의 Property는 ListBlock에 붙는다.
 
-    - list a
-    - list b
-      --^ key: value
-
-      --v key: value
-    - list a
-    - list b
-
-    - list a
-      --^ key: value
-    - list b
+: - list a
+: - list b
+:   --^ key: value
+:
+:   --v key: value
+: - list a
+: - list b
+:
+: - list a
+:   --^ key: value
+: - list b
 
 위의 Property는 각각의 ListItemBlock에 붙는다.
 
@@ -327,7 +332,7 @@ inline prefix는 두 종료가 있음
 
 모든 Inline을 표시할 수 있는 컨테이너.
 
-    @<type>[body]
+: @<type>[body]
 
 예를 들어 [[#Note Link]]는 `@notelink[Note Link]`로 표기하면 동일한 의미를 가진다.
 
@@ -336,11 +341,11 @@ inline prefix는 두 종료가 있음
 
 프로젝트 내부의 이동을 위한 링크
 
-    [[<target>]]
-    [[#<heading-path>]]
-    [[<target>#<heading-path>]]
-
-    <heading-path> = <heading>(#<heading>)*
+: [[<target>]]
+: [[#<heading-path>]]
+: [[<target>#<heading-path>]]
+:
+: <heading-path> = <heading>(#<heading>)*
 
 - 같은 프로젝트 내의 note라는 문서로 연결하려면 `[[note]]`
 - 같은 문서 내의 heading이라는 헤딩으로 연결하려면 `[[#heading]]`
@@ -364,4 +369,4 @@ inline prefix는 두 종료가 있음
 --v milestone: later
 == List
 
-    -[<whitespace>]<list item><eol>
+: -[<whitespace>]<list item><eol>

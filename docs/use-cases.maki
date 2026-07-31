@@ -42,15 +42,15 @@ Maki는 개인 지식 관리를 위한 마크업 언어이자 지식 작업용 �
 3. ics를 서빙하여 캘린더로 받아볼 수 있다.
 
 --v lang: maki
-    --^ title: A 프로젝트
+: --^ title: A 프로젝트
 
-    = 작업 1
-    --^ status: todo
-    --^ deadline: <2025-06-17 Tue>
+: = 작업 1
+: --^ status: todo
+: --^ deadline: <2025-06-17 Tue>
 
-    == 작업1-1
-    --^ status: done
-    --^ scheduled: <2026-03-30 Mon 16:00>
+: == 작업1-1
+: --^ status: done
+: --^ scheduled: <2026-03-30 Mon 16:00>
 
 == 개인 데이터베이스
 
@@ -60,14 +60,14 @@ Maki는 개인 지식 관리를 위한 마크업 언어이자 지식 작업용 �
 예를 들어 읽은 책, 읽을 책에 대한 문서가 있다면:
 
 --v lang: maki
-    --^ title: 책장
+: --^ title: 책장
 
-    = 단위 테스트의 기술
-    --^ status: todo
-    --^ added: [2025-06-17 Tue]
+: = 단위 테스트의 기술
+: --^ status: todo
+: --^ added: [2025-06-17 Tue]
 
-    = Fluent Forever
-    --^ status: done
-    --^ closed: [2026-03-30 Mon 16:00]
+: = Fluent Forever
+: --^ status: done
+: --^ closed: [2026-03-30 Mon 16:00]
 
 나중에 CLI 혹은 쿼리블록으로, "내가 읽으려고 했는데 아직 안 읽은 책 목록"을 볼 수 있어야한다.

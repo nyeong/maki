@@ -4,10 +4,10 @@
 
 이 순서대로
 
-    Source
-    -> Scan Lines (LineToken[])
-    -> Build Drafts (BlockDraft[])
-    -> Build Document (Document)
+: Source
+: -> Scan Lines (LineToken[])
+: -> Build Drafts (BlockDraft[])
+: -> Build Document (Document)
 
 - Scan Lines : source를 줄 단위 token으로 분류
 - Build Drafts : 연속된 line token을 block으로 묶음
@@ -17,25 +17,25 @@
 
 주어진 문자열을 줄단위로 Prefix 분석하여 LineToken[]으로 변환함.
 
-    --v milestone: v0
-    === Container Block
-
-        ```<kind> [<args>]
-        <body>
-        ```
-
-    유일하고 제네릭한 블록 문법
+: --v milestone: v2
+: === Container Block
+:
+: --- code rust
+: fn main() {}
+: ---
+:
+: Container block은 긴 body 또는 별도 content mode를 위한 보조 문법
 
 위는 아래처럼 파싱되어야
 
-    Line { prefix = "--v", indent = 0, body = "milestone ..." }
-    Line { prefix = "===", indent = 0, body = "Container ..." }
-    Blank
-    Line { prefix = "```", indent = 4, body = ... }
-    Line { prefix = "", indent = 4, body = ... }
-    Line { prefix = "```", indent = 4, body = ... }
-    Blank
-    Line { prefix = "", indent = 0, body = ... }
+: Line { prefix = "--v", indent = 0, body = "milestone ..." }
+: Line { prefix = "===", indent = 0, body = "Container ..." }
+: Blank
+: Line { prefix = "---", indent = 0, body = "code rust" }
+: Line { prefix = "", indent = 0, body = "fn main() {}" }
+: Line { prefix = "---", indent = 0, body = "" }
+: Blank
+: Line { prefix = "", indent = 0, body = ... }
 
 == Build Drafts
 
@@ -44,8 +44,8 @@
 이 단계에서 하는 일:
 
 - `EqualsRun(1..=6)`은 Heading Block이 됨
-- Backticks으로 둘러싸인 line들은 ContainerBlock의 raw body가 됨
-- 갑자기 나온 indent 4 line은 CodeBlock임
+- 같은 길이의 hyphen fence로 둘러싸인 line들은 ContainerBlock의 raw body가 됨
+- `Colon` prefix로 시작한 연속 line들은 CodeBlock임
 - List context 안에서 indent가 증가한 Hyphen line은 Nested ListItem임
 - ...
 
