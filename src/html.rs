@@ -6,6 +6,13 @@ use crate::{
 };
 
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
+const HOME_NAVIGATION_HTML: &str = concat!(
+    "<header class=\"maki-nav\">",
+    "<nav aria-label=\"Maki navigation\">",
+    "<a class=\"maki-home-link\" href=\"/\">/</a>",
+    "</nav>",
+    "</header>",
+);
 
 pub(crate) struct NoteInfo {
     pub(crate) title: String,
@@ -17,6 +24,14 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
+    fn render_navigation(&mut self) {
+        if self.context.project.is_none() {
+            return;
+        }
+
+        self.html.push_str(HOME_NAVIGATION_HTML);
+    }
+
     fn render_note_link(&mut self, target: &str) {
         let Some(context) = &self.context.project else {
             self.html.push_str("<a href=\"");
@@ -213,6 +228,7 @@ impl<'a> Renderer<'a> {
             self.html.push_str("</title>");
         }
         self.html.push_str("</head><body>");
+        self.render_navigation();
 
         if let Some(title) = title {
             self.render_heading(1, title);
@@ -317,6 +333,20 @@ hello <maki> & friends
             "<pre><code class=\"language-html\">&lt;main&gt;\n&lt;/main&gt;</code></pre>"
         ));
         assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
+    }
+
+    #[test]
+    fn project_rendering_includes_home_navigation() {
+        let parsed = parser::parse("--^ title: Page\n\nbody");
+        let resolve_note_link = |_target: &str| NoteLinkResolution::Broken;
+        let get_note_info = |_note_ref: &NoteRef| None;
+
+        let html = render_document_with_context(
+            &parsed.document,
+            RenderContext::project(&resolve_note_link, &get_note_info),
+        );
+
+        assert!(html.contains(&format!("{HOME_NAVIGATION_HTML}<h1")));
     }
 
     #[test]
