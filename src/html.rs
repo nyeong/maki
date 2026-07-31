@@ -2,7 +2,7 @@
 
 use crate::{
     maki::{NoteLinkResolution, NoteRef},
-    parser::{BlockKind, Document, Inline, ListItem},
+    parser::{self, BlockKind, Document, Inline, ListItem},
 };
 
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
@@ -70,6 +70,78 @@ impl<'a> Renderer<'a> {
         self.escape_html_into(input);
     }
 
+    fn render_code(&mut self, lines: &[&str], lang: Option<&str>) {
+        self.html.push_str("<pre><code");
+        if let Some(lang) = lang {
+            self.html.push_str(" class=\"language-");
+            self.escape_html_attr_into(lang);
+            self.html.push('"');
+        }
+        self.html.push('>');
+        self.render_raw_lines(lines);
+        self.html.push_str("</code></pre>");
+    }
+
+    fn render_raw_lines(&mut self, lines: &[&str]) {
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                self.html.push('\n');
+            }
+            self.escape_html_into(line);
+        }
+    }
+
+    fn render_pre(&mut self, lines: &[&str]) {
+        self.html.push_str("<pre>");
+        self.render_raw_lines(lines);
+        self.html.push_str("</pre>");
+    }
+
+    fn render_quote(&mut self, lines: &[&str]) {
+        let source = lines.join("\n");
+        let parsed = parser::parse(&source);
+
+        self.html.push_str("<blockquote>");
+        for block in &parsed.document.blocks {
+            self.render_block(&block.kind);
+        }
+        self.html.push_str("</blockquote>");
+    }
+
+    fn render_unknown_container(&mut self, kind: &str, args: &[&str], lines: &[&str]) {
+        self.html
+            .push_str("<pre class=\"maki-container maki-container-unknown\" data-kind=\"");
+        self.escape_html_attr_into(kind);
+        self.html.push('"');
+
+        if !args.is_empty() {
+            self.html.push_str(" data-args=\"");
+            self.escape_html_attr_into(&args.join(" "));
+            self.html.push('"');
+        }
+
+        self.html.push_str("><code>");
+        self.escape_html_into(kind);
+        for arg in args {
+            self.html.push(' ');
+            self.escape_html_into(arg);
+        }
+        if !lines.is_empty() {
+            self.html.push('\n');
+            self.render_raw_lines(lines);
+        }
+        self.html.push_str("</code></pre>");
+    }
+
+    fn render_container(&mut self, kind: &str, args: &[&str], lines: &[&str]) {
+        match kind {
+            "code" => self.render_code(lines, args.first().copied()),
+            "pre" | "text" => self.render_pre(lines),
+            "quote" => self.render_quote(lines),
+            _ => self.render_unknown_container(kind, args, lines),
+        }
+    }
+
     fn render_block(&mut self, block: &BlockKind<'_>) {
         match block {
             BlockKind::Paragraph { body } => {
@@ -82,27 +154,13 @@ impl<'a> Renderer<'a> {
                 }
                 self.html.push_str("</p>");
             }
-            BlockKind::Code { lines, lang } => {
-                self.html.push_str("<pre><code");
-                if let Some(lang) = lang {
-                    self.html.push_str(" class=\"language-");
-                    self.escape_html_attr_into(lang);
-                    self.html.push('"');
-                }
-                self.html.push('>');
-                for (index, line) in lines.iter().enumerate() {
-                    if index > 0 {
-                        self.html.push('\n');
-                    }
-                    self.escape_html_into(line);
-                }
-                self.html.push_str("</code></pre>");
-            }
+            BlockKind::Code { lines, lang } => self.render_code(lines, *lang),
             BlockKind::Heading { level, body } => {
                 // 문서의 title이 h1이 될 거라서 하나씩 올려줌
                 self.render_heading(level + 1, body);
             }
             BlockKind::List { items } => self.render_list(items),
+            BlockKind::Container { kind, args, lines } => self.render_container(kind, args, lines),
         }
     }
 
@@ -243,8 +301,8 @@ mod tests {
 hello <maki> & friends
 
 --v lang: html
-    <main>
-    </main>
+: <main>
+: </main>
 
 - one
 - two"#,
@@ -259,6 +317,36 @@ hello <maki> & friends
             "<pre><code class=\"language-html\">&lt;main&gt;\n&lt;/main&gt;</code></pre>"
         ));
         assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
+    }
+
+    #[test]
+    fn test_render_builtin_containers() {
+        let parsed = parser::parse(
+            r#"--- code rust
+fn main() {}
+---
+
+--- text
+line <one>
+line two
+---
+
+--- quote
+= Quoted
+
+quote body
+---"#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains("<pre><code class=\"language-rust\">fn main() {}</code></pre>"));
+        assert!(html.contains("<pre>line &lt;one&gt;\nline two</pre>"));
+        assert!(
+            html.contains(
+                "<blockquote><h2 id=\"Quoted\">Quoted</h2><p>quote body</p></blockquote>"
+            )
+        );
     }
 
     #[test]

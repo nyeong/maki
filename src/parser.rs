@@ -290,12 +290,14 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             props,
         },
         BlockDraft::Container {
-            header: _,
+            kind,
+            args,
             raw_lines,
         } => Block {
-            kind: BlockKind::Code {
+            kind: BlockKind::Container {
+                kind,
+                args: args.clone(),
                 lines: raw_lines.clone(),
-                lang: None,
             },
             props,
         },
@@ -370,6 +372,11 @@ pub(crate) enum BlockKind<'a> {
     List {
         items: Vec<ListItem<'a>>,
     },
+    Container {
+        kind: &'a str,
+        args: Vec<&'a str>,
+        lines: Vec<&'a str>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -398,7 +405,8 @@ enum LinePrefix {
     EnCaret,          // --^
     EnV,              // --v
     Hyphen,           // -
-    Backticks,        // ```
+    HyphenFence(usize),
+    Colon,
     NumberDot(usize), // 1.
     None,
 }
@@ -422,9 +430,9 @@ fn scan_line(line: &str) -> LineToken<'_> {
 const EN_CARET: &str = "--^ ";
 const EN_V: &str = "--v ";
 const HYPHEN: &str = "- ";
-const BACKTICKS: &str = "```";
+const COLON: char = ':';
 const EQUALS: char = '=';
-const CODE_BLOCK_INDENT: usize = 4;
+const HYPHEN_FENCE_MIN_LEN: usize = 3;
 
 fn parse_number_dot_prefix(source: &str) -> Option<usize> {
     let (digits, rest) = source.split_once('.')?;
@@ -434,6 +442,16 @@ fn parse_number_dot_prefix(source: &str) -> Option<usize> {
     }
 
     digits.parse().ok()
+}
+
+fn parse_hyphen_fence_prefix(source: &str) -> Option<usize> {
+    let len = source.chars().take_while(|&c| c == '-').count();
+    if len < HYPHEN_FENCE_MIN_LEN {
+        return None;
+    }
+
+    let rest = &source[len..];
+    (rest.is_empty() || rest.starts_with(' ')).then_some(len)
 }
 
 /// Accepts a text trimmed of leading whitespace.
@@ -447,11 +465,14 @@ fn scan_line_prefix(raw_text: &str) -> LinePrefix {
     if let Some(n) = parse_number_dot_prefix(raw_text) {
         return LinePrefix::NumberDot(n);
     }
+    if let Some(len) = parse_hyphen_fence_prefix(raw_text) {
+        return LinePrefix::HyphenFence(len);
+    }
+    if raw_text == ":" || raw_text.starts_with(": ") {
+        return LinePrefix::Colon;
+    }
     if raw_text.starts_with(HYPHEN) {
         return LinePrefix::Hyphen;
-    }
-    if raw_text.starts_with(BACKTICKS) {
-        return LinePrefix::Backticks;
     }
     if let Some(len) = count_prefix_run(raw_text, EQUALS, ' ') {
         return LinePrefix::EqualsRun(len);
@@ -527,14 +548,15 @@ enum BlockDraft<'a> {
         raw_lines: Vec<&'a str>,
     },
 
-    /// 4-length-indented
+    /// : prefixed
     Code {
         raw_lines: Vec<&'a str>,
     },
 
-    /// ```
+    /// --- <kind> [<args>]
     Container {
-        header: &'a str,
+        kind: &'a str,
+        args: Vec<&'a str>,
         raw_lines: Vec<&'a str>,
     },
 
@@ -571,7 +593,8 @@ impl LinePrefix {
             LinePrefix::EnCaret => EN_CARET.len(),
             LinePrefix::EnV => EN_V.len(),
             LinePrefix::Hyphen => HYPHEN.len(),
-            LinePrefix::Backticks => BACKTICKS.len(),
+            LinePrefix::HyphenFence(len) => *len,
+            LinePrefix::Colon => COLON.len_utf8(),
             LinePrefix::NumberDot(num) => num / 10 + 1,
             LinePrefix::None => 0,
         }
@@ -579,13 +602,6 @@ impl LinePrefix {
 }
 
 impl<'a> LineToken<'a> {
-    fn indent(&self) -> usize {
-        match self {
-            LineToken::Blank { .. } => 0,
-            LineToken::Line { indent, .. } => *indent,
-        }
-    }
-
     fn raw_line(&self) -> &'a str {
         match self {
             LineToken::Blank { raw_line, .. } => raw_line,
@@ -602,9 +618,32 @@ impl<'a> LineToken<'a> {
                 kind,
             } => {
                 let content = &raw_line[*indent..];
-                Some(&content[kind.width()..])
+                let body = &content[kind.width()..];
+
+                match kind {
+                    LinePrefix::Colon | LinePrefix::HyphenFence(_) => {
+                        Some(body.strip_prefix(' ').unwrap_or(body))
+                    }
+                    _ => Some(body),
+                }
             }
         }
+    }
+}
+
+fn starts_block_after_paragraph(line: &LineToken<'_>) -> bool {
+    let LineToken::Line { indent, kind, .. } = line else {
+        return false;
+    };
+
+    match kind {
+        LinePrefix::EnCaret | LinePrefix::EnV => true,
+        LinePrefix::EqualsRun(level) => (1..=6).contains(level),
+        LinePrefix::Hyphen | LinePrefix::NumberDot(_) | LinePrefix::Colon => *indent == 0,
+        LinePrefix::HyphenFence(_) => {
+            *indent == 0 && line.body().is_some_and(|body| !body.trim().is_empty())
+        }
+        LinePrefix::None => false,
     }
 }
 
@@ -653,41 +692,69 @@ fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDra
         if cursor.consume_blank() {
             break;
         }
+        if !raw_lines.is_empty() && cursor.peek().is_some_and(starts_block_after_paragraph) {
+            break;
+        }
         raw_lines.push(cursor.next()?.raw_line());
     }
 
     Some(BlockDraft::Paragraph { raw_lines })
 }
 
+fn parse_container_header(header: &str) -> Option<(&str, Vec<&str>)> {
+    let mut parts = header.split_whitespace();
+    let kind = parts.next()?;
+    let args = parts.collect();
+
+    Some((kind, args))
+}
+
+fn is_closing_fence(line: &LineToken<'_>, len: usize) -> bool {
+    matches!(
+        line,
+        LineToken::Line {
+            indent: 0,
+            kind: LinePrefix::HyphenFence(line_len),
+            ..
+        } if *line_len == len && line.body() == Some("")
+    )
+}
+
+fn is_root_colon_line(line: &LineToken<'_>) -> bool {
+    matches!(
+        line,
+        LineToken::Line {
+            indent: 0,
+            kind: LinePrefix::Colon,
+            ..
+        }
+    )
+}
+
 fn parse_container_draft<'a>(
     cursor: &mut LineCursor<'_, 'a>,
     diagnostics: &mut Vec<ParseDiagnostic<'a>>,
 ) -> Option<BlockDraft<'a>> {
-    if !matches!(
-        cursor.peek(),
-        Some(LineToken::Line {
-            kind: LinePrefix::Backticks,
-            indent: 0,
-            ..
-        }),
-    ) {
+    let Some(LineToken::Line {
+        kind: LinePrefix::HyphenFence(fence_len),
+        indent: 0,
+        ..
+    }) = cursor.peek()
+    else {
         return None;
     };
 
     let mut raw_lines = vec![];
     let line = cursor.line_number();
     let raw_line = cursor.peek()?.raw_line();
-    let header = cursor.next()?.body()?;
+    let header = cursor.peek()?.body()?.trim();
+    let (kind, args) = parse_container_header(header)?;
+    let fence_len = *fence_len;
+    cursor.next();
     let mut closed = false;
 
     while let Some(line) = cursor.next() {
-        if matches!(
-            line,
-            LineToken::Line {
-                kind: LinePrefix::Backticks,
-                ..
-            }
-        ) {
+        if is_closing_fence(line, fence_len) {
             closed = true;
             break;
         }
@@ -701,7 +768,11 @@ fn parse_container_draft<'a>(
         });
     }
 
-    Some(BlockDraft::Container { header, raw_lines })
+    Some(BlockDraft::Container {
+        kind,
+        args,
+        raw_lines,
+    })
 }
 
 // TODO: parse.. 함수들 모두 Result<Option<T>, E> 타입으로 바꾸기. Ok(None), Ok(Some(...)), Err(..)
@@ -847,26 +918,14 @@ fn parse_tbd_draft<'a>(
 }
 
 fn parse_code_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
-    let line = cursor.peek()?;
-    if line.indent() < CODE_BLOCK_INDENT {
+    if !cursor.peek().is_some_and(is_root_colon_line) {
         return None;
-    }
+    };
 
     let mut raw_lines = vec![];
 
-    while let Some(line) = cursor.peek() {
-        if line.indent() < CODE_BLOCK_INDENT {
-            break;
-        } else if matches!(line, LineToken::Blank { .. }) {
-            raw_lines.push(line.raw_line());
-        } else {
-            raw_lines.push(&line.raw_line()[CODE_BLOCK_INDENT..]);
-        }
-        cursor.next();
-    }
-
-    if raw_lines.last().is_some_and(|l| l.is_empty()) {
-        raw_lines.pop();
+    while cursor.peek().is_some_and(is_root_colon_line) {
+        raw_lines.push(cursor.next()?.body()?);
     }
 
     Some(BlockDraft::Code { raw_lines })
@@ -969,11 +1028,11 @@ mod tests {
 - list
   - nested list
 
-    This is Code Line
+: This is Code Line
 
-```code
+--- code
 Container Block
-```
+---
 
 plain text"#;
 
@@ -1003,15 +1062,15 @@ plain text"#;
                 },
                 LineToken::Blank { raw_line: "" },
                 LineToken::Line {
-                    indent: 4,
-                    kind: LinePrefix::None,
-                    raw_line: "    This is Code Line"
+                    indent: 0,
+                    kind: LinePrefix::Colon,
+                    raw_line: ": This is Code Line"
                 },
                 LineToken::Blank { raw_line: "" },
                 LineToken::Line {
                     indent: 0,
-                    kind: LinePrefix::Backticks,
-                    raw_line: "```code"
+                    kind: LinePrefix::HyphenFence(3),
+                    raw_line: "--- code"
                 },
                 LineToken::Line {
                     indent: 0,
@@ -1020,8 +1079,8 @@ plain text"#;
                 },
                 LineToken::Line {
                     indent: 0,
-                    kind: LinePrefix::Backticks,
-                    raw_line: "```"
+                    kind: LinePrefix::HyphenFence(3),
+                    raw_line: "---"
                 },
                 LineToken::Blank { raw_line: "" },
                 LineToken::Line {
@@ -1042,11 +1101,11 @@ plain text"#;
 - list
   - nested list
 
-    This is Code Line
+: This is Code Line
 
-```code
+--- code
 Container Block
-```
+---
 
 plain text"#;
 
@@ -1086,7 +1145,8 @@ plain text"#;
                     raw_lines: vec!["This is Code Line"],
                 },
                 BlockDraft::Container {
-                    header: "code",
+                    kind: "code",
+                    args: vec![],
                     raw_lines: vec!["Container Block"],
                 },
                 BlockDraft::Paragraph {
@@ -1108,7 +1168,7 @@ plain text"#;
   - nested
 
 --v lang: html
-    <main></main>"#,
+: <main></main>"#,
         );
 
         assert!(parsed.diagnostics.is_empty());
@@ -1139,7 +1199,7 @@ plain text"#;
     #[test]
     fn parse_reports_unclosed_container() {
         let parsed = parse(
-            r#"```code
+            r#"--- code
 fn main() {}"#,
         );
 
@@ -1148,9 +1208,54 @@ fn main() {}"#,
             vec![ParseDiagnostic {
                 line: 1,
                 kind: ParseDiagnosticKind::UnclosedContainer {
-                    raw_line: "```code"
+                    raw_line: "--- code"
                 },
             }]
+        );
+    }
+
+    #[test]
+    fn parse_preserves_shorter_fence_inside_long_container() {
+        let parsed = parse(
+            r#"----- code
+---
+body
+-----"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 1);
+
+        let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
+            panic!("expected a container block");
+        };
+
+        assert_eq!(*kind, "code");
+        assert!(args.is_empty());
+        assert_eq!(lines, &vec!["---", "body"]);
+    }
+
+    #[test]
+    fn parse_treats_headerless_hyphen_run_as_paragraph() {
+        let parsed = parse(
+            r#"---
+plain"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 1);
+
+        let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+            panic!("expected a paragraph block");
+        };
+
+        assert_eq!(
+            body,
+            &vec![
+                Inline::Text("---"),
+                Inline::SoftBreak,
+                Inline::Text("plain")
+            ]
         );
     }
 

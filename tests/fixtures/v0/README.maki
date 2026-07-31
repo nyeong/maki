@@ -24,6 +24,6 @@ Go to [[daily]], [[nested/홈랩]], [[ghost]], [[ambiguous]].
 = Code
 
 --v lang: html
-    <main>
-      fixture code
-    </main>
+: <main>
+:   fixture code
+: </main>
