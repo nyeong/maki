@@ -103,6 +103,7 @@ pub(crate) struct NoteRef {
 pub(crate) struct Maki {
     root: PathBuf,                  // canonical absolute path
     notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
+    index: NoteIndex,
     config: MakiConfig,
 }
 
@@ -500,6 +501,98 @@ impl Note {
     }
 }
 
+#[derive(Default)]
+struct NoteIndex {
+    exact_paths: BTreeMap<PathBuf, NoteRef>,
+    normalized_paths: BTreeMap<String, Vec<NoteRef>>,
+    normalized_stems: BTreeMap<String, Vec<NoteRef>>,
+    sibling_normalized_stems: BTreeMap<(PathBuf, String), Vec<NoteRef>>,
+}
+
+impl NoteIndex {
+    fn build<'a>(note_refs: impl Iterator<Item = &'a NoteRef>) -> Self {
+        let mut index = Self::default();
+
+        for note_ref in note_refs {
+            index.insert(note_ref);
+        }
+
+        index
+    }
+
+    fn insert(&mut self, note_ref: &NoteRef) {
+        self.exact_paths
+            .insert(note_ref.canonical_path().to_path_buf(), note_ref.clone());
+        push_candidate(
+            &mut self.normalized_paths,
+            normalize_path(note_ref.canonical_path()),
+            note_ref,
+        );
+
+        let Some(stem) = note_ref
+            .canonical_path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(normalize_key)
+        else {
+            return;
+        };
+
+        push_candidate(&mut self.normalized_stems, stem.clone(), note_ref);
+
+        let parent = note_ref
+            .canonical_path()
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+        push_candidate(&mut self.sibling_normalized_stems, (parent, stem), note_ref);
+    }
+
+    fn exact_path(&self, target: &Path) -> Option<NoteRef> {
+        self.exact_paths.get(target).cloned()
+    }
+
+    fn resolve_normalized_path(&self, target: &Path) -> Option<NoteLinkResolution> {
+        resolve_candidates(self.normalized_paths.get(&normalize_path(target)))
+    }
+
+    fn resolve_sibling_stem(&self, current: &NoteRef, target: &str) -> Option<NoteLinkResolution> {
+        let parent = current.canonical_path().parent()?.to_path_buf();
+        let key = (parent, normalize_key(target));
+
+        resolve_candidates(self.sibling_normalized_stems.get(&key))
+    }
+
+    fn resolve_project_stem(&self, target: &str) -> Option<NoteLinkResolution> {
+        resolve_candidates(self.normalized_stems.get(&normalize_key(target)))
+    }
+}
+
+fn push_candidate<K>(map: &mut BTreeMap<K, Vec<NoteRef>>, key: K, note_ref: &NoteRef)
+where
+    K: Ord,
+{
+    map.entry(key).or_default().push(note_ref.clone());
+}
+
+fn normalize_path(path: &Path) -> String {
+    normalize_key(&path.to_string_lossy())
+}
+
+fn normalize_key(key: &str) -> String {
+    key.to_lowercase()
+}
+
+fn resolve_candidates(candidates: Option<&Vec<NoteRef>>) -> Option<NoteLinkResolution> {
+    let candidates = candidates?;
+
+    match candidates.as_slice() {
+        [] => None,
+        [note_ref] => Some(NoteLinkResolution::Found(note_ref.clone())),
+        _ => Some(NoteLinkResolution::Ambiguous),
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) enum NoteLinkResolution {
     Found(NoteRef),
@@ -533,44 +626,30 @@ impl Maki {
     }
 
     pub(crate) fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
-        let target_ref = NoteRef::new(target);
-
-        if self.notes.contains_key(&target_ref) {
-            return NoteLinkResolution::Found(target_ref);
+        if let Some(note_ref) = self.index.exact_path(Path::new(target)) {
+            return NoteLinkResolution::Found(note_ref);
         }
 
         if target.starts_with('#') {
             return NoteLinkResolution::Ambiguous;
         }
-        // 2. sibling stem
-        if !target.contains('/')
-            && let Some(parent) = current.canonical_path().parent()
+
+        if target.contains('/')
+            && let Some(resolution) = self.index.resolve_normalized_path(Path::new(target))
         {
-            let sibling_ref = NoteRef::new(parent.join(target));
-            if self.notes.contains_key(&sibling_ref) {
-                return NoteLinkResolution::Found(sibling_ref);
+            return resolution;
+        }
+
+        if !target.contains('/') {
+            if let Some(resolution) = self.index.resolve_sibling_stem(current, target) {
+                return resolution;
+            }
+            if let Some(resolution) = self.index.resolve_project_stem(target) {
+                return resolution;
             }
         }
 
-        // 3. project-wide file stem
-        let mut candidates = self
-            .notes
-            .keys()
-            .filter(|note_ref| {
-                note_ref
-                    .canonical_path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    == Some(target)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-
-        match candidates.len() {
-            0 => NoteLinkResolution::Broken,
-            1 => NoteLinkResolution::Found(candidates.remove(0)),
-            _ => NoteLinkResolution::Ambiguous,
-        }
+        NoteLinkResolution::Broken
     }
 
     pub(crate) fn get_raw_content(&self, path: &Path) -> Result<String, Error> {
@@ -618,10 +697,12 @@ impl Maki {
             let note = Note::load(&root, file)?;
             notes.insert(note.note_ref(), note);
         }
+        let index = NoteIndex::build(notes.keys());
 
         Ok(Self {
             root,
             notes,
+            index,
             config,
         })
     }
@@ -702,6 +783,40 @@ impl Maki {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    struct TestProject {
+        root: PathBuf,
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn temp_project(name: &str) -> TestProject {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("maki-{name}-{}-{nanos}", std::process::id()));
+
+        fs::create_dir_all(&root).unwrap();
+
+        TestProject { root }
+    }
+
+    fn write_note(project: &TestProject, path: &str) {
+        let path = project.root.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, "").unwrap();
+    }
 
     #[test]
     fn note_path() {
@@ -737,6 +852,79 @@ mod tests {
         assert_eq!(
             maki.resolve_note_link(&NoteRef::new("index"), "milestones/v0"),
             NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+        );
+    }
+
+    #[test]
+    fn resolve_note_link_uses_case_insensitive_path_lookup() {
+        let project = temp_project("case-insensitive-path");
+        write_note(&project, "milestones/v0.maki");
+        write_note(&project, "index.maki");
+
+        let maki = Maki::load(&project.root).unwrap();
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("index"), "Milestones/V0"),
+            NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+        );
+    }
+
+    #[test]
+    fn resolve_note_link_uses_case_insensitive_sibling_stem_lookup() {
+        let project = temp_project("case-insensitive-sibling");
+        write_note(&project, "notes/devenv.maki");
+        write_note(&project, "notes/nix.maki");
+
+        let maki = Maki::load(&project.root).unwrap();
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("notes/devenv"), "Nix"),
+            NoteLinkResolution::Found(NoteRef::new("notes/nix"))
+        );
+    }
+
+    #[test]
+    fn resolve_note_link_prefers_sibling_stem_before_project_wide_stem() {
+        let project = temp_project("sibling-before-project-stem");
+        write_note(&project, "notes/page.maki");
+        write_note(&project, "notes/nix.maki");
+        write_note(&project, "other/Nix.maki");
+
+        let maki = Maki::load(&project.root).unwrap();
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("notes/page"), "NIX"),
+            NoteLinkResolution::Found(NoteRef::new("notes/nix"))
+        );
+    }
+
+    #[test]
+    fn resolve_note_link_reports_case_insensitive_stem_ambiguity() {
+        let project = temp_project("case-insensitive-stem-ambiguity");
+        write_note(&project, "start.maki");
+        write_note(&project, "alpha/nix.maki");
+        write_note(&project, "beta/NIX.maki");
+
+        let maki = Maki::load(&project.root).unwrap();
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("start"), "Nix"),
+            NoteLinkResolution::Ambiguous
+        );
+    }
+
+    #[test]
+    fn resolve_note_link_preserves_exact_path_priority() {
+        let project = temp_project("exact-before-sibling");
+        write_note(&project, "nix.maki");
+        write_note(&project, "notes/page.maki");
+        write_note(&project, "notes/nix.maki");
+
+        let maki = Maki::load(&project.root).unwrap();
+
+        assert_eq!(
+            maki.resolve_note_link(&NoteRef::new("notes/page"), "nix"),
+            NoteLinkResolution::Found(NoteRef::new("nix"))
         );
     }
 }
