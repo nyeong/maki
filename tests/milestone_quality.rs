@@ -420,8 +420,7 @@ fn v1_fixture_supports_serve_options_and_live_reload() {
     initial.assert_body_contains("new EventSource(\"/.maki/events\")");
 
     let mut events = open_sse(port);
-    let hello = read_until_contains(&mut events, "event: hello", Duration::from_secs(2));
-    assert!(hello.contains("data: "));
+    read_until_contains(&mut events, "event: hello\ndata: ", Duration::from_secs(2));
 
     fs::write(
         project.root.join("home.maki"),
@@ -429,8 +428,7 @@ fn v1_fixture_supports_serve_options_and_live_reload() {
     )
     .unwrap();
 
-    let reload = read_until_contains(&mut events, "event: reload", Duration::from_secs(5));
-    assert!(reload.contains("data: "));
+    read_until_contains(&mut events, "event: reload\ndata: ", Duration::from_secs(5));
 
     let edited = http_get(port, "/home");
     edited.assert_body_contains("Edited content marker: v1-edited");
