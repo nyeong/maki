@@ -313,12 +313,7 @@ impl<'a> Renderer<'a> {
         match block {
             BlockKind::Paragraph { body } => {
                 self.html.push_str("<p>");
-                for (index, inline) in body.iter().enumerate() {
-                    if index > 0 {
-                        self.html.push('\n');
-                    }
-                    self.render_inline(inline);
-                }
+                self.render_inlines(body);
                 self.html.push_str("</p>");
             }
             BlockKind::Code { lines, lang } => self.render_code(lines, *lang),
@@ -327,6 +322,7 @@ impl<'a> Renderer<'a> {
                 self.render_heading(level + 1, body);
             }
             BlockKind::List { items } => self.render_list(items),
+            BlockKind::Quote { lines } => self.render_quote(lines),
             BlockKind::Container { kind, args, lines } => self.render_container(kind, args, lines),
         }
     }
@@ -677,6 +673,22 @@ quote body
                 "<blockquote><h2 id=\"Quoted\">Quoted</h2><p>quote body</p></blockquote>"
             )
         );
+    }
+
+    #[test]
+    fn quote_line_renders_inner_maki_blocks() {
+        let parsed = parser::parse(
+            r#"> = Quoted
+>
+> Body with `code`
+> - item
+> > nested"#,
+        );
+
+        let html = render_document(&parsed.document);
+        let expected = "<blockquote><h2 id=\"Quoted\">Quoted</h2><p>Body with <code>code</code></p><ul><li>item</li></ul><blockquote><p>nested</p></blockquote></blockquote>";
+
+        assert!(html.contains(expected));
     }
 
     #[test]

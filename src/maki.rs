@@ -863,7 +863,28 @@ fn collect_block_link_diagnostics(
                 }
             }
         }
+        BlockKind::Quote { lines } => {
+            collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)
+        }
+        BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
+            collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)
+        }
         BlockKind::Code { .. } | BlockKind::Heading { .. } | BlockKind::Container { .. } => {}
+    }
+}
+
+fn collect_maki_lines_link_diagnostics(
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+    maki: &Maki,
+    current: &NoteRef,
+    source_path: &Path,
+    lines: &[&str],
+) {
+    let source = lines.join("\n");
+    let parsed = parser::parse(&source);
+
+    for block in &parsed.document.blocks {
+        collect_block_link_diagnostics(diagnostics, maki, current, source_path, &block.kind);
     }
 }
 
@@ -1344,7 +1365,15 @@ mod tests {
         write_note_with_content(
             &project,
             "start.maki",
-            "--^ invalid-property\n\nSee [[missing]], [Ghost](ghost), and [[same]].",
+            r#"--^ invalid-property
+
+See [[missing]], [Ghost](ghost), and [[same]].
+
+> See [[quoted-missing]].
+
+--- quote
+See [[container-missing]].
+---"#,
         );
         write_note(&project, "alpha/same.maki");
         write_note(&project, "beta/same.maki");
@@ -1371,6 +1400,20 @@ mod tests {
                 diagnostic.kind(),
                 ProjectDiagnosticKind::BrokenLink { target }
                     if target == "ghost"
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target }
+                    if target == "quoted-missing"
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target }
+                    if target == "container-missing"
             )
         }));
         assert!(diagnostics.iter().any(|diagnostic| {

@@ -191,6 +191,16 @@ Maki의 기본 단위.
 : <raw text>
 : ---
 
+=== Quote Block
+
+: > <maki line>
+: > > <nested quote>
+: > - <list item>
+
+- Cluster.
+- `>` 또는 `> ` prefix를 제거한 뒤 body를 다시 Maki block으로 파싱함.
+- 따라서 quote 안에서 heading, list, link, code, nested quote 등을 사용할 수 있음.
+
 
 --v milestone: v0
 === Heading

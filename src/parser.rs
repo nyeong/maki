@@ -349,6 +349,12 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             },
             props,
         },
+        BlockDraft::Quote { raw_lines } => Block {
+            kind: BlockKind::Quote {
+                lines: raw_lines.clone(),
+            },
+            props,
+        },
         BlockDraft::List { .. } => build_list_block(draft, props).unwrap(),
         BlockDraft::Tbd { items } => Block {
             kind: BlockKind::Code {
@@ -420,6 +426,9 @@ pub(crate) enum BlockKind<'a> {
     List {
         items: Vec<ListItem<'a>>,
     },
+    Quote {
+        lines: Vec<&'a str>,
+    },
     Container {
         kind: &'a str,
         args: Vec<&'a str>,
@@ -455,6 +464,7 @@ enum LinePrefix {
     Hyphen,           // -
     HyphenFence(usize),
     Colon,
+    Quote,
     NumberDot(usize), // 1.
     None,
 }
@@ -479,6 +489,7 @@ const EN_CARET: &str = "--^ ";
 const EN_V: &str = "--v ";
 const HYPHEN: &str = "- ";
 const COLON: char = ':';
+const QUOTE: char = '>';
 const EQUALS: char = '=';
 const HYPHEN_FENCE_MIN_LEN: usize = 3;
 
@@ -518,6 +529,9 @@ fn scan_line_prefix(raw_text: &str) -> LinePrefix {
     }
     if raw_text == ":" || raw_text.starts_with(": ") {
         return LinePrefix::Colon;
+    }
+    if raw_text == ">" || raw_text.starts_with("> ") {
+        return LinePrefix::Quote;
     }
     if raw_text.starts_with(HYPHEN) {
         return LinePrefix::Hyphen;
@@ -608,6 +622,11 @@ enum BlockDraft<'a> {
         raw_lines: Vec<&'a str>,
     },
 
+    /// > prefixed
+    Quote {
+        raw_lines: Vec<&'a str>,
+    },
+
     List {
         items: Vec<ListItemDraft<'a>>,
     },
@@ -643,6 +662,7 @@ impl LinePrefix {
             LinePrefix::Hyphen => HYPHEN.len(),
             LinePrefix::HyphenFence(len) => *len,
             LinePrefix::Colon => COLON.len_utf8(),
+            LinePrefix::Quote => QUOTE.len_utf8(),
             LinePrefix::NumberDot(num) => num / 10 + 1,
             LinePrefix::None => 0,
         }
@@ -669,7 +689,7 @@ impl<'a> LineToken<'a> {
                 let body = &content[kind.width()..];
 
                 match kind {
-                    LinePrefix::Colon | LinePrefix::HyphenFence(_) => {
+                    LinePrefix::Colon | LinePrefix::Quote | LinePrefix::HyphenFence(_) => {
                         Some(body.strip_prefix(' ').unwrap_or(body))
                     }
                     _ => Some(body),
@@ -687,7 +707,9 @@ fn starts_block_after_paragraph(line: &LineToken<'_>) -> bool {
     match kind {
         LinePrefix::EnCaret | LinePrefix::EnV => true,
         LinePrefix::EqualsRun(level) => (1..=6).contains(level),
-        LinePrefix::Hyphen | LinePrefix::NumberDot(_) | LinePrefix::Colon => *indent == 0,
+        LinePrefix::Hyphen | LinePrefix::NumberDot(_) | LinePrefix::Colon | LinePrefix::Quote => {
+            *indent == 0
+        }
         LinePrefix::HyphenFence(_) => {
             *indent == 0 && line.body().is_some_and(|body| !body.trim().is_empty())
         }
@@ -768,14 +790,14 @@ fn is_closing_fence(line: &LineToken<'_>, len: usize) -> bool {
     )
 }
 
-fn is_root_colon_line(line: &LineToken<'_>) -> bool {
+fn is_root_line_with_prefix(line: &LineToken<'_>, expected: LinePrefix) -> bool {
     matches!(
         line,
         LineToken::Line {
             indent: 0,
-            kind: LinePrefix::Colon,
+            kind,
             ..
-        }
+        } if *kind == expected
     )
 }
 
@@ -965,18 +987,39 @@ fn parse_tbd_draft<'a>(
     Some(BlockDraft::Tbd { items })
 }
 
-fn parse_code_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
-    if !cursor.peek().is_some_and(is_root_colon_line) {
+fn parse_root_prefixed_body_lines<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    prefix: LinePrefix,
+) -> Option<Vec<&'a str>> {
+    if !cursor
+        .peek()
+        .is_some_and(|line| is_root_line_with_prefix(line, prefix))
+    {
         return None;
     };
 
     let mut raw_lines = vec![];
 
-    while cursor.peek().is_some_and(is_root_colon_line) {
+    while cursor
+        .peek()
+        .is_some_and(|line| is_root_line_with_prefix(line, prefix))
+    {
         raw_lines.push(cursor.next()?.body()?);
     }
 
-    Some(BlockDraft::Code { raw_lines })
+    Some(raw_lines)
+}
+
+fn parse_code_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+    Some(BlockDraft::Code {
+        raw_lines: parse_root_prefixed_body_lines(cursor, LinePrefix::Colon)?,
+    })
+}
+
+fn parse_quote_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+    Some(BlockDraft::Quote {
+        raw_lines: parse_root_prefixed_body_lines(cursor, LinePrefix::Quote)?,
+    })
 }
 
 fn build_drafts<'a>(
@@ -990,6 +1033,8 @@ fn build_drafts<'a>(
         if let Some(draft) = parse_container_draft(&mut cursor, diagnostics) {
             drafts.push(draft);
         } else if let Some(draft) = parse_code_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_quote_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_property_draft(&mut cursor, diagnostics) {
             drafts.push(draft);
@@ -1238,6 +1283,29 @@ plain text"#;
 
         assert!(parsed.diagnostics.is_empty());
         assert_eq!(parsed.document.title(), Some("Maki"));
+    }
+
+    #[test]
+    fn parse_quote_lines_strip_prefix_for_inner_maki() {
+        let parsed = parse(
+            r#"> = Quoted
+>
+> Body with `code`
+> - item
+> > nested"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 1);
+
+        let BlockKind::Quote { lines } = &parsed.document.blocks[0].kind else {
+            panic!("expected a quote block");
+        };
+
+        assert_eq!(
+            lines,
+            &vec!["= Quoted", "", "Body with `code`", "- item", "> nested"]
+        );
     }
 
     #[test]
