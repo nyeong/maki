@@ -175,11 +175,17 @@
             buildInputs = enabledPackages;
             packages = with pkgs; [
               cargo
+              cargo-llvm-cov
               clippy
               rust-analyzer
               rustc
               rustfmt
-              cargo-llvm-cov
+
+              eslint
+              nodejs
+              prettier
+              typescript
+              typescript-language-server
             ];
 
             LLVM_COV = "${pkgs.llvmPackages.llvm}/bin/llvm-cov";
