@@ -41,6 +41,26 @@ body {
   overflow-wrap: anywhere;
 }
 
+.maki-nav {
+  margin: -1.25rem 0 2rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.maki-home-link {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.maki-home-link:visited {
+  color: var(--muted);
+}
+
+.maki-home-link:hover {
+  color: var(--link);
+  text-decoration: underline;
+}
+
 h1,
 h2,
 h3,
@@ -210,5 +230,9 @@ th {
 
   body {
     padding: 32px 16px 56px;
+  }
+
+  .maki-nav {
+    margin-top: -0.5rem;
   }
 }
