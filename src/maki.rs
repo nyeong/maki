@@ -104,6 +104,7 @@ pub(crate) struct Maki {
     root: PathBuf,                  // canonical absolute path
     notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     index: NoteIndex,
+    search_entries: Vec<SearchEntry>,
     config: MakiConfig,
 }
 
@@ -114,6 +115,27 @@ pub(crate) struct Note {
 
     /// 프로젝트 root 기준 상대경로
     project_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchEntry {
+    title: String,
+    path: String,
+    source_path: String,
+}
+
+impl SearchEntry {
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) fn source_path(&self) -> &str {
+        &self.source_path
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -464,6 +486,14 @@ impl Note {
             .to_string()
     }
 
+    fn search_entry(&self) -> SearchEntry {
+        SearchEntry {
+            title: self.title(),
+            path: self.note_ref().web_path(),
+            source_path: self.source_path().display().to_string(),
+        }
+    }
+
     pub(crate) fn note_ref(&self) -> NoteRef {
         NoteRef::new(self.canonical_path())
     }
@@ -583,6 +613,22 @@ fn normalize_key(key: &str) -> String {
     key.to_lowercase()
 }
 
+fn search_match_rank(title: &str, query: &str) -> Option<(usize, usize, usize)> {
+    let normalized_title = normalize_key(title);
+
+    if normalized_title == query {
+        return Some((0, 0, title.len()));
+    }
+
+    if normalized_title.starts_with(query) {
+        return Some((1, 0, title.len()));
+    }
+
+    normalized_title
+        .find(query)
+        .map(|index| (2, index, title.len()))
+}
+
 fn resolve_candidates(candidates: Option<&Vec<NoteRef>>) -> Option<NoteLinkResolution> {
     let candidates = candidates?;
 
@@ -678,6 +724,37 @@ impl Maki {
         self.notes.len()
     }
 
+    pub(crate) fn search_entries(&self) -> &[SearchEntry] {
+        &self.search_entries
+    }
+
+    pub(crate) fn search_titles(&self, query: &str, limit: usize) -> Vec<SearchEntry> {
+        let query = normalize_key(query.trim());
+
+        if query.is_empty() {
+            return self.search_entries.iter().take(limit).cloned().collect();
+        }
+
+        let mut matches = self
+            .search_entries
+            .iter()
+            .filter_map(|entry| search_match_rank(entry.title(), &query).map(|rank| (rank, entry)))
+            .collect::<Vec<_>>();
+
+        matches.sort_by(|(left_rank, left), (right_rank, right)| {
+            left_rank
+                .cmp(right_rank)
+                .then_with(|| left.title().cmp(right.title()))
+                .then_with(|| left.path().cmp(right.path()))
+        });
+
+        matches
+            .into_iter()
+            .take(limit)
+            .map(|(_rank, entry)| entry.clone())
+            .collect()
+    }
+
     pub(crate) fn load_with_config(root: &Path, config: MakiConfig) -> Result<Self, Error> {
         if !root.exists() {
             return Err(Error::RootNotFound(root.to_path_buf()));
@@ -698,11 +775,13 @@ impl Maki {
             notes.insert(note.note_ref(), note);
         }
         let index = NoteIndex::build(notes.keys());
+        let search_entries = notes.values().map(Note::search_entry).collect();
 
         Ok(Self {
             root,
             notes,
             index,
+            search_entries,
             config,
         })
     }
@@ -810,12 +889,16 @@ mod tests {
         TestProject { root }
     }
 
-    fn write_note(project: &TestProject, path: &str) {
+    fn write_note_with_content(project: &TestProject, path: &str, content: &str) {
         let path = project.root.join(path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(path, "").unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn write_note(project: &TestProject, path: &str) {
+        write_note_with_content(project, path, "");
     }
 
     #[test]
@@ -926,5 +1009,42 @@ mod tests {
             maki.resolve_note_link(&NoteRef::new("notes/page"), "nix"),
             NoteLinkResolution::Found(NoteRef::new("nix"))
         );
+    }
+
+    #[test]
+    fn search_entries_use_title_property_or_file_stem() {
+        let project = temp_project("search-entry-title");
+        write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
+        write_note_with_content(&project, "beta-note.maki", "body");
+
+        let maki = Maki::load(&project.root).unwrap();
+
+        assert!(maki.search_entries().iter().any(|entry| {
+            entry.title() == "Alpha Note"
+                && entry.path() == "/alpha"
+                && entry.source_path() == "alpha.maki"
+        }));
+        assert!(maki.search_entries().iter().any(|entry| {
+            entry.title() == "beta-note"
+                && entry.path() == "/beta-note"
+                && entry.source_path() == "beta-note.maki"
+        }));
+    }
+
+    #[test]
+    fn search_titles_matches_case_insensitive_title_substrings() {
+        let project = temp_project("search-title-match");
+        write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
+        write_note_with_content(&project, "beta.maki", "--^ title: Beta Note\n\nbody");
+        write_note_with_content(&project, "gamma.maki", "--^ title: Gamma\n\nbody");
+
+        let maki = Maki::load(&project.root).unwrap();
+        let titles = maki
+            .search_titles("NOTE", 10)
+            .iter()
+            .map(|entry| entry.title().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(titles, vec!["Beta Note", "Alpha Note"]);
     }
 }

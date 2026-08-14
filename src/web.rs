@@ -16,6 +16,7 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,9 @@ use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
 const LIVE_RELOAD_PATH: &str = "/.maki/events";
+const SEARCH_INDEX_PATH: &str = "/.maki/search-index.json";
+const SEARCH_PATH: &str = "/.maki/search";
+const SEARCH_PAGE_RESULT_LIMIT: usize = 50;
 const MAX_SSE_CLIENTS: usize = 16;
 const FILE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -282,13 +286,90 @@ fn inject_live_reload_script(mut html: String, token: &str) -> String {
     html
 }
 
-fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Response, Error> {
-    let target = percent_decode_str(request.target())
+struct RequestTarget<'a> {
+    path: String,
+    query: Option<&'a str>,
+}
+
+fn parse_request_target(target: &str) -> Result<RequestTarget<'_>, Error> {
+    let (raw_path, query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    let path = percent_decode_str(raw_path)
         .decode_utf8()
         .map_err(|_e| Error::BadRequest)?
         .to_string();
 
-    if PathBuf::from(&target)
+    Ok(RequestTarget { path, query })
+}
+
+fn decode_query_component(raw: &str) -> Result<String, Error> {
+    percent_decode_str(&raw.replace('+', " "))
+        .decode_utf8()
+        .map(|decoded| decoded.to_string())
+        .map_err(|_e| Error::BadRequest)
+}
+
+fn query_param(query: Option<&str>, name: &str) -> Result<Option<String>, Error> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+
+    for part in query.split('&') {
+        let (raw_key, raw_value) = part.split_once('=').unwrap_or((part, ""));
+        if decode_query_component(raw_key)? == name {
+            return Ok(Some(decode_query_component(raw_value)?));
+        }
+    }
+
+    Ok(None)
+}
+
+fn escape_json_string(input: &str) -> String {
+    let mut output = String::new();
+
+    for ch in input.chars() {
+        match ch {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if ch <= '\u{1f}' => {
+                let _ = write!(output, "\\u{:04x}", ch as u32);
+            }
+            _ => output.push(ch),
+        }
+    }
+
+    output
+}
+
+fn search_index_json(entries: &[maki::SearchEntry]) -> String {
+    let mut json = String::from("[");
+
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+
+        json.push_str("{\"title\":\"");
+        json.push_str(&escape_json_string(entry.title()));
+        json.push_str("\",\"path\":\"");
+        json.push_str(&escape_json_string(entry.path()));
+        json.push_str("\",\"source_path\":\"");
+        json.push_str(&escape_json_string(entry.source_path()));
+        json.push_str("\"}");
+    }
+
+    json.push(']');
+    json
+}
+
+fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Response, Error> {
+    let target = parse_request_target(request.target())?;
+
+    if PathBuf::from(&target.path)
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
@@ -299,7 +380,22 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         source: maki::Error::ReadDirectoryFailed(state.root.clone()),
     })?;
 
-    match maki.resolve_route(&target) {
+    if target.path == SEARCH_INDEX_PATH {
+        return Ok(http::Response::new(http::StatusCode::Ok)
+            .set_header("Content-Type", "application/json; charset=utf-8")
+            .set_body(search_index_json(maki.search_entries())));
+    }
+
+    if target.path == SEARCH_PATH {
+        let query = query_param(target.query, "q")?.unwrap_or_default();
+        let results = maki.search_titles(&query, SEARCH_PAGE_RESULT_LIMIT);
+        let html = crate::html::render_search_page(&query, &results, maki.search_entries().len());
+        return Ok(http::Response::new(http::StatusCode::Ok)
+            .set_header("Content-Type", "text/html; charset=utf-8")
+            .set_body(inject_live_reload_script(html, &state.live_reload.token())));
+    }
+
+    match maki.resolve_route(&target.path) {
         Ok(MakiRoute::NotePage(path)) => {
             let html = maki.render_html(&path)?;
             Ok(http::Response::new(http::StatusCode::Ok)
@@ -588,6 +684,7 @@ pub(crate) fn serve(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -653,6 +750,55 @@ mod tests {
         let body = String::from_utf8(response.body().to_vec()).unwrap();
 
         assert!(!body.contains("new EventSource(\"/.maki/events\")"));
+    }
+
+    #[test]
+    fn test_search_index_returns_note_titles() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/.maki/search-index.json");
+
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        assert_eq!(
+            response.get_header("Content-Type"),
+            Some("application/json; charset=utf-8")
+        );
+        assert!(body.contains("\"title\":\"Maki Syntax\""));
+        assert!(body.contains("\"path\":\"/maki-syntax\""));
+    }
+
+    #[test]
+    fn test_search_page_returns_matching_titles() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/.maki/search?q=syntax");
+
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        assert!(body.contains("<title>Search</title>"));
+        assert!(body.contains("<a href=\"/maki-syntax\">Maki Syntax</a>"));
+        assert!(body.contains("new EventSource(\"/.maki/events\")"));
+    }
+
+    #[test]
+    fn test_search_index_escapes_json_strings() {
+        let root = std::env::temp_dir().join(format!("maki-search-json-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("quote.maki"), "--^ title: Quote \"Note\"\n").unwrap();
+
+        let maki = Maki::load(&root).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/.maki/search-index.json");
+
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        fs::remove_dir_all(root).unwrap();
+        assert!(body.contains("Quote \\\"Note\\\""));
     }
 
     #[test]
