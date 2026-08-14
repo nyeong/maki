@@ -2,7 +2,7 @@
 --^ hidden: should-not-render-property
 
 This fixture captures the v0 PoC contract: parse a small project,
-serve rendered pages, preserve unsupported text, and resolve note links.
+serve rendered pages, preserve list structure, and resolve note links.
 
 = Links
 
@@ -16,10 +16,10 @@ Go to [[daily]], [[nested/홈랩]], [[ghost]], [[ambiguous]].
   - sibling
 - second top
 
-= Unsupported Fallback
+= Ordered List
 
-1. unsupported numbered fallback
-2. preserve this raw shape
+1. supported ordered list
+2. preserve this ordered shape
 
 = Code
 

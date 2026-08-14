@@ -281,10 +281,8 @@ fn maki_build_reports_parser_warnings_to_stderr() {
         "warning: {}:1: invalid property: --^ invalid-property",
         file.display()
     )));
-    assert!(stderr.contains(&format!(
-        "warning: {}:6: unsupported numbered block rendered as fallback: 1. fallback",
-        file.display()
-    )));
+    assert!(stdout.contains("<ol><li>fallback</li></ol>"));
+    assert!(!stderr.contains("unsupported numbered block"));
 }
 
 #[test]
@@ -383,7 +381,7 @@ fn v0_fixture_serves_core_poc_behavior() {
         "<ul><li>top<ul><li>child<ul><li>grandchild</li></ul></li><li>sibling</li></ul></li><li>second top</li></ul>"
     );
     page.assert_body_contains(
-        "<pre><code class=\"language-maki\">1. unsupported numbered fallback\n2. preserve this raw shape</code></pre>"
+        "<ol><li>supported ordered list</li><li>preserve this ordered shape</li></ol>",
     );
     page.assert_body_contains(
         "<pre><code class=\"language-html\">&lt;main&gt;\n  fixture code\n&lt;/main&gt;</code></pre>"

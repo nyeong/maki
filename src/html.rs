@@ -6,7 +6,7 @@ use crate::{
     maki::{
         self, NoteLinkResolution, NoteRef, ProjectDiagnostic, ProjectDiagnosticSummary, SearchEntry,
     },
-    parser::{self, BlockKind, Document, Inline, ListItem},
+    parser::{self, BlockKind, Document, Inline, ListItem, ListKind},
 };
 
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
@@ -328,7 +328,14 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_list(&mut self, items: &[ListItem<'_>]) {
-        self.html.push_str("<ul>");
+        let tag = match items.first().map(|item| item.kind) {
+            Some(ListKind::Ordered) => "ol",
+            Some(ListKind::Unordered) | None => "ul",
+        };
+
+        self.html.push('<');
+        self.html.push_str(tag);
+        self.html.push('>');
         for item in items {
             self.html.push_str("<li>");
             self.render_inlines(&item.body);
@@ -339,7 +346,9 @@ impl<'a> Renderer<'a> {
             }
             self.html.push_str("</li>");
         }
-        self.html.push_str("</ul>");
+        self.html.push_str("</");
+        self.html.push_str(tag);
+        self.html.push('>');
     }
 
     fn render_heading(&mut self, level: usize, body: &str) {
@@ -593,7 +602,10 @@ hello <maki> & friends
 : </main>
 
 - one
-- two"#,
+- two
+
+1. first
+2. second"#,
         );
 
         let html = render_document(&parsed.document);
@@ -605,6 +617,22 @@ hello <maki> & friends
             "<pre><code class=\"language-html\">&lt;main&gt;\n&lt;/main&gt;</code></pre>"
         ));
         assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
+        assert!(html.contains("<ol><li>first</li><li>second</li></ol>"));
+    }
+
+    #[test]
+    fn render_ordered_list_with_child_paragraph() {
+        let parsed = parser::parse(
+            r#"1. Glider 활용 증진
+
+   현재 Glider의 CloudData를 더 넓게 활용합니다."#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains(
+            "<ol><li>Glider 활용 증진<p>현재 Glider의 CloudData를 더 넓게 활용합니다.</p></li></ol>"
+        ));
     }
 
     #[test]
@@ -711,7 +739,7 @@ quote body
     }
 
     #[test]
-    fn test_render_tbd_as_preformatted_text() {
+    fn test_render_ordered_list() {
         let parsed = parser::parse(
             r#"1. 블록에 property를 붙일 수 있음
 2. 쿼리를 통해 검색할 수 있음
@@ -720,8 +748,6 @@ quote body
 
         let html = render_document(&parsed.document);
 
-        assert!(html.contains(
-            "<pre><code class=\"language-maki\">1. 블록에 property를 붙일 수 있음\n2. 쿼리를 통해 검색할 수 있음\n3. 컴파일, 서빙을 통해 다른 포맷이나 서비스에 붙일 수 있음</code></pre>"
-        ));
+        assert!(html.contains("<ol><li>블록에 property를 붙일 수 있음</li><li>쿼리를 통해 검색할 수 있음</li><li>컴파일, 서빙을 통해 다른 포맷이나 서비스에 붙일 수 있음</li></ol>"));
     }
 }

@@ -35,7 +35,6 @@ pub(crate) struct ParseDiagnostic<'a> {
 pub(crate) enum ParseDiagnosticKind<'a> {
     InvalidProperty { raw_line: &'a str },
     UnclosedContainer { raw_line: &'a str },
-    UnsupportedNumberedBlock { raw_line: &'a str },
 }
 
 #[derive(Debug, PartialEq)]
@@ -192,10 +191,39 @@ pub(crate) fn format_parse_diagnostic_kind(kind: &ParseDiagnosticKind<'_>) -> St
         ParseDiagnosticKind::UnclosedContainer { raw_line } => {
             format!("unclosed container block: {raw_line}")
         }
-        ParseDiagnosticKind::UnsupportedNumberedBlock { raw_line } => {
-            format!("unsupported numbered block rendered as fallback: {raw_line}")
+    }
+}
+
+fn build_blocks<'a>(drafts: &[BlockDraft<'a>]) -> Vec<Block<'a>> {
+    let mut blocks: Vec<Block> = vec![];
+    let mut pending_props = Properties::new();
+
+    for draft in drafts {
+        match draft {
+            BlockDraft::Property {
+                kind: PropertyKind::Previous,
+                items,
+                ..
+            } => {
+                if let Some(block) = blocks.last_mut() {
+                    block.props.extend(items)
+                }
+            }
+            BlockDraft::Property {
+                kind: PropertyKind::Next,
+                items,
+                ..
+            } => {
+                pending_props.extend(items);
+            }
+            draft => {
+                let block = build_block(draft, std::mem::take(&mut pending_props));
+                blocks.push(block);
+            }
         }
     }
+
+    blocks
 }
 
 fn build_documents<'a>(drafts: &[BlockDraft<'a>]) -> Document<'a> {
@@ -240,65 +268,12 @@ fn build_list_item<'a>(draft: &ListItemDraft<'a>) -> ListItem<'a> {
     ListItem {
         body: parse_inline(draft.body),
         kind: draft.kind,
-        children: vec![],
+        children: build_blocks(&draft.children),
     }
-}
-
-fn build_list_items_at<'a>(
-    items: &[ListItemDraft<'a>],
-    index: &mut usize,
-    indent: usize,
-) -> Vec<ListItem<'a>> {
-    let mut result: Vec<ListItem<'a>> = vec![];
-
-    while let Some(draft) = items.get(*index) {
-        match draft.indent.cmp(&indent) {
-            std::cmp::Ordering::Less => break,
-            std::cmp::Ordering::Greater => {
-                let Some(last) = result.last_mut() else {
-                    break;
-                };
-                let child_indent = draft.indent;
-                let child_items = build_list_items_at(items, index, child_indent);
-
-                last.children.push(Block {
-                    kind: BlockKind::List { items: child_items },
-                    props: Properties::default(),
-                });
-
-                continue;
-            }
-            std::cmp::Ordering::Equal => {
-                let mut item = build_list_item(draft);
-                *index += 1;
-                while let Some(next) = items.get(*index) {
-                    if next.indent <= indent {
-                        break;
-                    }
-
-                    let child_indent = next.indent;
-                    let child_items = build_list_items_at(items, index, child_indent);
-
-                    item.children.push(Block {
-                        kind: BlockKind::List { items: child_items },
-                        props: Properties::default(),
-                    });
-                }
-
-                result.push(item);
-            }
-        }
-    }
-    result
 }
 
 fn build_list_items<'a>(items: &[ListItemDraft<'a>]) -> Vec<ListItem<'a>> {
-    if items.is_empty() {
-        vec![]
-    } else {
-        let mut index = 0;
-        build_list_items_at(items, &mut index, items[0].indent)
-    }
+    items.iter().map(build_list_item).collect()
 }
 
 fn build_list_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Option<Block<'a>> {
@@ -356,13 +331,6 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             props,
         },
         BlockDraft::List { .. } => build_list_block(draft, props).unwrap(),
-        BlockDraft::Tbd { items } => Block {
-            kind: BlockKind::Code {
-                lines: items.clone(),
-                lang: Some("maki"),
-            },
-            props,
-        },
     }
 }
 
@@ -439,7 +407,7 @@ pub(crate) enum BlockKind<'a> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct ListItem<'a> {
     pub(crate) body: Vec<Inline<'a>>,
-    kind: ListKind,
+    pub(crate) kind: ListKind,
     pub(crate) children: Vec<Block<'a>>, // List를 포함하기 위함
 }
 
@@ -465,7 +433,7 @@ enum LinePrefix {
     HyphenFence(usize),
     Colon,
     Quote,
-    NumberDot(usize), // 1.
+    NumberDot { width: usize }, // 1.
     None,
 }
 
@@ -500,7 +468,7 @@ fn parse_number_dot_prefix(source: &str) -> Option<usize> {
         return None;
     }
 
-    digits.parse().ok()
+    Some(digits.len() + ". ".len())
 }
 
 fn parse_hyphen_fence_prefix(source: &str) -> Option<usize> {
@@ -521,8 +489,8 @@ fn scan_line_prefix(raw_text: &str) -> LinePrefix {
     if raw_text.starts_with(EN_V) {
         return LinePrefix::EnV;
     }
-    if let Some(n) = parse_number_dot_prefix(raw_text) {
-        return LinePrefix::NumberDot(n);
+    if let Some(width) = parse_number_dot_prefix(raw_text) {
+        return LinePrefix::NumberDot { width };
     }
     if let Some(len) = parse_hyphen_fence_prefix(raw_text) {
         return LinePrefix::HyphenFence(len);
@@ -567,7 +535,7 @@ fn scan_lines(source: &str) -> Vec<LineToken<'_>> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ListKind {
     Unordered,
-    // Ordered
+    Ordered,
 }
 
 #[derive(Debug, PartialEq)]
@@ -630,10 +598,6 @@ enum BlockDraft<'a> {
     List {
         items: Vec<ListItemDraft<'a>>,
     },
-
-    Tbd {
-        items: Vec<&'a str>,
-    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -641,6 +605,7 @@ struct ListItemDraft<'a> {
     kind: ListKind,
     indent: usize,
     body: &'a str,
+    children: Vec<BlockDraft<'a>>,
 }
 
 impl LinePrefix {
@@ -663,7 +628,7 @@ impl LinePrefix {
             LinePrefix::HyphenFence(len) => *len,
             LinePrefix::Colon => COLON.len_utf8(),
             LinePrefix::Quote => QUOTE.len_utf8(),
-            LinePrefix::NumberDot(num) => num / 10 + 1,
+            LinePrefix::NumberDot { width, .. } => *width,
             LinePrefix::None => 0,
         }
     }
@@ -707,9 +672,10 @@ fn starts_block_after_paragraph(line: &LineToken<'_>) -> bool {
     match kind {
         LinePrefix::EnCaret | LinePrefix::EnV => true,
         LinePrefix::EqualsRun(level) => (1..=6).contains(level),
-        LinePrefix::Hyphen | LinePrefix::NumberDot(_) | LinePrefix::Colon | LinePrefix::Quote => {
-            *indent == 0
-        }
+        LinePrefix::Hyphen
+        | LinePrefix::NumberDot { .. }
+        | LinePrefix::Colon
+        | LinePrefix::Quote => *indent == 0,
         LinePrefix::HyphenFence(_) => {
             *indent == 0 && line.body().is_some_and(|body| !body.trim().is_empty())
         }
@@ -735,6 +701,16 @@ impl<'tokens, 'src> LineCursor<'tokens, 'src> {
         self.lines.get(self.pos)
     }
 
+    fn peek_after_leading_blanks(&self) -> Option<(usize, &LineToken<'src>)> {
+        let mut index = self.pos;
+
+        while matches!(self.lines.get(index), Some(LineToken::Blank { .. })) {
+            index += 1;
+        }
+
+        self.lines.get(index).map(|line| (index, line))
+    }
+
     fn line_number(&self) -> usize {
         self.pos + 1
     }
@@ -751,6 +727,12 @@ impl<'tokens, 'src> LineCursor<'tokens, 'src> {
             true
         } else {
             false
+        }
+    }
+
+    fn consume_blanks_before(&mut self, index: usize) {
+        while self.pos < index && matches!(self.peek(), Some(LineToken::Blank { .. })) {
+            self.next();
         }
     }
 }
@@ -911,80 +893,129 @@ fn parse_heading_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft
     Some(BlockDraft::Heading { level, body })
 }
 
-fn parse_list_item_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<ListItemDraft<'a>> {
-    let line = cursor.peek()?;
+fn list_marker(line: &LineToken<'_>) -> Option<(ListKind, usize, usize)> {
     let LineToken::Line {
         indent,
-        kind: LinePrefix::Hyphen,
+        kind: line_kind,
         ..
     } = line
     else {
         return None;
     };
-    let indent = *indent;
+    let kind = match line_kind {
+        LinePrefix::Hyphen => ListKind::Unordered,
+        LinePrefix::NumberDot { .. } => ListKind::Ordered,
+        _ => return None,
+    };
+
+    Some((kind, *indent, *indent + line_kind.width()))
+}
+
+fn is_list_marker_at(line: &LineToken<'_>, indent: usize, kind: ListKind) -> bool {
+    list_marker(line)
+        .is_some_and(|(line_kind, line_indent, _)| line_indent == indent && line_kind == kind)
+}
+
+fn line_is_indented_at_least(line: &LineToken<'_>, indent: usize) -> bool {
+    matches!(line, LineToken::Line { indent: line_indent, .. } if *line_indent >= indent)
+}
+
+fn strip_line_indent<'a>(line: &LineToken<'a>, indent: usize) -> LineToken<'a> {
+    match line {
+        LineToken::Blank { .. } => LineToken::Blank { raw_line: "" },
+        LineToken::Line {
+            raw_line,
+            indent: line_indent,
+            ..
+        } => {
+            debug_assert!(*line_indent >= indent);
+            scan_line(&raw_line[indent..])
+        }
+    }
+}
+
+fn parse_list_item_child_drafts<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    content_indent: usize,
+) -> Vec<BlockDraft<'a>> {
+    let mut child_lines = vec![];
+
+    while let Some((next_index, next_line)) = cursor.peek_after_leading_blanks() {
+        if !line_is_indented_at_least(next_line, content_indent) {
+            break;
+        }
+
+        while cursor.pos < next_index {
+            cursor.next();
+            if !child_lines.is_empty() {
+                child_lines.push(LineToken::Blank { raw_line: "" });
+            }
+        }
+
+        while let Some(line) = cursor.peek() {
+            if matches!(line, LineToken::Blank { .. })
+                || !line_is_indented_at_least(line, content_indent)
+            {
+                break;
+            }
+
+            let line = cursor
+                .next()
+                .expect("peeked list child line should be available");
+            child_lines.push(strip_line_indent(line, content_indent));
+        }
+    }
+
+    let mut diagnostics = vec![];
+    build_drafts(&child_lines, &mut diagnostics)
+}
+
+fn parse_list_item_draft<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+) -> Option<(ListItemDraft<'a>, usize)> {
+    let line = cursor.peek()?;
+    let (kind, indent, content_indent) = list_marker(line)?;
     let body = line.body()?;
 
     cursor.next();
 
-    Some(ListItemDraft {
-        kind: ListKind::Unordered,
-        indent,
-        body,
-    })
+    Some((
+        ListItemDraft {
+            kind,
+            indent,
+            body,
+            children: vec![],
+        },
+        content_indent,
+    ))
 }
 
 fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
-    let LineToken::Line {
-        indent: 0,
-        kind: LinePrefix::Hyphen,
-        ..
-    } = cursor.peek()?
-    else {
+    let (list_kind, list_indent, _) = list_marker(cursor.peek()?)?;
+
+    if list_indent != 0 {
         return None;
-    };
+    }
 
     let mut items = vec![];
 
-    while let Some(line) = parse_list_item_draft(cursor) {
-        items.push(line);
+    while cursor
+        .peek()
+        .is_some_and(|line| is_list_marker_at(line, list_indent, list_kind))
+    {
+        let (mut item, content_indent) = parse_list_item_draft(cursor)?;
+        item.children = parse_list_item_child_drafts(cursor, content_indent);
+        items.push(item);
+
+        if list_kind == ListKind::Ordered
+            && let Some((next_index, next_line)) = cursor.peek_after_leading_blanks()
+            && is_list_marker_at(next_line, list_indent, list_kind)
+        {
+            cursor.consume_blanks_before(next_index);
+        }
     }
 
     Some(BlockDraft::List { items })
-}
-
-fn parse_tbd_draft<'a>(
-    cursor: &mut LineCursor<'_, 'a>,
-    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
-) -> Option<BlockDraft<'a>> {
-    if !matches!(
-        cursor.peek(),
-        Some(LineToken::Line {
-            indent: 0,
-            kind: LinePrefix::NumberDot(_),
-            ..
-        })
-    ) {
-        return None;
-    }
-
-    let mut items = vec![];
-    diagnostics.push(ParseDiagnostic {
-        line: cursor.line_number(),
-        kind: ParseDiagnosticKind::UnsupportedNumberedBlock {
-            raw_line: cursor.peek()?.raw_line(),
-        },
-    });
-
-    while let Some(LineToken::Line {
-        indent: 0,
-        kind: LinePrefix::NumberDot(_),
-        ..
-    }) = cursor.peek()
-    {
-        items.push(cursor.next()?.raw_line());
-    }
-
-    Some(BlockDraft::Tbd { items })
 }
 
 fn parse_root_prefixed_body_lines<'a>(
@@ -1041,8 +1072,6 @@ fn build_drafts<'a>(
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_list_draft(&mut cursor) {
-            drafts.push(draft);
-        } else if let Some(draft) = parse_tbd_draft(&mut cursor, diagnostics) {
             drafts.push(draft);
         } else if cursor.consume_blank() {
             continue;
@@ -1238,18 +1267,19 @@ plain text"#;
                     body: "Heading",
                 },
                 BlockDraft::List {
-                    items: vec![
-                        ListItemDraft {
-                            kind: ListKind::Unordered,
-                            indent: 0,
-                            body: "list",
-                        },
-                        ListItemDraft {
-                            kind: ListKind::Unordered,
-                            indent: 2,
-                            body: "nested list",
-                        },
-                    ],
+                    items: vec![ListItemDraft {
+                        kind: ListKind::Unordered,
+                        indent: 0,
+                        body: "list",
+                        children: vec![BlockDraft::List {
+                            items: vec![ListItemDraft {
+                                kind: ListKind::Unordered,
+                                indent: 0,
+                                body: "nested list",
+                                children: vec![],
+                            }],
+                        }],
+                    }],
                 },
                 BlockDraft::Code {
                     raw_lines: vec!["This is Code Line"],
@@ -1393,20 +1423,66 @@ plain"#,
     }
 
     #[test]
-    fn parse_reports_numbered_fallback() {
+    fn ordered_list_strips_marker_width_from_body() {
         let parsed = parse(
-            r#"1. unsupported
-2. fallback"#,
+            r#"9. ninth
+10. tenth"#,
         );
 
-        assert_eq!(
-            parsed.diagnostics,
-            vec![ParseDiagnostic {
-                line: 1,
-                kind: ParseDiagnosticKind::UnsupportedNumberedBlock {
-                    raw_line: "1. unsupported"
-                },
-            }]
+        assert!(parsed.diagnostics.is_empty());
+
+        let BlockKind::List { items } = &parsed.document.blocks[0].kind else {
+            panic!("expected an ordered list block");
+        };
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, ListKind::Ordered);
+        assert_eq!(items[0].body, vec![Inline::Text("ninth")]);
+        assert_eq!(items[1].kind, ListKind::Ordered);
+        assert_eq!(items[1].body, vec![Inline::Text("tenth")]);
+    }
+
+    #[test]
+    fn ordered_list_keeps_indented_paragraphs_inside_items() {
+        let parsed = parse(
+            r#"1. Glider 활용 증진
+
+   현재 Glider의 CloudData는 여러 제약사항으로 다양한 곳에 활용하지 못하고 있습니다.
+
+2. Datadog 활용 증진
+
+   Datadog 사용을 위해 고비용을 지불하고 있습니다.
+
+3. 사내 라이브러리 도입
+
+   사내 서버 개발 미팅을 통해 도출된 반복되는 업무를 라이브러리화합니다."#,
         );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 1);
+
+        let BlockKind::List { items } = &parsed.document.blocks[0].kind else {
+            panic!("expected an ordered list block");
+        };
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].kind, ListKind::Ordered);
+        assert_eq!(items[0].body, vec![Inline::Text("Glider 활용 증진")]);
+        assert_eq!(items[0].children.len(), 1);
+
+        let BlockKind::Paragraph { body } = &items[0].children[0].kind else {
+            panic!("expected the indented line to become a child paragraph");
+        };
+
+        assert_eq!(
+            body,
+            &vec![Inline::Text(
+                "현재 Glider의 CloudData는 여러 제약사항으로 다양한 곳에 활용하지 못하고 있습니다."
+            )]
+        );
+        assert_eq!(items[1].body, vec![Inline::Text("Datadog 활용 증진")]);
+        assert_eq!(items[1].children.len(), 1);
+        assert_eq!(items[2].body, vec![Inline::Text("사내 라이브러리 도입")]);
+        assert_eq!(items[2].children.len(), 1);
     }
 }
