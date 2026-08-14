@@ -7,7 +7,7 @@ mod maki;
 mod parser;
 mod web;
 
-use maki::{Maki, MakiConfig, MakiConfigOverrides};
+use maki::{Maki, MakiConfig, MakiConfigOverrides, ProjectDiagnostic, ProjectDiagnosticSummary};
 
 #[derive(Debug, PartialEq)]
 enum Command {
@@ -94,21 +94,25 @@ fn run_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
+    emit_project_diagnostic_summary(&maki.diagnostics());
     web::serve(maki, &options.host, options.port, config_overrides)
 }
 
 fn run_build(file: PathBuf) -> Result<(), RunError> {
     let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
     let parsed = parser::parse(&content);
-    emit_parse_warnings(&file, &parsed.diagnostics);
 
     let html = match Maki::find_project_root(&file)? {
         Some(root) => {
             let config = MakiConfig::load_project(&root)?;
             let maki = Maki::load_with_config(&root, config)?;
+            emit_project_diagnostic_summary(&maki.diagnostics());
             maki.render_file_html(&file)?
         }
-        None => html::render_document(&parsed.document),
+        None => {
+            emit_parse_warnings(&file, &parsed.diagnostics);
+            html::render_document(&parsed.document)
+        }
     };
 
     println!("{html}");
@@ -131,17 +135,41 @@ fn format_parse_warning(file: &Path, diagnostic: &parser::ParseDiagnostic<'_>) -
 }
 
 fn format_parse_warning_kind(kind: &parser::ParseDiagnosticKind<'_>) -> String {
-    match kind {
-        parser::ParseDiagnosticKind::InvalidProperty { raw_line } => {
-            format!("invalid property: {raw_line}")
-        }
-        parser::ParseDiagnosticKind::UnclosedContainer { raw_line } => {
-            format!("unclosed container block: {raw_line}")
-        }
-        parser::ParseDiagnosticKind::UnsupportedNumberedBlock { raw_line } => {
-            format!("unsupported numbered block rendered as fallback: {raw_line}")
-        }
+    parser::format_parse_diagnostic_kind(kind)
+}
+
+fn emit_project_diagnostic_summary(diagnostics: &[ProjectDiagnostic]) {
+    if diagnostics.is_empty() {
+        return;
     }
+
+    eprintln!("{}", format_project_diagnostic_summary(diagnostics));
+    for diagnostic in diagnostics {
+        eprintln!("{}", format_project_diagnostic(diagnostic));
+    }
+}
+
+fn format_project_diagnostic_summary(diagnostics: &[ProjectDiagnostic]) -> String {
+    let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
+
+    format!(
+        "diagnostics: {} issue(s): {} broken link(s), {} ambiguous link(s), {} parser warning(s), {} read failure(s)",
+        summary.total(),
+        summary.broken_links(),
+        summary.ambiguous_links(),
+        summary.parse_warnings(),
+        summary.read_failures()
+    )
+}
+
+fn format_project_diagnostic(diagnostic: &ProjectDiagnostic) -> String {
+    let mut location = diagnostic.source_path().display().to_string();
+    if let Some(line) = diagnostic.line() {
+        location.push(':');
+        location.push_str(&line.to_string());
+    }
+
+    format!("warning: {}: {}", location, diagnostic.message())
 }
 
 fn run_command(command: Command) -> Result<(), RunError> {

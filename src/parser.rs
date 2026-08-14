@@ -41,6 +41,7 @@ pub(crate) enum ParseDiagnosticKind<'a> {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Inline<'a> {
     NoteLink { target: &'a str },
+    Link { title: &'a str, target: &'a str },
     Text(&'a str),
     SoftBreak,
     Code(&'a str),
@@ -82,6 +83,9 @@ impl<'a> InlineCursor<'a> {
 const INLINE_NOTE_LINK_BEGIN: &str = "[[";
 const INLINE_NOTE_LINK_END: &str = "]]";
 const INLINE_CODE_BEGIN_END: &str = "`";
+const INLINE_LINK_BEGIN: &str = "[";
+const INLINE_LINK_SEPARATOR: &str = "](";
+const INLINE_LINK_END: &str = ")";
 
 fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let rest = cursor.rest();
@@ -107,6 +111,35 @@ fn parse_inline_note_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a
     Some(Inline::NoteLink { target })
 }
 
+fn parse_inline_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let rest = cursor.rest();
+
+    if rest.starts_with(INLINE_NOTE_LINK_BEGIN) {
+        return None;
+    }
+
+    let body = rest.strip_prefix(INLINE_LINK_BEGIN)?;
+    let title_end = body.find(INLINE_LINK_SEPARATOR)?;
+    let title = &body[..title_end];
+    let target_body = &body[title_end + INLINE_LINK_SEPARATOR.len()..];
+    let target_end = target_body.find(INLINE_LINK_END)?;
+    let target = &target_body[..target_end];
+
+    if title.is_empty() || target.is_empty() {
+        return None;
+    }
+
+    cursor.bump(
+        INLINE_LINK_BEGIN.len()
+            + title.len()
+            + INLINE_LINK_SEPARATOR.len()
+            + target.len()
+            + INLINE_LINK_END.len(),
+    );
+
+    Some(Inline::Link { title, target })
+}
+
 fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
     let mut inlines = vec![];
 
@@ -129,8 +162,9 @@ fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     while !cursor.is_eol() {
         let start = cursor.pos();
 
-        if let Some(inline) =
-            parse_inline_code(&mut cursor).or_else(|| parse_inline_note_link(&mut cursor))
+        if let Some(inline) = parse_inline_code(&mut cursor)
+            .or_else(|| parse_inline_note_link(&mut cursor))
+            .or_else(|| parse_inline_link(&mut cursor))
         {
             if text_start < start {
                 inlines.push(Inline::Text(&source[text_start..start]));
@@ -148,6 +182,20 @@ fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     }
 
     inlines
+}
+
+pub(crate) fn format_parse_diagnostic_kind(kind: &ParseDiagnosticKind<'_>) -> String {
+    match kind {
+        ParseDiagnosticKind::InvalidProperty { raw_line } => {
+            format!("invalid property: {raw_line}")
+        }
+        ParseDiagnosticKind::UnclosedContainer { raw_line } => {
+            format!("unclosed container block: {raw_line}")
+        }
+        ParseDiagnosticKind::UnsupportedNumberedBlock { raw_line } => {
+            format!("unsupported numbered block rendered as fallback: {raw_line}")
+        }
+    }
 }
 
 fn build_documents<'a>(drafts: &[BlockDraft<'a>]) -> Document<'a> {
@@ -1018,6 +1066,23 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].body, vec![Inline::Text("another list")]);
         assert!(items[0].children.is_empty());
+    }
+
+    #[test]
+    fn parse_inline_supports_markdown_style_links() {
+        assert_eq!(
+            parse_inline("Read [djot](https://github.com/jgm/djot) and [[Maki]]."),
+            vec![
+                Inline::Text("Read "),
+                Inline::Link {
+                    title: "djot",
+                    target: "https://github.com/jgm/djot"
+                },
+                Inline::Text(" and "),
+                Inline::NoteLink { target: "Maki" },
+                Inline::Text(".")
+            ]
+        );
     }
 
     #[test]

@@ -58,10 +58,18 @@ body {
   text-decoration: none;
 }
 
+.maki-meta-link,
+.maki-meta-link:visited,
 .maki-home-link:visited {
   color: var(--muted);
 }
 
+.maki-meta-link,
+.maki-home-link:hover {
+  text-decoration: none;
+}
+
+.maki-meta-link:hover,
 .maki-home-link:hover {
   color: var(--link);
   text-decoration: underline;
@@ -141,7 +149,10 @@ body {
 }
 
 .maki-search-summary,
-.maki-search-empty {
+.maki-search-empty,
+.maki-diagnostics-summary,
+.maki-diagnostics-empty,
+.maki-not-found-summary {
   color: var(--muted);
 }
 
@@ -162,6 +173,42 @@ body {
   flex-shrink: 0;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.maki-diagnostics-table {
+  font-size: 0.9rem;
+}
+
+.maki-diagnostics-table th:first-child,
+.maki-diagnostics-table td:first-child {
+  width: 8.5rem;
+}
+
+.maki-not-found-page {
+  padding-top: 0.25rem;
+}
+
+.maki-not-found-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1.25rem;
+}
+
+.maki-not-found-actions a {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  text-decoration: none;
+}
+
+.maki-not-found-actions a:hover {
+  border-color: var(--link);
+  text-decoration: underline;
 }
 
 h1,

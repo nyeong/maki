@@ -18,8 +18,8 @@ use std::{
 };
 
 use crate::{
-    html::{self, NoteInfo, RenderContext},
-    parser,
+    html::{self, AssetMode, NoteInfo, RenderContext},
+    parser::{self, BlockKind, Inline},
 };
 
 #[derive(Debug)]
@@ -613,6 +613,48 @@ fn normalize_key(key: &str) -> String {
     key.to_lowercase()
 }
 
+fn has_uri_scheme(target: &str) -> bool {
+    let Some((scheme, _rest)) = target.split_once(':') else {
+        return false;
+    };
+
+    !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+}
+
+fn normalize_note_link_target(target: &str) -> String {
+    let target = target.strip_prefix('/').unwrap_or(target);
+    target
+        .strip_suffix(MAKI_SOURCE_EXTENSION)
+        .unwrap_or(target)
+        .to_string()
+}
+
+pub(crate) fn note_link_target_for_href(target: &str) -> Option<String> {
+    let target = target.trim();
+
+    if target.is_empty()
+        || target.contains('#')
+        || target.contains('?')
+        || target.starts_with("//")
+        || has_uri_scheme(target)
+    {
+        return None;
+    }
+
+    let path_part = target.strip_prefix('/').unwrap_or(target);
+    let extension = Path::new(path_part)
+        .extension()
+        .and_then(|ext| ext.to_str());
+
+    match extension {
+        Some("maki") | None => Some(normalize_note_link_target(path_part)),
+        Some(_) => None,
+    }
+}
+
 fn search_match_rank(title: &str, query: &str) -> Option<(usize, usize, usize)> {
     let normalized_title = normalize_key(title);
 
@@ -646,6 +688,210 @@ pub(crate) enum NoteLinkResolution {
     Ambiguous,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectDiagnostic {
+    source_path: PathBuf,
+    line: Option<usize>,
+    kind: ProjectDiagnosticKind,
+}
+
+impl ProjectDiagnostic {
+    fn new(
+        source_path: impl Into<PathBuf>,
+        line: Option<usize>,
+        kind: ProjectDiagnosticKind,
+    ) -> Self {
+        Self {
+            source_path: source_path.into(),
+            line,
+            kind,
+        }
+    }
+
+    pub(crate) fn source_path(&self) -> &Path {
+        &self.source_path
+    }
+
+    pub(crate) fn line(&self) -> Option<usize> {
+        self.line
+    }
+
+    pub(crate) fn kind(&self) -> &ProjectDiagnosticKind {
+        &self.kind
+    }
+
+    pub(crate) fn message(&self) -> String {
+        self.kind.message()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProjectDiagnosticKind {
+    ParseWarning { message: String },
+    BrokenLink { target: String },
+    AmbiguousLink { target: String },
+    ReadFailed,
+}
+
+impl ProjectDiagnosticKind {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::ParseWarning { .. } => "parser",
+            Self::BrokenLink { .. } => "broken link",
+            Self::AmbiguousLink { .. } => "ambiguous link",
+            Self::ReadFailed => "read",
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::ParseWarning { message } => message.clone(),
+            Self::BrokenLink { target } => format!("broken link: {target}"),
+            Self::AmbiguousLink { target } => format!("ambiguous link: {target}"),
+            Self::ReadFailed => "failed to read note".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ProjectDiagnosticSummary {
+    total: usize,
+    parse_warnings: usize,
+    broken_links: usize,
+    ambiguous_links: usize,
+    read_failures: usize,
+}
+
+impl ProjectDiagnosticSummary {
+    pub(crate) fn from_diagnostics(diagnostics: &[ProjectDiagnostic]) -> Self {
+        let mut summary = Self {
+            total: diagnostics.len(),
+            ..Default::default()
+        };
+
+        for diagnostic in diagnostics {
+            match diagnostic.kind() {
+                ProjectDiagnosticKind::ParseWarning { .. } => summary.parse_warnings += 1,
+                ProjectDiagnosticKind::BrokenLink { .. } => summary.broken_links += 1,
+                ProjectDiagnosticKind::AmbiguousLink { .. } => summary.ambiguous_links += 1,
+                ProjectDiagnosticKind::ReadFailed => summary.read_failures += 1,
+            }
+        }
+
+        summary
+    }
+
+    pub(crate) fn total(&self) -> usize {
+        self.total
+    }
+
+    pub(crate) fn parse_warnings(&self) -> usize {
+        self.parse_warnings
+    }
+
+    pub(crate) fn broken_links(&self) -> usize {
+        self.broken_links
+    }
+
+    pub(crate) fn ambiguous_links(&self) -> usize {
+        self.ambiguous_links
+    }
+
+    pub(crate) fn read_failures(&self) -> usize {
+        self.read_failures
+    }
+}
+
+fn collect_inline_link_diagnostics(
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+    maki: &Maki,
+    current: &NoteRef,
+    source_path: &Path,
+    inlines: &[Inline<'_>],
+) {
+    for inline in inlines {
+        match inline {
+            Inline::NoteLink { target } => push_link_diagnostic(
+                diagnostics,
+                source_path,
+                maki.resolve_note_link(current, target),
+                target,
+            ),
+            Inline::Link { target, .. } => {
+                if let Some(note_target) = note_link_target_for_href(target) {
+                    push_link_diagnostic(
+                        diagnostics,
+                        source_path,
+                        maki.resolve_note_link(current, &note_target),
+                        &note_target,
+                    );
+                }
+            }
+            Inline::Text(_) | Inline::SoftBreak | Inline::Code(_) => {}
+        }
+    }
+}
+
+fn collect_block_link_diagnostics(
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+    maki: &Maki,
+    current: &NoteRef,
+    source_path: &Path,
+    block: &BlockKind<'_>,
+) {
+    match block {
+        BlockKind::Paragraph { body } => {
+            collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body)
+        }
+        BlockKind::List { items } => {
+            for item in items {
+                collect_inline_link_diagnostics(
+                    diagnostics,
+                    maki,
+                    current,
+                    source_path,
+                    &item.body,
+                );
+                for child in &item.children {
+                    collect_block_link_diagnostics(
+                        diagnostics,
+                        maki,
+                        current,
+                        source_path,
+                        &child.kind,
+                    );
+                }
+            }
+        }
+        BlockKind::Code { .. } | BlockKind::Heading { .. } | BlockKind::Container { .. } => {}
+    }
+}
+
+fn push_link_diagnostic(
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+    source_path: &Path,
+    resolution: NoteLinkResolution,
+    target: &str,
+) {
+    match resolution {
+        NoteLinkResolution::Found(_) => {}
+        NoteLinkResolution::Broken => diagnostics.push(ProjectDiagnostic::new(
+            source_path,
+            None,
+            ProjectDiagnosticKind::BrokenLink {
+                target: target.to_string(),
+            },
+        )),
+        NoteLinkResolution::Ambiguous => diagnostics.push(ProjectDiagnostic::new(
+            source_path,
+            None,
+            ProjectDiagnosticKind::AmbiguousLink {
+                target: target.to_string(),
+            },
+        )),
+    }
+}
+
 impl Maki {
     pub(crate) fn find_project_root(start: &Path) -> Result<Option<PathBuf>, Error> {
         let start = std::fs::canonicalize(start)
@@ -672,6 +918,9 @@ impl Maki {
     }
 
     pub(crate) fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
+        let target = normalize_note_link_target(target);
+        let target = target.as_str();
+
         if let Some(note_ref) = self.index.exact_path(Path::new(target)) {
             return NoteLinkResolution::Found(note_ref);
         }
@@ -696,6 +945,49 @@ impl Maki {
         }
 
         NoteLinkResolution::Broken
+    }
+
+    pub(crate) fn diagnostics(&self) -> Vec<ProjectDiagnostic> {
+        let mut diagnostics = vec![];
+
+        for note in self.notes.values() {
+            let source_path = note.source_path();
+            let source = match std::fs::read_to_string(&note.absolute_path) {
+                Ok(source) => source,
+                Err(_) => {
+                    diagnostics.push(ProjectDiagnostic::new(
+                        source_path,
+                        None,
+                        ProjectDiagnosticKind::ReadFailed,
+                    ));
+                    continue;
+                }
+            };
+            let parsed = parser::parse(&source);
+
+            for diagnostic in &parsed.diagnostics {
+                diagnostics.push(ProjectDiagnostic::new(
+                    source_path,
+                    Some(diagnostic.line),
+                    ProjectDiagnosticKind::ParseWarning {
+                        message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
+                    },
+                ));
+            }
+
+            let current = note.note_ref();
+            for block in &parsed.document.blocks {
+                collect_block_link_diagnostics(
+                    &mut diagnostics,
+                    self,
+                    &current,
+                    source_path,
+                    &block.kind,
+                );
+            }
+        }
+
+        diagnostics
     }
 
     pub(crate) fn get_raw_content(&self, path: &Path) -> Result<String, Error> {
@@ -793,6 +1085,14 @@ impl Maki {
     }
 
     pub(crate) fn render_html(&self, path: &Path) -> Result<String, Error> {
+        self.render_html_with_asset_mode(path, AssetMode::Inline)
+    }
+
+    pub(crate) fn render_html_with_asset_mode(
+        &self,
+        path: &Path,
+        asset_mode: AssetMode,
+    ) -> Result<String, Error> {
         let raw = self.get_raw_content(path)?;
         let parsed = parser::parse(&raw);
         let current = Note::load(&self.root, path)?.note_ref();
@@ -806,7 +1106,7 @@ impl Maki {
 
         Ok(html::render_document_with_context(
             &parsed.document,
-            RenderContext::project(&resolve_note_link, &get_note_info),
+            RenderContext::project(&resolve_note_link, &get_note_info).with_asset_mode(asset_mode),
         ))
     }
 
@@ -1009,6 +1309,77 @@ mod tests {
             maki.resolve_note_link(&NoteRef::new("notes/page"), "nix"),
             NoteLinkResolution::Found(NoteRef::new("nix"))
         );
+    }
+
+    #[test]
+    fn markdown_style_links_can_resolve_to_notes_with_custom_titles() {
+        let project = temp_project("markdown-style-note-link");
+        write_note_with_content(&project, "start.maki", "See [the page](page).");
+        write_note_with_content(&project, "page.maki", "--^ title: Page\n\nbody");
+
+        let maki = Maki::load(&project.root).unwrap();
+        let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+        assert!(html.contains("<a href=\"/page\">the page</a>"));
+    }
+
+    #[test]
+    fn markdown_style_external_links_render_as_plain_hrefs() {
+        let project = temp_project("markdown-style-external-link");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            "See [djot](https://github.com/jgm/djot).",
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+        assert!(html.contains("<a href=\"https://github.com/jgm/djot\">djot</a>"));
+    }
+
+    #[test]
+    fn diagnostics_collect_parse_warnings_and_link_resolution_issues() {
+        let project = temp_project("diagnostics");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            "--^ invalid-property\n\nSee [[missing]], [Ghost](ghost), and [[same]].",
+        );
+        write_note(&project, "alpha/same.maki");
+        write_note(&project, "beta/same.maki");
+
+        let maki = Maki::load(&project.root).unwrap();
+        let diagnostics = maki.diagnostics();
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::ParseWarning { message }
+                    if message == "invalid property: --^ invalid-property"
+            ) && diagnostic.line() == Some(1)
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target }
+                    if target == "missing"
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target }
+                    if target == "ghost"
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::AmbiguousLink { target }
+                    if target == "same"
+            )
+        }));
     }
 
     #[test]

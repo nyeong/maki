@@ -27,12 +27,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use percent_encoding::percent_decode_str;
 
+use crate::html::AssetMode;
 use crate::http::Response;
 use crate::maki;
 use crate::maki::{HomeMode, Maki, MakiConfigOverrides, MakiRoute};
 use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
+const DIAGNOSTICS_PATH: &str = "/@/";
+const DIAGNOSTICS_PATH_NO_SLASH: &str = "/@";
 const LIVE_RELOAD_PATH: &str = "/.maki/events";
 const SEARCH_INDEX_PATH: &str = "/.maki/search-index.json";
 const SEARCH_PATH: &str = "/.maki/search";
@@ -366,6 +369,16 @@ fn search_index_json(entries: &[maki::SearchEntry]) -> String {
     json
 }
 
+fn runtime_asset_response(asset: crate::html::RuntimeAsset) -> http::Response {
+    let body =
+        std::fs::read(asset.source_path()).unwrap_or_else(|_| asset.embedded().as_bytes().to_vec());
+
+    http::Response::new(http::StatusCode::Ok)
+        .set_header("Content-Type", asset.content_type())
+        .set_header("Cache-Control", "no-cache")
+        .set_body(body)
+}
+
 fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Response, Error> {
     let target = parse_request_target(request.target())?;
 
@@ -376,9 +389,25 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         return Err(Error::BadRequest);
     }
 
+    if let Some(asset) = crate::html::runtime_asset_for_request_path(&target.path) {
+        return Ok(runtime_asset_response(asset));
+    }
+
     let maki = state.maki.read().map_err(|_| Error::Maki {
         source: maki::Error::ReadDirectoryFailed(state.root.clone()),
     })?;
+
+    if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_NO_SLASH {
+        let diagnostics = maki.diagnostics();
+        let html = crate::html::render_diagnostics_page(
+            &diagnostics,
+            maki.notes_len(),
+            AssetMode::External,
+        );
+        return Ok(http::Response::new(http::StatusCode::Ok)
+            .set_header("Content-Type", "text/html; charset=utf-8")
+            .set_body(inject_live_reload_script(html, &state.live_reload.token())));
+    }
 
     if target.path == SEARCH_INDEX_PATH {
         return Ok(http::Response::new(http::StatusCode::Ok)
@@ -389,7 +418,12 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
     if target.path == SEARCH_PATH {
         let query = query_param(target.query, "q")?.unwrap_or_default();
         let results = maki.search_titles(&query, SEARCH_PAGE_RESULT_LIMIT);
-        let html = crate::html::render_search_page(&query, &results, maki.search_entries().len());
+        let html = crate::html::render_search_page(
+            &query,
+            &results,
+            maki.search_entries().len(),
+            AssetMode::External,
+        );
         return Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/html; charset=utf-8")
             .set_body(inject_live_reload_script(html, &state.live_reload.token())));
@@ -397,7 +431,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
 
     match maki.resolve_route(&target.path) {
         Ok(MakiRoute::NotePage(path)) => {
-            let html = maki.render_html(&path)?;
+            let html = maki.render_html_with_asset_mode(&path, AssetMode::External)?;
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(inject_live_reload_script(html, &state.live_reload.token())))
@@ -411,6 +445,12 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(path.as_bytes())),
         },
+        Err(maki::Error::NoteNotFound(_path)) => {
+            let html = crate::html::render_not_found_page(&target.path, AssetMode::External);
+            Ok(http::Response::new(http::StatusCode::NotFound)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(inject_live_reload_script(html, &state.live_reload.token())))
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -554,6 +594,22 @@ struct FileStamp {
 
 type FileSnapshot = BTreeMap<PathBuf, FileStamp>;
 
+fn insert_file_stamp(
+    snapshot: &mut FileSnapshot,
+    key: PathBuf,
+    path: &Path,
+) -> Result<(), std::io::Error> {
+    let metadata = path.metadata()?;
+    snapshot.insert(
+        key,
+        FileStamp {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        },
+    );
+    Ok(())
+}
+
 fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Error> {
     fn collect(root: &Path, current: &Path, acc: &mut FileSnapshot) -> Result<(), std::io::Error> {
         for entry in std::fs::read_dir(current)? {
@@ -580,14 +636,7 @@ fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Erro
                 continue;
             }
 
-            let metadata = path.metadata()?;
-            acc.insert(
-                relative_path,
-                FileStamp {
-                    modified: metadata.modified().ok(),
-                    len: metadata.len(),
-                },
-            );
+            insert_file_stamp(acc, relative_path, &path)?;
         }
 
         Ok(())
@@ -598,9 +647,29 @@ fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Erro
     Ok(snapshot)
 }
 
+fn collect_runtime_asset_snapshot(snapshot: &mut FileSnapshot) -> Result<(), std::io::Error> {
+    for asset in crate::html::runtime_assets() {
+        let source_path = asset.source_path();
+        if !source_path.is_file() {
+            continue;
+        }
+
+        let key = PathBuf::from(asset.request_path().trim_start_matches('/'));
+        insert_file_stamp(snapshot, key, &source_path)?;
+    }
+
+    Ok(())
+}
+
+fn collect_watched_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Error> {
+    let mut snapshot = collect_maki_file_snapshot(root)?;
+    collect_runtime_asset_snapshot(&mut snapshot)?;
+    Ok(snapshot)
+}
+
 fn spawn_file_watcher(state: Arc<AppState>) {
     thread::spawn(move || {
-        let mut snapshot = match collect_maki_file_snapshot(&state.root) {
+        let mut snapshot = match collect_watched_file_snapshot(&state.root) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 eprintln!("Failed to initialize file watcher: {}", error);
@@ -611,10 +680,10 @@ fn spawn_file_watcher(state: Arc<AppState>) {
         loop {
             thread::sleep(FILE_WATCH_INTERVAL);
 
-            let next_snapshot = match collect_maki_file_snapshot(&state.root) {
+            let next_snapshot = match collect_watched_file_snapshot(&state.root) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    eprintln!("Failed to scan maki files: {}", error);
+                    eprintln!("Failed to scan watched files: {}", error);
                     continue;
                 }
             };
@@ -625,10 +694,10 @@ fn spawn_file_watcher(state: Arc<AppState>) {
 
             thread::sleep(FILE_WATCH_DEBOUNCE);
 
-            let stable_snapshot = match collect_maki_file_snapshot(&state.root) {
+            let stable_snapshot = match collect_watched_file_snapshot(&state.root) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    eprintln!("Failed to scan maki files after debounce: {}", error);
+                    eprintln!("Failed to scan watched files after debounce: {}", error);
                     continue;
                 }
             };
@@ -717,14 +786,20 @@ mod tests {
         let maki = Maki::load(PathBuf::from(".")).unwrap();
         let state = AppState::new(maki);
 
-        let response = handle_request(&state, &request);
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
 
-        assert!(matches!(
-            response,
-            Err(Error::Maki {
-                source: maki::Error::NoteNotFound(..)
-            })
-        ));
+        assert_eq!(response.status(), http::StatusCode::NotFound);
+        assert_eq!(
+            response.get_header("Content-Type"),
+            Some("text/html; charset=utf-8")
+        );
+        assert!(body.contains("<title>Not Found</title>"));
+        assert!(body.contains("<header class=\"maki-nav\">"));
+        assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+        assert!(body.contains("<code>/missing</code>"));
+        assert!(body.contains("new EventSource(\"/.maki/events\")"));
     }
 
     #[test]
@@ -736,8 +811,11 @@ mod tests {
         let response = handle_request(&state, &request).unwrap();
         let body = String::from_utf8(response.body().to_vec()).unwrap();
 
+        assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
         assert!(body.contains("new EventSource(\"/.maki/events\")"));
         assert!(body.contains("</script></body>"));
+        assert!(!body.contains("<style>:root"));
     }
 
     #[test]
@@ -780,6 +858,8 @@ mod tests {
 
         assert!(body.contains("<title>Search</title>"));
         assert!(body.contains("<a href=\"/maki-syntax\">Maki Syntax</a>"));
+        assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
         assert!(body.contains("new EventSource(\"/.maki/events\")"));
     }
 
@@ -799,6 +879,71 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
         assert!(body.contains("Quote \\\"Note\\\""));
+    }
+
+    #[test]
+    fn test_runtime_asset_routes_return_source_assets() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+
+        let css = handle_request(&state, &http::Request::get("/.maki/assets/maki.css")).unwrap();
+        let css_body = String::from_utf8(css.body().to_vec()).unwrap();
+        assert_eq!(
+            css.get_header("Content-Type"),
+            Some("text/css; charset=utf-8")
+        );
+        assert_eq!(css.get_header("Cache-Control"), Some("no-cache"));
+        assert!(css_body.contains(":root"));
+
+        let js =
+            handle_request(&state, &http::Request::get("/.maki/assets/maki-search.js")).unwrap();
+        let js_body = String::from_utf8(js.body().to_vec()).unwrap();
+        assert_eq!(
+            js.get_header("Content-Type"),
+            Some("application/javascript; charset=utf-8")
+        );
+        assert_eq!(js.get_header("Cache-Control"), Some("no-cache"));
+        assert!(js_body.contains("SEARCH_INDEX_PATH"));
+    }
+
+    #[test]
+    fn test_watched_file_snapshot_includes_runtime_assets() {
+        let root = PathBuf::from("docs");
+        let snapshot = collect_watched_file_snapshot(&root).unwrap();
+
+        assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki.css")));
+        assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-search.js")));
+    }
+
+    #[test]
+    fn test_diagnostics_page_lists_project_issues() {
+        let root = std::env::temp_dir().join(format!("maki-diagnostics-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("home.maki"),
+            "See [[missing]] and [Ghost](ghost).",
+        )
+        .unwrap();
+
+        let maki = Maki::load(&root).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/@/");
+
+        let response = handle_request(&state, &request).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            response.get_header("Content-Type"),
+            Some("text/html; charset=utf-8")
+        );
+        assert!(body.contains("<title>Diagnostics</title>"));
+        assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+        assert!(body.contains("2 issue(s)"));
+        assert!(body.contains("broken link: missing"));
+        assert!(body.contains("broken link: ghost"));
     }
 
     #[test]

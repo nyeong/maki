@@ -1,15 +1,22 @@
 //! HTML renderer for parsed Maki documents.
 
+use std::path::{Path, PathBuf};
+
 use crate::{
-    maki::{NoteLinkResolution, NoteRef, SearchEntry},
+    maki::{
+        self, NoteLinkResolution, NoteRef, ProjectDiagnostic, ProjectDiagnosticSummary, SearchEntry,
+    },
     parser::{self, BlockKind, Document, Inline, ListItem},
 };
 
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
 const SEARCH_SCRIPT: &str = include_str!("../assets/maki-search.js");
+pub(crate) const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
+pub(crate) const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
 const PROJECT_NAVIGATION_HTML: &str = r#"<header class="maki-nav">
 <nav aria-label="Maki navigation">
 <a class="maki-home-link" href="/">/</a>
+<a class="maki-meta-link" href="/@/">@</a>
 <form class="maki-search" action="/.maki/search" method="get" role="search" data-maki-search>
 <input class="maki-search-input" type="search" name="q" placeholder="Search title" aria-label="Search titles" autocomplete="off" spellcheck="false" data-maki-search-input>
 <div class="maki-search-results" role="listbox" hidden data-maki-search-results></div>
@@ -21,11 +28,96 @@ pub(crate) struct NoteInfo {
     pub(crate) title: String,
 }
 
-fn push_project_navigation(html: &mut String) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum AssetMode {
+    #[default]
+    Inline,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeAsset {
+    request_path: &'static str,
+    file_name: &'static str,
+    content_type: &'static str,
+    embedded: &'static str,
+}
+
+impl RuntimeAsset {
+    pub(crate) fn request_path(&self) -> &'static str {
+        self.request_path
+    }
+
+    pub(crate) fn content_type(&self) -> &'static str {
+        self.content_type
+    }
+
+    pub(crate) fn embedded(&self) -> &'static str {
+        self.embedded
+    }
+
+    pub(crate) fn source_path(&self) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(self.file_name)
+    }
+}
+
+const RUNTIME_ASSETS: &[RuntimeAsset] = &[
+    RuntimeAsset {
+        request_path: CSS_ASSET_PATH,
+        file_name: "maki.css",
+        content_type: "text/css; charset=utf-8",
+        embedded: DEFAULT_CSS,
+    },
+    RuntimeAsset {
+        request_path: SEARCH_SCRIPT_ASSET_PATH,
+        file_name: "maki-search.js",
+        content_type: "application/javascript; charset=utf-8",
+        embedded: SEARCH_SCRIPT,
+    },
+];
+
+pub(crate) fn runtime_assets() -> &'static [RuntimeAsset] {
+    RUNTIME_ASSETS
+}
+
+pub(crate) fn runtime_asset_for_request_path(path: &str) -> Option<RuntimeAsset> {
+    runtime_assets()
+        .iter()
+        .find(|asset| asset.request_path() == path)
+        .copied()
+}
+
+fn push_stylesheet(html: &mut String, asset_mode: AssetMode) {
+    match asset_mode {
+        AssetMode::Inline => {
+            html.push_str("<style>");
+            html.push_str(DEFAULT_CSS);
+            html.push_str("</style>");
+        }
+        AssetMode::External => {
+            html.push_str("<link rel=\"stylesheet\" href=\"");
+            html.push_str(CSS_ASSET_PATH);
+            html.push_str("\">");
+        }
+    }
+}
+
+fn push_project_navigation(html: &mut String, asset_mode: AssetMode) {
     html.push_str(PROJECT_NAVIGATION_HTML);
-    html.push_str("<script>");
-    html.push_str(SEARCH_SCRIPT);
-    html.push_str("</script>");
+    match asset_mode {
+        AssetMode::Inline => {
+            html.push_str("<script>");
+            html.push_str(SEARCH_SCRIPT);
+            html.push_str("</script>");
+        }
+        AssetMode::External => {
+            html.push_str("<script src=\"");
+            html.push_str(SEARCH_SCRIPT_ASSET_PATH);
+            html.push_str("\"></script>");
+        }
+    }
 }
 
 struct Renderer<'a> {
@@ -39,43 +131,93 @@ impl<'a> Renderer<'a> {
             return;
         }
 
-        push_project_navigation(&mut self.html);
+        push_project_navigation(&mut self.html, self.context.asset_mode);
     }
 
-    fn render_note_link(&mut self, target: &str) {
+    fn begin_html(&mut self, title: Option<&str>) {
+        self.html = String::from("<!doctype html><html><head><meta charset=\"utf-8\">");
+        push_stylesheet(&mut self.html, self.context.asset_mode);
+        if let Some(title) = title {
+            self.html.push_str("<title>");
+            self.escape_html_into(title);
+            self.html.push_str("</title>");
+        }
+        self.html.push_str("</head><body>");
+    }
+
+    fn begin_project_page(&mut self, title: &str) {
+        self.begin_html(Some(title));
+        push_project_navigation(&mut self.html, self.context.asset_mode);
+        self.render_heading(1, title);
+    }
+
+    fn render_anchor(&mut self, href: &str, title: &str) {
+        self.html.push_str("<a href=\"");
+        self.escape_html_attr_into(href);
+        self.html.push_str("\">");
+        self.escape_html_into(title);
+        self.html.push_str("</a>");
+    }
+
+    fn render_unresolved_link(&mut self, class_name: &str, title: &str, target: &str) {
+        self.html.push_str("<span class=\"");
+        self.escape_html_attr_into(class_name);
+        self.html.push('"');
+        if title != target {
+            self.html.push_str(" title=\"");
+            self.escape_html_attr_into(target);
+            self.html.push('"');
+        }
+        self.html.push('>');
+        self.escape_html_into(title);
+        self.html.push_str("</span>");
+    }
+
+    fn render_note_link_with_title(&mut self, target: &str, title: Option<&str>) {
         let Some(context) = &self.context.project else {
-            self.html.push_str("<a href=\"");
-            self.escape_html_into(target);
-            self.html.push_str("\">");
-            self.escape_html_into(target);
-            self.html.push_str("</a>");
+            self.render_anchor(target, title.unwrap_or(target));
             return;
         };
         match (context.resolve_note_link)(target) {
             NoteLinkResolution::Found(note_ref) => {
-                let note_info = (context.get_note)(&note_ref).unwrap();
-                self.html.push_str("<a href=\"");
-                self.escape_html_into(&note_ref.web_path());
-                self.html.push_str("\">");
-                self.escape_html_into(&note_info.title);
-                self.html.push_str("</a>");
+                let note_title;
+                let title = match title {
+                    Some(title) => title,
+                    None => {
+                        note_title = (context.get_note)(&note_ref).unwrap().title;
+                        &note_title
+                    }
+                };
+                self.render_anchor(&note_ref.web_path(), title);
             }
             NoteLinkResolution::Broken => {
-                self.html.push_str("<span class=\"broken-link\">");
-                self.escape_html_into(target);
-                self.html.push_str("</span>");
+                self.render_unresolved_link("broken-link", title.unwrap_or(target), target);
             }
             NoteLinkResolution::Ambiguous => {
-                self.html.push_str("<span class=\"ambiguous-link\">");
-                self.escape_html_into(target);
-                self.html.push_str("</span>");
+                self.render_unresolved_link("ambiguous-link", title.unwrap_or(target), target);
             }
         }
+    }
+
+    fn render_note_link(&mut self, target: &str) {
+        self.render_note_link_with_title(target, None);
+    }
+
+    fn render_link(&mut self, title: &str, target: &str) {
+        if self.context.project.is_some()
+            && let Some(note_target) = maki::note_link_target_for_href(target)
+        {
+            self.render_note_link_with_title(&note_target, Some(title));
+            return;
+        }
+
+        self.render_anchor(target, title);
     }
 
     fn render_inline(&mut self, inline: &Inline<'_>) {
         match inline {
             Inline::NoteLink { target } => self.render_note_link(target),
+            Inline::Link { title, target } => self.render_link(title, target),
             Inline::SoftBreak => self.html.push(' '),
             Inline::Text(text) => self.escape_html_into(text),
             Inline::Code(text) => {
@@ -227,17 +369,8 @@ impl<'a> Renderer<'a> {
         }
     }
     fn render(&mut self, document: &Document<'a>) -> String {
-        self.html = String::from("<!doctype html><html><head><meta charset=\"utf-8\">");
         let title = document.title();
-        self.html.push_str("<style>");
-        self.html.push_str(DEFAULT_CSS);
-        self.html.push_str("</style>");
-        if let Some(title) = title {
-            self.html.push_str("<title>");
-            self.escape_html_into(title);
-            self.html.push_str("</title>");
-        }
-        self.html.push_str("</head><body>");
+        self.begin_html(title);
         self.render_navigation();
 
         if let Some(title) = title {
@@ -258,6 +391,10 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    fn new_with_asset_mode(asset_mode: AssetMode) -> Self {
+        Self::new_with_context(RenderContext::default().with_asset_mode(asset_mode))
+    }
+
     fn escape_html_into(&mut self, input: &str) {
         for ch in input.chars() {
             match ch {
@@ -275,6 +412,7 @@ impl<'a> Renderer<'a> {
 #[derive(Default)]
 pub(crate) struct RenderContext<'a> {
     project: Option<ProjectRenderContext<'a>>,
+    asset_mode: AssetMode,
 }
 
 impl<'a> RenderContext<'a> {
@@ -287,7 +425,13 @@ impl<'a> RenderContext<'a> {
                 resolve_note_link,
                 get_note,
             }),
+            asset_mode: AssetMode::Inline,
         }
+    }
+
+    pub(crate) fn with_asset_mode(mut self, asset_mode: AssetMode) -> Self {
+        self.asset_mode = asset_mode;
+        self
     }
 }
 
@@ -316,16 +460,10 @@ pub(crate) fn render_search_page(
     query: &str,
     results: &[SearchEntry],
     total_entries: usize,
+    asset_mode: AssetMode,
 ) -> String {
-    let mut renderer = Renderer::new_with_context(RenderContext::default());
-    renderer.html = String::from("<!doctype html><html><head><meta charset=\"utf-8\">");
-    renderer.html.push_str("<style>");
-    renderer.html.push_str(DEFAULT_CSS);
-    renderer.html.push_str("</style>");
-    renderer.html.push_str("<title>Search</title>");
-    renderer.html.push_str("</head><body>");
-    push_project_navigation(&mut renderer.html);
-    renderer.render_heading(1, "Search");
+    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
+    renderer.begin_project_page("Search");
     renderer.html.push_str("<main class=\"maki-search-page\">");
     renderer.html.push_str("<p class=\"maki-search-summary\">");
     if query.trim().is_empty() {
@@ -360,6 +498,80 @@ pub(crate) fn render_search_page(
             renderer.html.push_str("</span></li>");
         }
         renderer.html.push_str("</ul>");
+    }
+
+    renderer.html.push_str("</main></body></html>");
+    renderer.html
+}
+
+pub(crate) fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String {
+    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
+    renderer.begin_project_page("Not Found");
+    renderer
+        .html
+        .push_str("<main class=\"maki-not-found-page\">");
+    renderer
+        .html
+        .push_str("<p class=\"maki-not-found-summary\">No Maki note is available at <code>");
+    renderer.escape_html_into(path);
+    renderer.html.push_str("</code>.</p>");
+    renderer.html.push_str("<nav class=\"maki-not-found-actions\" aria-label=\"Not found actions\"><a href=\"/\">Home</a><a href=\"/@/\">Diagnostics</a><a href=\"/.maki/search\">Search</a></nav>");
+    renderer.html.push_str("</main></body></html>");
+    renderer.html
+}
+
+pub(crate) fn render_diagnostics_page(
+    diagnostics: &[ProjectDiagnostic],
+    total_notes: usize,
+    asset_mode: AssetMode,
+) -> String {
+    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
+    renderer.begin_project_page("Diagnostics");
+    renderer
+        .html
+        .push_str("<main class=\"maki-diagnostics-page\">");
+
+    let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
+
+    renderer
+        .html
+        .push_str("<p class=\"maki-diagnostics-summary\">");
+    renderer.html.push_str(&format!(
+        "{} issue(s) across {total_notes} note(s): {} broken link(s), {} ambiguous link(s), {} parser warning(s), {} read failure(s).",
+        summary.total(),
+        summary.broken_links(),
+        summary.ambiguous_links(),
+        summary.parse_warnings(),
+        summary.read_failures()
+    ));
+    renderer.html.push_str("</p>");
+
+    if diagnostics.is_empty() {
+        renderer
+            .html
+            .push_str("<p class=\"maki-diagnostics-empty\">No diagnostics.</p>");
+    } else {
+        renderer
+            .html
+            .push_str("<table class=\"maki-diagnostics-table\"><thead><tr><th>Kind</th><th>Source</th><th>Message</th></tr></thead><tbody>");
+        for diagnostic in diagnostics {
+            renderer.html.push_str("<tr><td>");
+            renderer.escape_html_into(diagnostic.kind().label());
+            renderer.html.push_str("</td><td>");
+            let source_href = format!("/{}", diagnostic.source_path().with_extension("").display());
+            renderer.html.push_str("<a href=\"");
+            renderer.escape_html_attr_into(&source_href);
+            renderer.html.push_str("\">");
+            renderer.escape_html_into(&diagnostic.source_path().display().to_string());
+            if let Some(line) = diagnostic.line() {
+                renderer.html.push(':');
+                renderer.html.push_str(&line.to_string());
+            }
+            renderer.html.push_str("</a></td><td>");
+            renderer.escape_html_into(&diagnostic.message());
+            renderer.html.push_str("</td></tr>");
+        }
+        renderer.html.push_str("</tbody></table>");
     }
 
     renderer.html.push_str("</main></body></html>");
@@ -413,6 +625,28 @@ hello <maki> & friends
         assert!(html.contains(&format!(
             "{PROJECT_NAVIGATION_HTML}<script>{SEARCH_SCRIPT}</script><h1"
         )));
+    }
+
+    #[test]
+    fn project_rendering_can_use_external_assets() {
+        let parsed = parser::parse("--^ title: Page\n\nbody");
+        let resolve_note_link = |_target: &str| NoteLinkResolution::Broken;
+        let get_note_info = |_note_ref: &NoteRef| None;
+
+        let html = render_document_with_context(
+            &parsed.document,
+            RenderContext::project(&resolve_note_link, &get_note_info)
+                .with_asset_mode(AssetMode::External),
+        );
+
+        assert!(html.contains(&format!(
+            "<link rel=\"stylesheet\" href=\"{CSS_ASSET_PATH}\">"
+        )));
+        assert!(html.contains(&format!(
+            "<script src=\"{SEARCH_SCRIPT_ASSET_PATH}\"></script>"
+        )));
+        assert!(!html.contains("<style>:root"));
+        assert!(!html.contains(SEARCH_SCRIPT));
     }
 
     #[test]

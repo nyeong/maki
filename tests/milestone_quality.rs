@@ -309,6 +309,41 @@ fn maki_build_discovers_project_root_from_maki_toml() {
 }
 
 #[test]
+fn maki_build_reports_project_diagnostic_summary_to_stderr() {
+    let project = temp_project("build-project-diagnostics");
+    fs::write(
+        project.root.join("maki.toml"),
+        "[project]\ntitle = \"Diagnostics Fixture\"\n",
+    )
+    .unwrap();
+    fs::write(
+        project.root.join("home.maki"),
+        "--^ title: Home\n\nSee [[missing]] and [Ghost](ghost).\n",
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .arg("build")
+        .arg(project.root.join("home.maki"))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "maki build failed with stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(stdout.contains("<title>Home</title>"));
+    assert!(stderr.contains("diagnostics: 2 issue(s): 2 broken link(s)"));
+    assert!(stderr.contains("warning: home.maki: broken link: missing"));
+    assert!(stderr.contains("warning: home.maki: broken link: ghost"));
+}
+
+#[test]
 fn maki_serve_discovers_project_root_from_maki_toml() {
     let (_project, notes) = temp_project_with_maki_toml("serve-project-root");
 
@@ -366,6 +401,9 @@ fn v0_fixture_serves_core_poc_behavior() {
 
     let ignored_file = http_get(port, "/ignore");
     ignored_file.assert_status("HTTP/1.1 404 Not Found");
+    ignored_file.assert_body_contains("<title>Not Found</title>");
+    ignored_file.assert_body_contains("<header class=\"maki-nav\">");
+    ignored_file.assert_body_contains("<a class=\"maki-home-link\" href=\"/\">/</a>");
 }
 
 #[test]
