@@ -6,6 +6,11 @@
   const RAIL_HOVER_WIDTH = 52;
   const MARKER_HIT_RADIUS = 28;
   const TRACK_MARGIN = 16;
+  const DEFAULT_CONTENT_HEADING_LEVEL = 3;
+  const MIN_CONTENT_HEADING_LEVEL = 1;
+  const LABEL_HEIGHT = 32;
+  const SEVERE_OVERLAP_GAP = LABEL_HEIGHT / 2;
+  const DENSE_CLUSTER_HEADING_COUNT = 5;
 
   const getHeadingLevel = (heading) => {
     const ariaLevel = Number(heading.getAttribute("aria-level"));
@@ -14,6 +19,9 @@
     const match = heading.tagName.match(/^H([2-6])$/);
     return match ? Number(match[1]) : 6;
   };
+
+  const getContentHeadingLevel = (heading) =>
+    Math.max(getHeadingLevel(heading) - 1, MIN_CONTENT_HEADING_LEVEL);
 
   const collectHeadings = () =>
     Array.from(document.querySelectorAll(HEADING_SELECTOR)).filter(
@@ -63,10 +71,47 @@
     return TRACK_MARGIN + ratio * trackHeight;
   };
 
+  const hasDenseCluster = (headings) => {
+    const positions = headings.map(markerY).sort((left, right) => left - right);
+    let clusterSize = 1;
+
+    for (let index = 1; index < positions.length; index += 1) {
+      if (positions[index] - positions[index - 1] <= SEVERE_OVERLAP_GAP) {
+        clusterSize += 1;
+        if (clusterSize >= DENSE_CLUSTER_HEADING_COUNT) return true;
+      } else {
+        clusterSize = 1;
+      }
+    }
+
+    return false;
+  };
+
+  const headingsUpToLevel = (headings, maxLevel) =>
+    headings.filter((heading) => getContentHeadingLevel(heading) <= maxLevel);
+
+  const chooseHeadings = (headings) => {
+    let fallback = headings;
+
+    for (
+      let level = DEFAULT_CONTENT_HEADING_LEVEL;
+      level >= MIN_CONTENT_HEADING_LEVEL;
+      level -= 1
+    ) {
+      const candidate = headingsUpToLevel(headings, level);
+      if (!candidate.length) continue;
+
+      fallback = candidate;
+      if (!hasDenseCluster(candidate)) return candidate;
+    }
+
+    return fallback;
+  };
+
   const start = () => {
     if (!globalThis.matchMedia(DESKTOP_QUERY).matches) return;
 
-    const headings = collectHeadings();
+    const headings = chooseHeadings(collectHeadings());
     if (!headings.length) return;
 
     const toc = document.createElement("nav");
