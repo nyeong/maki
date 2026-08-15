@@ -11,8 +11,10 @@ use crate::{
 
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
 const SEARCH_SCRIPT: &str = include_str!("../assets/maki-search.js");
+const TOC_SCRIPT: &str = include_str!("../assets/maki-toc.js");
 pub(crate) const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
 pub(crate) const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
+pub(crate) const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
 const PROJECT_NAVIGATION_HTML: &str = r#"<header class="maki-nav">
 <nav aria-label="Maki navigation">
 <a class="maki-home-link" href="/">/</a>
@@ -76,6 +78,12 @@ const RUNTIME_ASSETS: &[RuntimeAsset] = &[
         content_type: "application/javascript; charset=utf-8",
         embedded: SEARCH_SCRIPT,
     },
+    RuntimeAsset {
+        request_path: TOC_SCRIPT_ASSET_PATH,
+        file_name: "maki-toc.js",
+        content_type: "application/javascript; charset=utf-8",
+        embedded: TOC_SCRIPT,
+    },
 ];
 
 pub(crate) fn runtime_assets() -> &'static [RuntimeAsset] {
@@ -106,15 +114,20 @@ fn push_stylesheet(html: &mut String, asset_mode: AssetMode) {
 
 fn push_project_navigation(html: &mut String, asset_mode: AssetMode) {
     html.push_str(PROJECT_NAVIGATION_HTML);
+    push_script(html, asset_mode, SEARCH_SCRIPT, SEARCH_SCRIPT_ASSET_PATH);
+    push_script(html, asset_mode, TOC_SCRIPT, TOC_SCRIPT_ASSET_PATH);
+}
+
+fn push_script(html: &mut String, asset_mode: AssetMode, script: &str, asset_path: &str) {
     match asset_mode {
         AssetMode::Inline => {
             html.push_str("<script>");
-            html.push_str(SEARCH_SCRIPT);
+            html.push_str(script);
             html.push_str("</script>");
         }
         AssetMode::External => {
             html.push_str("<script src=\"");
-            html.push_str(SEARCH_SCRIPT_ASSET_PATH);
+            html.push_str(asset_path);
             html.push_str("\"></script>");
         }
     }
@@ -647,7 +660,7 @@ hello <maki> & friends
         );
 
         assert!(html.contains(&format!(
-            "{PROJECT_NAVIGATION_HTML}<script>{SEARCH_SCRIPT}</script><h1"
+            "{PROJECT_NAVIGATION_HTML}<script>{SEARCH_SCRIPT}</script><script>{TOC_SCRIPT}</script><h1"
         )));
     }
 
@@ -669,8 +682,12 @@ hello <maki> & friends
         assert!(html.contains(&format!(
             "<script src=\"{SEARCH_SCRIPT_ASSET_PATH}\"></script>"
         )));
+        assert!(html.contains(&format!(
+            "<script src=\"{TOC_SCRIPT_ASSET_PATH}\"></script>"
+        )));
         assert!(!html.contains("<style>:root"));
         assert!(!html.contains(SEARCH_SCRIPT));
+        assert!(!html.contains(TOC_SCRIPT));
     }
 
     #[test]

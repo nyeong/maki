@@ -175,6 +175,100 @@ body {
   font-size: 0.9rem;
 }
 
+.maki-toc {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  color: var(--fg);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.maki-toc-marker {
+  position: absolute;
+  right: 14px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  transform: translateY(-50%) scale(0.55);
+  opacity: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease;
+  transition-delay: var(--maki-toc-delay, 0ms);
+}
+
+.maki-toc.is-ready .maki-toc-marker {
+  transform: translateY(-50%) scale(1);
+  opacity: 1;
+}
+
+.maki-toc-marker::before {
+  display: block;
+  width: 5px;
+  height: 5px;
+  margin: auto;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+  transition:
+    background-color 140ms ease,
+    transform 140ms ease;
+}
+
+.maki-toc-marker:hover::before,
+.maki-toc-marker.is-active::before {
+  background: var(--fg);
+  transform: scale(1.35);
+}
+
+.maki-toc-label {
+  position: absolute;
+  right: 46px;
+  max-width: 210px;
+  padding: 0.22rem 0.5rem;
+  transform: translateY(-50%) translateX(8px) scale(0.98);
+  opacity: 0;
+  visibility: hidden;
+  overflow: hidden;
+  border: 1px solid #cfd4dc;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 6px 16px rgb(32 33 36 / 16%);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.45;
+  pointer-events: none;
+  text-align: left;
+  text-overflow: ellipsis;
+  transition:
+    opacity 140ms ease,
+    transform 160ms ease,
+    visibility 0s linear 160ms;
+  white-space: nowrap;
+}
+
+.maki-toc-label:hover {
+  border-color: var(--link);
+}
+
+.maki-toc-label.is-visible {
+  transform: translateY(-50%) translateX(0) scale(1);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
 .maki-diagnostics-table {
   font-size: 0.9rem;
 }
@@ -405,5 +499,19 @@ th {
   .maki-search-page-results span {
     display: block;
     margin-top: 0.1rem;
+  }
+}
+
+@media (max-width: 959px) {
+  .maki-toc {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maki-toc-marker,
+  .maki-toc-marker::before,
+  .maki-toc-label {
+    transition: none;
   }
 }

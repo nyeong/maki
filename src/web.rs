@@ -909,6 +909,7 @@ mod tests {
         assert!(body.contains("<header class=\"maki-nav\">"));
         assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
         assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
         assert!(body.contains("<code>/missing</code>"));
         assert!(body.contains("new EventSource(\"/.maki/events\")"));
     }
@@ -924,6 +925,7 @@ mod tests {
 
         assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
         assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
         assert!(body.contains("new EventSource(\"/.maki/events\")"));
         assert!(body.contains("</script></body>"));
         assert!(!body.contains("<style>:root"));
@@ -971,6 +973,7 @@ mod tests {
         assert!(body.contains("<a href=\"/maki-syntax\">Maki Syntax</a>"));
         assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
         assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
         assert!(body.contains("new EventSource(\"/.maki/events\")"));
     }
 
@@ -1015,6 +1018,15 @@ mod tests {
         );
         assert_eq!(js.get_header("Cache-Control"), Some("no-cache"));
         assert!(js_body.contains("SEARCH_INDEX_PATH"));
+
+        let toc = handle_request(&state, &http::Request::get("/.maki/assets/maki-toc.js")).unwrap();
+        let toc_body = String::from_utf8(toc.body().to_vec()).unwrap();
+        assert_eq!(
+            toc.get_header("Content-Type"),
+            Some("application/javascript; charset=utf-8")
+        );
+        assert_eq!(toc.get_header("Cache-Control"), Some("no-cache"));
+        assert!(toc_body.contains("HEADING_SELECTOR"));
     }
 
     #[test]
@@ -1024,6 +1036,7 @@ mod tests {
 
         assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki.css")));
         assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-search.js")));
+        assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-toc.js")));
     }
 
     #[test]
@@ -1052,6 +1065,7 @@ mod tests {
         assert!(body.contains("<title>Diagnostics</title>"));
         assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
         assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+        assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
         assert!(body.contains("2 issue(s)"));
         assert!(body.contains("broken link: missing"));
         assert!(body.contains("broken link: ghost"));
