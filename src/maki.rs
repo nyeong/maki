@@ -138,6 +138,7 @@ struct ExternalLinkRef {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct DateIndex {
     by_date: BTreeMap<Date, Vec<DateBacklink>>,
+    index_by_date: BTreeMap<Date, Vec<DateBacklink>>,
     occurrences: BTreeMap<String, DateOccurrence>,
 }
 
@@ -226,14 +227,28 @@ impl DateIndex {
     }
 
     fn push_backlink(&mut self, date: Date, occurrence_id: &str, relation: DateRelation) {
-        self.by_date.entry(date).or_default().push(DateBacklink {
+        let backlink = DateBacklink {
             occurrence_id: occurrence_id.to_string(),
             relation,
-        });
+        };
+
+        self.by_date.entry(date).or_default().push(backlink.clone());
+        if relation.is_indexed() {
+            self.index_by_date.entry(date).or_default().push(backlink);
+        }
+    }
+
+    fn sort_backlinks(&mut self) {
+        for backlinks in self.by_date.values_mut() {
+            backlinks.sort_by_key(|backlink| backlink.relation.priority());
+        }
+        for backlinks in self.index_by_date.values_mut() {
+            backlinks.sort_by_key(|backlink| backlink.relation.priority());
+        }
     }
 
     pub(crate) fn dates(&self) -> impl Iterator<Item = (&Date, &[DateBacklink])> {
-        self.by_date
+        self.index_by_date
             .iter()
             .map(|(date, backlinks)| (date, backlinks.as_slice()))
     }
@@ -313,6 +328,17 @@ impl DateRelation {
             Self::RangeStart => "range start",
             Self::RangeMiddle => "range",
             Self::RangeEnd => "range end",
+        }
+    }
+
+    fn is_indexed(self) -> bool {
+        !matches!(self, Self::RangeMiddle)
+    }
+
+    fn priority(self) -> u8 {
+        match self {
+            Self::RangeMiddle => 1,
+            Self::Single | Self::Range | Self::RangeStart | Self::RangeEnd => 0,
         }
     }
 }
@@ -1382,6 +1408,64 @@ fn date_range_raw(range: DateRange<'_>) -> String {
 
 const DATE_CONTEXT_MAX_CHARS: usize = 500;
 
+#[derive(Debug, Clone)]
+struct DateHeadingContext {
+    level: usize,
+    context: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DateTraversalContext {
+    headings: Vec<DateHeadingContext>,
+    top_list_item: Option<String>,
+}
+
+impl DateTraversalContext {
+    fn current_heading_context(&self) -> Option<&str> {
+        self.headings.last().map(|heading| heading.context.as_str())
+    }
+
+    fn parent_heading_context(&self, level: usize) -> Option<&str> {
+        self.headings
+            .iter()
+            .rev()
+            .find(|heading| heading.level < level)
+            .map(|heading| heading.context.as_str())
+    }
+
+    fn enter_heading(&mut self, level: usize, body: &str) {
+        self.headings.retain(|heading| heading.level < level);
+        self.headings.push(DateHeadingContext {
+            level,
+            context: heading_date_context(level, body),
+        });
+    }
+
+    fn with_top_list_item(&self, top_list_item: String) -> Self {
+        let mut context = self.clone();
+        if context.top_list_item.is_none() {
+            context.top_list_item = Some(top_list_item);
+        }
+        context
+    }
+
+    fn contextualize(&self, local_context: &str) -> String {
+        date_context_with_scope(
+            self.current_heading_context(),
+            self.top_list_item.as_deref(),
+            local_context,
+        )
+    }
+
+    fn contextualize_heading(&self, level: usize, local_context: &str) -> String {
+        date_context_with_scope(
+            self.parent_heading_context(level),
+            self.top_list_item.as_deref(),
+            local_context,
+        )
+    }
+}
+
 fn truncate_date_context(mut input: String) -> String {
     if let Some((byte_index, _)) = input.char_indices().nth(DATE_CONTEXT_MAX_CHARS) {
         input.truncate(byte_index);
@@ -1389,6 +1473,52 @@ fn truncate_date_context(mut input: String) -> String {
     }
 
     input
+}
+
+fn push_date_context_part(context: &mut String, part: &str, indent: usize) {
+    let part = part.trim_end();
+    if part.trim().is_empty() {
+        return;
+    }
+
+    if !context.is_empty() {
+        context.push('\n');
+    }
+
+    let prefix = " ".repeat(indent);
+    for (index, line) in part.lines().enumerate() {
+        if index > 0 {
+            context.push('\n');
+        }
+        if indent > 0 && !line.is_empty() {
+            context.push_str(&prefix);
+        }
+        context.push_str(line);
+    }
+}
+
+fn date_context_with_scope(
+    heading_context: Option<&str>,
+    top_list_item: Option<&str>,
+    local_context: &str,
+) -> String {
+    let mut context = String::new();
+    if let Some(heading_context) = heading_context {
+        push_date_context_part(&mut context, heading_context, 0);
+    }
+    if let Some(top_list_item) = top_list_item {
+        push_date_context_part(&mut context, top_list_item, 0);
+    }
+
+    let local_context = local_context.trim_end();
+    let duplicates_top_list_item =
+        top_list_item.is_some_and(|top_list_item| top_list_item.trim_end() == local_context);
+    if !duplicates_top_list_item {
+        let indent = if top_list_item.is_some() { 2 } else { 0 };
+        push_date_context_part(&mut context, local_context, indent);
+    }
+
+    truncate_date_context(context)
 }
 
 fn inline_date_context(inlines: &[Inline<'_>]) -> String {
@@ -1423,12 +1553,28 @@ fn inline_date_context(inlines: &[Inline<'_>]) -> String {
     truncate_date_context(context)
 }
 
-fn list_item_date_context(item: &parser::ListItem<'_>) -> String {
-    let mut context = String::new();
-    context.push_str(match item.kind {
+fn heading_date_context(level: usize, body: &str) -> String {
+    format!("{} {body}", "=".repeat(level))
+}
+
+fn list_item_marker_prefix(kind: parser::ListKind) -> &'static str {
+    match kind {
         parser::ListKind::Unordered => "- ",
         parser::ListKind::Ordered => "1. ",
-    });
+    }
+}
+
+fn list_item_line_date_context(item: &parser::ListItem<'_>) -> String {
+    let mut context = String::new();
+    context.push_str(list_item_marker_prefix(item.kind));
+    context.push_str(&inline_date_context(&item.body));
+
+    truncate_date_context(context)
+}
+
+fn list_item_date_context(item: &parser::ListItem<'_>) -> String {
+    let mut context = String::new();
+    context.push_str(list_item_marker_prefix(item.kind));
     context.push_str(&inline_date_context(&item.body));
 
     for child in &item.children {
@@ -1450,7 +1596,7 @@ fn block_date_context(block: &parser::Block<'_>) -> String {
     let context = match &block.kind {
         BlockKind::Paragraph { body } => inline_date_context(body),
         BlockKind::Code { lines, .. } => lines.join("\n"),
-        BlockKind::Heading { level, body } => format!("{} {body}", "=".repeat(*level)),
+        BlockKind::Heading { level, body } => heading_date_context(*level, body),
         BlockKind::List { items } => items
             .iter()
             .map(list_item_date_context)
@@ -1529,46 +1675,81 @@ fn collect_property_dates<'a>(
     }
 }
 
-fn collect_block_dates(collector: &mut DateIndexCollector<'_>, block: &parser::Block<'_>) {
-    let block_context = block_date_context(block);
+fn collect_list_item_dates(
+    collector: &mut DateIndexCollector<'_>,
+    item: &parser::ListItem<'_>,
+    context: &DateTraversalContext,
+) {
+    let item_line_context = list_item_line_date_context(item);
+    let mut item_context = context.with_top_list_item(item_line_context.clone());
+    let occurrence_context = item_context.contextualize(&item_line_context);
+
+    collect_inline_dates(collector, &item.body, &occurrence_context);
+    for child in &item.children {
+        collect_block_dates(collector, child, &mut item_context);
+    }
+}
+
+fn collect_block_dates(
+    collector: &mut DateIndexCollector<'_>,
+    block: &parser::Block<'_>,
+    context: &mut DateTraversalContext,
+) {
+    let local_context = block_date_context(block);
+    let block_context = match &block.kind {
+        BlockKind::Heading { level, .. } => context.contextualize_heading(*level, &local_context),
+        _ => context.contextualize(&local_context),
+    };
     collect_property_dates(collector, block.properties(), &block_context);
 
     match &block.kind {
         BlockKind::Paragraph { body } => collect_inline_dates(collector, body, &block_context),
-        BlockKind::Heading { body, .. } => {
+        BlockKind::Heading { level, body } => {
             let inlines = parser::parse_inline(body);
             collect_inline_dates(collector, &inlines, &block_context);
+            context.enter_heading(*level, body);
         }
         BlockKind::List { items } => {
             for item in items {
-                let item_context = list_item_date_context(item);
-                collect_inline_dates(collector, &item.body, &item_context);
-                for child in &item.children {
-                    collect_block_dates(collector, child);
-                }
+                collect_list_item_dates(collector, item, context);
             }
         }
-        BlockKind::Quote { lines } => collect_maki_lines_dates(collector, lines),
+        BlockKind::Quote { lines } => collect_maki_lines_dates(collector, lines, context),
         BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
-            collect_maki_lines_dates(collector, lines)
+            collect_maki_lines_dates(collector, lines, context)
         }
         BlockKind::Code { .. } | BlockKind::Container { .. } => {}
     }
 }
 
-fn collect_maki_lines_dates(collector: &mut DateIndexCollector<'_>, lines: &[&str]) {
+fn collect_maki_lines_dates(
+    collector: &mut DateIndexCollector<'_>,
+    lines: &[&str],
+    context: &DateTraversalContext,
+) {
     let source = lines.join("\n");
     let parsed = parser::parse(&source);
-    collect_document_dates(collector, &parsed.document);
+    let mut nested_context = context.clone();
+    collect_document_dates_with_context(collector, &parsed.document, &mut nested_context);
 }
 
-fn collect_document_dates(collector: &mut DateIndexCollector<'_>, document: &parser::Document<'_>) {
-    let document_context = document_date_context(document, &collector.note_title);
+fn collect_document_dates_with_context(
+    collector: &mut DateIndexCollector<'_>,
+    document: &parser::Document<'_>,
+    context: &mut DateTraversalContext,
+) {
+    let document_context =
+        context.contextualize(&document_date_context(document, &collector.note_title));
 
     collect_property_dates(collector, document.properties(), &document_context);
     for block in &document.blocks {
-        collect_block_dates(collector, block);
+        collect_block_dates(collector, block, context);
     }
+}
+
+fn collect_document_dates(collector: &mut DateIndexCollector<'_>, document: &parser::Document<'_>) {
+    let mut context = DateTraversalContext::default();
+    collect_document_dates_with_context(collector, document, &mut context);
 }
 
 fn collect_date_index(notes: &BTreeMap<NoteRef, Note>) -> DateIndex {
@@ -1590,6 +1771,7 @@ fn collect_date_index(notes: &BTreeMap<NoteRef, Note>) -> DateIndex {
         collect_document_dates(&mut collector, &parsed.document);
     }
 
+    date_index.sort_backlinks();
     date_index
 }
 
@@ -2442,7 +2624,19 @@ Track [2026-08-17]--[2026-08-19]."#,
 
         let maki = Maki::load(&project.root).unwrap();
         let property_date = Date::parse("2026-08-15").unwrap();
+        let range_start_date = Date::parse("2026-08-17").unwrap();
         let middle_date = Date::parse("2026-08-18").unwrap();
+        let range_end_date = Date::parse("2026-08-19").unwrap();
+
+        let index_dates = maki
+            .date_index()
+            .dates()
+            .map(|(date, _backlinks)| *date)
+            .collect::<Vec<_>>();
+        assert!(index_dates.contains(&property_date));
+        assert!(index_dates.contains(&range_start_date));
+        assert!(!index_dates.contains(&middle_date));
+        assert!(index_dates.contains(&range_end_date));
 
         let property_backlinks = maki.date_index().backlinks_for(&property_date).unwrap();
         assert_eq!(property_backlinks.len(), 1);
@@ -2472,6 +2666,78 @@ Track [2026-08-17]--[2026-08-19]."#,
         assert!(html.contains("href=\"/@/dates/2026-08-16#date-inline-start-maki-1\""));
         assert!(html.contains("href=\"/@/dates/2026-08-17#date-inline-start-maki-2\""));
         assert!(html.contains("href=\"/@/dates/2026-08-19#date-inline-start-maki-2\""));
+    }
+
+    #[test]
+    fn date_index_orders_range_middle_backlinks_after_direct_dates() {
+        let project = temp_project("date-index-priority");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"--^ title: Start
+
+Track [2026-08-17]--[2026-08-19].
+
+Target [2026-08-18]."#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let middle_date = Date::parse("2026-08-18").unwrap();
+
+        let middle_backlinks = maki.date_index().backlinks_for(&middle_date).unwrap();
+        assert_eq!(middle_backlinks.len(), 2);
+        assert_eq!(middle_backlinks[0].relation(), DateRelation::Single);
+        assert_eq!(middle_backlinks[1].relation(), DateRelation::RangeMiddle);
+
+        let index_backlinks = maki
+            .date_index()
+            .dates()
+            .find_map(|(date, backlinks)| (*date == middle_date).then_some(backlinks))
+            .unwrap();
+        assert_eq!(index_backlinks.len(), 1);
+        assert_eq!(index_backlinks[0].relation(), DateRelation::Single);
+    }
+
+    #[test]
+    fn date_index_context_includes_parent_heading_and_top_list_item() {
+        let project = temp_project("date-index-context");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"--^ title: Start
+
+= Roadmap
+
+- Decide timing
+  - still thinking
+  - [2026-08-15] done
+
+== Sprint [2026-08-16]"#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let nested_date = Date::parse("2026-08-15").unwrap();
+        let heading_date = Date::parse("2026-08-16").unwrap();
+
+        let nested_backlinks = maki.date_index().backlinks_for(&nested_date).unwrap();
+        let nested_occurrence = maki
+            .date_index()
+            .occurrence(nested_backlinks[0].occurrence_id())
+            .unwrap();
+        assert_eq!(
+            nested_occurrence.context(),
+            "= Roadmap\n- Decide timing\n  - [2026-08-15] done"
+        );
+
+        let heading_backlinks = maki.date_index().backlinks_for(&heading_date).unwrap();
+        let heading_occurrence = maki
+            .date_index()
+            .occurrence(heading_backlinks[0].occurrence_id())
+            .unwrap();
+        assert_eq!(
+            heading_occurrence.context(),
+            "= Roadmap\n== Sprint [2026-08-16]"
+        );
     }
 
     #[test]

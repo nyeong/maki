@@ -1651,7 +1651,9 @@ Task with property date.
         assert_eq!(index.status(), http::StatusCode::Ok);
         assert!(index_body.contains("<h1 id=\"2026\">2026</h1>"));
         assert!(index_body.contains("<h2 id=\"2026-08\">08</h2>"));
-        assert!(index_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
+        assert!(index_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17</a>"));
+        assert!(!index_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
+        assert!(index_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19</a>"));
 
         let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
         let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();

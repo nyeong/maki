@@ -339,8 +339,8 @@ inline prefix는 두 종료가 있음
   - range marker: [2026-06-06]--[2026-06-08], <2026-06-06>--<2026-06-08>
   - marker body에서 첫 `yyyy-mm-dd`가 index key이며, 뒤의 요일/시간 텍스트는 표시용으로 보존한다.
   - visible inline과 property value의 date marker는 `/@/dates`에서 날짜별 backlink로 볼 수 있다.
-  - range marker는 시작일, 종료일, 중간 날짜의 backlink에 모두 나타나며 관계 label로 구분한다.
-  - 날짜별 backlink는 발생 위치의 맥락 excerpt를 함께 보여준다.
+  - range marker는 `/@/dates` 목록에는 시작일과 종료일만 노출하고, `/@/dates/<date>`에는 중간 날짜 backlink도 낮은 우선순위로 보여준다.
+  - 날짜별 backlink는 발생 위치의 맥락 excerpt와 함께, 있는 경우 상위 heading과 최상위 list item을 보여준다.
   - backlink를 클릭하면 원 note의 실제 발생 위치로 이동한다. visible inline date는 해당 date marker로, property value date는 해당 property가 붙은 block 또는 document 위치로 이동한다.
 
 --v milestone: later
