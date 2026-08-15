@@ -149,6 +149,7 @@ pub(crate) struct DateOccurrence {
     note_title: String,
     origin: DateOrigin,
     marker: DateMarker,
+    context: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,6 +271,10 @@ impl DateOccurrence {
 
     pub(crate) fn marker(&self) -> &DateMarker {
         &self.marker
+    }
+
+    pub(crate) fn context(&self) -> &str {
+        &self.context
     }
 }
 
@@ -978,7 +983,7 @@ pub(crate) fn inline_date_occurrence_id(source_path: &Path, ordinal: usize) -> S
     date_occurrence_id("inline", source_path, ordinal)
 }
 
-fn property_date_occurrence_id(source_path: &Path, ordinal: usize) -> String {
+pub(crate) fn property_date_occurrence_id(source_path: &Path, ordinal: usize) -> String {
     date_occurrence_id("property", source_path, ordinal)
 }
 
@@ -1278,7 +1283,13 @@ impl<'a> DateIndexCollector<'a> {
         }
     }
 
-    fn push_occurrence(&mut self, id: String, origin: DateOrigin, marker: DateMarker) {
+    fn push_occurrence(
+        &mut self,
+        id: String,
+        origin: DateOrigin,
+        marker: DateMarker,
+        context: &str,
+    ) {
         self.index.insert_occurrence(DateOccurrence {
             id,
             source_path: self.source_path.to_path_buf(),
@@ -1286,28 +1297,31 @@ impl<'a> DateIndexCollector<'a> {
             note_title: self.note_title.clone(),
             origin,
             marker,
+            context: context.to_string(),
         });
     }
 
-    fn push_inline_stamp(&mut self, stamp: DateStamp<'_>) {
+    fn push_inline_stamp(&mut self, stamp: DateStamp<'_>, context: &str) {
         self.inline_ordinal += 1;
         self.push_occurrence(
             inline_date_occurrence_id(self.source_path, self.inline_ordinal),
             DateOrigin::Inline,
             date_stamp_marker(stamp),
+            context,
         );
     }
 
-    fn push_inline_range(&mut self, range: DateRange<'_>) {
+    fn push_inline_range(&mut self, range: DateRange<'_>, context: &str) {
         self.inline_ordinal += 1;
         self.push_occurrence(
             inline_date_occurrence_id(self.source_path, self.inline_ordinal),
             DateOrigin::Inline,
             date_range_marker(range),
+            context,
         );
     }
 
-    fn push_property_stamp(&mut self, key: &str, stamp: DateStamp<'_>) {
+    fn push_property_stamp(&mut self, key: &str, stamp: DateStamp<'_>, context: &str) {
         self.property_ordinal += 1;
         self.push_occurrence(
             property_date_occurrence_id(self.source_path, self.property_ordinal),
@@ -1315,10 +1329,11 @@ impl<'a> DateIndexCollector<'a> {
                 key: key.to_string(),
             },
             date_stamp_marker(stamp),
+            context,
         );
     }
 
-    fn push_property_range(&mut self, key: &str, range: DateRange<'_>) {
+    fn push_property_range(&mut self, key: &str, range: DateRange<'_>, context: &str) {
         self.property_ordinal += 1;
         self.push_occurrence(
             property_date_occurrence_id(self.source_path, self.property_ordinal),
@@ -1326,6 +1341,7 @@ impl<'a> DateIndexCollector<'a> {
                 key: key.to_string(),
             },
             date_range_marker(range),
+            context,
         );
     }
 }
@@ -1364,11 +1380,124 @@ fn date_range_raw(range: DateRange<'_>) -> String {
     )
 }
 
-fn collect_inline_dates(collector: &mut DateIndexCollector<'_>, inlines: &[Inline<'_>]) {
+const DATE_CONTEXT_MAX_CHARS: usize = 500;
+
+fn truncate_date_context(mut input: String) -> String {
+    if let Some((byte_index, _)) = input.char_indices().nth(DATE_CONTEXT_MAX_CHARS) {
+        input.truncate(byte_index);
+        input.push_str("...");
+    }
+
+    input
+}
+
+fn inline_date_context(inlines: &[Inline<'_>]) -> String {
+    let mut context = String::new();
+
     for inline in inlines {
         match inline {
-            Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp),
-            Inline::DateRange(range) => collector.push_inline_range(*range),
+            Inline::NoteLink { target } => {
+                context.push_str("[[");
+                context.push_str(target);
+                context.push_str("]]");
+            }
+            Inline::Link { title, target } => {
+                context.push('[');
+                context.push_str(title);
+                context.push_str("](");
+                context.push_str(target);
+                context.push(')');
+            }
+            Inline::DateStamp(stamp) => context.push_str(&date_stamp_raw(*stamp)),
+            Inline::DateRange(range) => context.push_str(&date_range_raw(*range)),
+            Inline::Text(text) => context.push_str(text),
+            Inline::SoftBreak => context.push(' '),
+            Inline::Code(text) => {
+                context.push('`');
+                context.push_str(text);
+                context.push('`');
+            }
+        }
+    }
+
+    truncate_date_context(context)
+}
+
+fn list_item_date_context(item: &parser::ListItem<'_>) -> String {
+    let mut context = String::new();
+    context.push_str(match item.kind {
+        parser::ListKind::Unordered => "- ",
+        parser::ListKind::Ordered => "1. ",
+    });
+    context.push_str(&inline_date_context(&item.body));
+
+    for child in &item.children {
+        let child_context = block_date_context(child);
+        if child_context.trim().is_empty() {
+            continue;
+        }
+        for line in child_context.lines() {
+            context.push('\n');
+            context.push_str("  ");
+            context.push_str(line);
+        }
+    }
+
+    truncate_date_context(context)
+}
+
+fn block_date_context(block: &parser::Block<'_>) -> String {
+    let context = match &block.kind {
+        BlockKind::Paragraph { body } => inline_date_context(body),
+        BlockKind::Code { lines, .. } => lines.join("\n"),
+        BlockKind::Heading { level, body } => format!("{} {body}", "=".repeat(*level)),
+        BlockKind::List { items } => items
+            .iter()
+            .map(list_item_date_context)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        BlockKind::Quote { lines } => lines.join("\n"),
+        BlockKind::Container { kind, args, lines } => {
+            let mut context = String::from("--- ");
+            context.push_str(kind);
+            if !args.is_empty() {
+                context.push(' ');
+                context.push_str(&args.join(" "));
+            }
+            if !lines.is_empty() {
+                context.push('\n');
+                context.push_str(&lines.join("\n"));
+            }
+            context
+        }
+    };
+
+    truncate_date_context(context)
+}
+
+fn property_date_context(key: &str, value: &str, owner_context: &str) -> String {
+    let mut context = format!("{key}: {value}");
+    if !owner_context.trim().is_empty() {
+        context.push('\n');
+        context.push_str(owner_context);
+    }
+
+    truncate_date_context(context)
+}
+
+fn document_date_context(document: &parser::Document<'_>, fallback_title: &str) -> String {
+    truncate_date_context(document.title().unwrap_or(fallback_title).to_string())
+}
+
+fn collect_inline_dates(
+    collector: &mut DateIndexCollector<'_>,
+    inlines: &[Inline<'_>],
+    context: &str,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp, context),
+            Inline::DateRange(range) => collector.push_inline_range(*range, context),
             Inline::NoteLink { .. }
             | Inline::Link { .. }
             | Inline::Text(_)
@@ -1381,13 +1510,15 @@ fn collect_inline_dates(collector: &mut DateIndexCollector<'_>, inlines: &[Inlin
 fn collect_property_dates<'a>(
     collector: &mut DateIndexCollector<'_>,
     properties: impl Iterator<Item = (&'a str, &'a str)>,
+    owner_context: &str,
 ) {
     for (key, value) in properties {
+        let context = property_date_context(key, value, owner_context);
         let inlines = parser::parse_inline(value);
         for inline in &inlines {
             match inline {
-                Inline::DateStamp(stamp) => collector.push_property_stamp(key, *stamp),
-                Inline::DateRange(range) => collector.push_property_range(key, *range),
+                Inline::DateStamp(stamp) => collector.push_property_stamp(key, *stamp, &context),
+                Inline::DateRange(range) => collector.push_property_range(key, *range, &context),
                 Inline::NoteLink { .. }
                 | Inline::Link { .. }
                 | Inline::Text(_)
@@ -1399,17 +1530,19 @@ fn collect_property_dates<'a>(
 }
 
 fn collect_block_dates(collector: &mut DateIndexCollector<'_>, block: &parser::Block<'_>) {
-    collect_property_dates(collector, block.properties());
+    let block_context = block_date_context(block);
+    collect_property_dates(collector, block.properties(), &block_context);
 
     match &block.kind {
-        BlockKind::Paragraph { body } => collect_inline_dates(collector, body),
+        BlockKind::Paragraph { body } => collect_inline_dates(collector, body, &block_context),
         BlockKind::Heading { body, .. } => {
             let inlines = parser::parse_inline(body);
-            collect_inline_dates(collector, &inlines);
+            collect_inline_dates(collector, &inlines, &block_context);
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_inline_dates(collector, &item.body);
+                let item_context = list_item_date_context(item);
+                collect_inline_dates(collector, &item.body, &item_context);
                 for child in &item.children {
                     collect_block_dates(collector, child);
                 }
@@ -1426,9 +1559,14 @@ fn collect_block_dates(collector: &mut DateIndexCollector<'_>, block: &parser::B
 fn collect_maki_lines_dates(collector: &mut DateIndexCollector<'_>, lines: &[&str]) {
     let source = lines.join("\n");
     let parsed = parser::parse(&source);
+    collect_document_dates(collector, &parsed.document);
+}
 
-    collect_property_dates(collector, parsed.document.properties());
-    for block in &parsed.document.blocks {
+fn collect_document_dates(collector: &mut DateIndexCollector<'_>, document: &parser::Document<'_>) {
+    let document_context = document_date_context(document, &collector.note_title);
+
+    collect_property_dates(collector, document.properties(), &document_context);
+    for block in &document.blocks {
         collect_block_dates(collector, block);
     }
 }
@@ -1449,11 +1587,7 @@ fn collect_date_index(notes: &BTreeMap<NoteRef, Note>) -> DateIndex {
             .to_string();
         let mut collector =
             DateIndexCollector::new(&mut date_index, note.source_path(), note_ref, note_title);
-
-        collect_property_dates(&mut collector, parsed.document.properties());
-        for block in &parsed.document.blocks {
-            collect_block_dates(&mut collector, block);
-        }
+        collect_document_dates(&mut collector, &parsed.document);
     }
 
     date_index

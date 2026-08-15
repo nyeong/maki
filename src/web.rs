@@ -1636,7 +1636,10 @@ mod tests {
             r#"--^ title: Home
 --^ date: [2026-08-15]
 
-Plan <2026-08-16> and [2026-08-17]--[2026-08-19]."#,
+Plan <2026-08-16> and [2026-08-17]--[2026-08-19].
+
+Task with property date.
+--^ scheduled: <2026-08-20 15:00>"#,
         )
         .unwrap();
 
@@ -1652,13 +1655,30 @@ Plan <2026-08-16> and [2026-08-17]--[2026-08-19]."#,
 
         let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
         let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
+        let property_detail =
+            handle_request(&state, &http::Request::get("/@/dates/2026-08-20")).unwrap();
+        let property_detail_body = String::from_utf8(property_detail.body().to_vec()).unwrap();
+        let note = handle_request(&state, &http::Request::get("/home")).unwrap();
+        let note_body = String::from_utf8(note.body().to_vec()).unwrap();
         fs::remove_dir_all(root).unwrap();
 
         assert_eq!(detail.status(), http::StatusCode::Ok);
         assert!(detail_body.contains("<title>2026-08-18</title>"));
         assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
         assert!(detail_body.contains("range"));
-        assert!(detail_body.contains("<a href=\"/home\">Home</a>"));
+        assert!(detail_body.contains("<a href=\"/home#date-inline-home-maki-2\">Home</a>"));
+        assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
+
+        assert_eq!(property_detail.status(), http::StatusCode::Ok);
+        assert!(
+            property_detail_body.contains("<a href=\"/home#date-property-home-maki-2\">Home</a>")
+        );
+        assert!(property_detail_body.contains("scheduled: &lt;2026-08-20 15:00&gt;"));
+        assert!(property_detail_body.contains("Task with property date."));
+
+        assert_eq!(note.status(), http::StatusCode::Ok);
+        assert!(note_body.contains("id=\"date-inline-home-maki-2\""));
+        assert!(note_body.contains("id=\"date-property-home-maki-2\""));
     }
 
     #[test]

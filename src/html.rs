@@ -166,6 +166,7 @@ struct Renderer<'a> {
     html: String,
     context: RenderContext<'a>,
     inline_date_occurrence_index: usize,
+    property_date_occurrence_index: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -276,6 +277,13 @@ impl<'a> Renderer<'a> {
         self.html.push(close);
     }
 
+    fn render_date_location(&mut self, occurrence_id: &str) {
+        self.html
+            .push_str("<span class=\"maki-date-location\" id=\"");
+        self.escape_html_attr_into(occurrence_id);
+        self.html.push_str("\" aria-hidden=\"true\"></span>");
+    }
+
     fn render_date_stamp_link(&mut self, stamp: DateStamp<'_>, occurrence_id: &str) {
         let href = maki::date_occurrence_href(stamp.date(), occurrence_id);
         self.html.push_str("<a class=\"");
@@ -297,8 +305,42 @@ impl<'a> Renderer<'a> {
         ))
     }
 
+    fn next_property_date_occurrence_id(&mut self) -> Option<String> {
+        let source_path = self.context.date_source_path?;
+        self.property_date_occurrence_index += 1;
+
+        Some(maki::property_date_occurrence_id(
+            source_path,
+            self.property_date_occurrence_index,
+        ))
+    }
+
+    fn render_property_date_locations<'p>(
+        &mut self,
+        properties: impl Iterator<Item = (&'p str, &'p str)>,
+    ) {
+        for (_key, value) in properties {
+            let inlines = parser::parse_inline(value);
+            for inline in &inlines {
+                match inline {
+                    Inline::DateStamp(_) | Inline::DateRange(_) => {
+                        if let Some(occurrence_id) = self.next_property_date_occurrence_id() {
+                            self.render_date_location(&occurrence_id);
+                        }
+                    }
+                    Inline::NoteLink { .. }
+                    | Inline::Link { .. }
+                    | Inline::Text(_)
+                    | Inline::SoftBreak
+                    | Inline::Code(_) => {}
+                }
+            }
+        }
+    }
+
     fn render_date_stamp(&mut self, stamp: DateStamp<'_>) {
         if let Some(occurrence_id) = self.next_inline_date_occurrence_id() {
+            self.render_date_location(&occurrence_id);
             self.render_date_stamp_link(stamp, &occurrence_id);
         } else {
             self.render_date_stamp_text(stamp);
@@ -307,6 +349,7 @@ impl<'a> Renderer<'a> {
 
     fn render_date_range(&mut self, range: DateRange<'_>) {
         if let Some(occurrence_id) = self.next_inline_date_occurrence_id() {
+            self.render_date_location(&occurrence_id);
             self.render_date_stamp_link(range.start(), &occurrence_id);
             self.html.push_str("--");
             self.render_date_stamp_link(range.end(), &occurrence_id);
@@ -374,9 +417,8 @@ impl<'a> Renderer<'a> {
         let parsed = parser::parse(&source);
 
         self.html.push_str("<blockquote>");
-        for block in &parsed.document.blocks {
-            self.render_block(&block.kind);
-        }
+        self.render_document_date_locations(&parsed.document);
+        self.render_blocks(&parsed.document.blocks);
         self.html.push_str("</blockquote>");
     }
 
@@ -414,7 +456,12 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_block(&mut self, block: &BlockKind<'_>) {
+    fn render_block(&mut self, block: &parser::Block<'_>) {
+        self.render_property_date_locations(block.properties());
+        self.render_block_kind(&block.kind);
+    }
+
+    fn render_block_kind(&mut self, block: &BlockKind<'_>) {
         match block {
             BlockKind::Paragraph { body } => {
                 self.html.push_str("<p>");
@@ -446,7 +493,7 @@ impl<'a> Renderer<'a> {
             self.render_inlines(&item.body);
             if !item.children.is_empty() {
                 for block in &item.children {
-                    self.render_block(&block.kind);
+                    self.render_block(block);
                 }
             }
             self.html.push_str("</li>");
@@ -507,15 +554,24 @@ impl<'a> Renderer<'a> {
         self.begin_html(title);
         self.render_navigation();
 
+        self.render_document_date_locations(document);
         if let Some(title) = title {
             self.render_heading(1, title);
         }
-        for block in &document.blocks {
-            self.render_block(&block.kind);
-        }
+        self.render_blocks(&document.blocks);
 
         self.html.push_str("</body></html>");
         self.html.clone()
+    }
+
+    fn render_document_date_locations(&mut self, document: &Document<'_>) {
+        self.render_property_date_locations(document.properties());
+    }
+
+    fn render_blocks(&mut self, blocks: &[parser::Block<'_>]) {
+        for block in blocks {
+            self.render_block(block);
+        }
     }
 
     fn new_with_context(context: RenderContext<'a>) -> Self {
@@ -523,6 +579,7 @@ impl<'a> Renderer<'a> {
             html: "".to_string(),
             context,
             inline_date_occurrence_index: 0,
+            property_date_occurrence_index: 0,
         }
     }
 
@@ -764,6 +821,8 @@ fn render_date_backlink(
     occurrence: &DateOccurrence,
     relation: DateRelation,
 ) {
+    let target_href = format!("{}#{}", occurrence.note_ref().web_path(), occurrence.id());
+
     renderer.html.push_str("<li id=\"");
     renderer.escape_html_attr_into(occurrence.id());
     renderer.html.push_str("\" class=\"maki-date-backlink ");
@@ -771,7 +830,7 @@ fn render_date_backlink(
     renderer
         .html
         .push_str("\"><div class=\"maki-date-backlink-main\"><a href=\"");
-    renderer.escape_html_attr_into(&occurrence.note_ref().web_path());
+    renderer.escape_html_attr_into(&target_href);
     renderer.html.push_str("\">");
     renderer.escape_html_into(occurrence.note_title());
     renderer
@@ -792,7 +851,15 @@ fn render_date_backlink(
             render_date_badge(renderer, &label);
         }
     }
-    renderer.html.push_str("</div></li>");
+    renderer.html.push_str("</div>");
+    if !occurrence.context().trim().is_empty() {
+        renderer
+            .html
+            .push_str("<pre class=\"maki-date-backlink-context\">");
+        renderer.escape_html_into(occurrence.context());
+        renderer.html.push_str("</pre>");
+    }
+    renderer.html.push_str("</li>");
 }
 
 fn render_date_badge(renderer: &mut Renderer<'_>, label: &str) {
