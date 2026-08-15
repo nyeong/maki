@@ -112,6 +112,10 @@ impl Request {
     pub(crate) fn target(&self) -> &str {
         &self.target
     }
+
+    pub(crate) fn method(&self) -> Method {
+        self.method
+    }
 }
 
 /// Parses an HTTP request-line.
@@ -169,6 +173,7 @@ impl Display for StatusCode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum Method {
     Get,
+    Head,
 }
 
 impl std::str::FromStr for Method {
@@ -212,6 +217,11 @@ impl Response {
         self.body = body.into();
         self.headers
             .insert("Content-Length".to_string(), self.body.len().to_string());
+        self
+    }
+
+    pub(crate) fn without_body(mut self) -> Self {
+        self.body.clear();
         self
     }
 
@@ -265,6 +275,7 @@ impl Display for Headers {
 pub(crate) fn parse_method(method: &str) -> Result<Method, Error> {
     match method {
         "GET" => Ok(Method::Get),
+        "HEAD" => Ok(Method::Head),
         _ => Err(InvalidMethod),
     }
 }
@@ -308,6 +319,15 @@ mod tests {
         let (method, target, version) = parse_request_line(request).unwrap();
         assert_eq!(method, Method::Get);
         assert_eq!(target, "/favicon.ico");
+        assert_eq!(version, Version::Http1_1);
+    }
+
+    #[test]
+    fn test_parse_head_request_line() {
+        let request = "HEAD /@ HTTP/1.1";
+        let (method, target, version) = parse_request_line(request).unwrap();
+        assert_eq!(method, Method::Head);
+        assert_eq!(target, "/@");
         assert_eq!(version, Version::Http1_1);
     }
 
@@ -367,6 +387,21 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 302 Found\r\n"));
         assert!(response.contains("connection: close\r\n"));
         assert!(response.contains("location: /README\r\n"));
+        assert!(response.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn test_http_response_without_body_preserves_content_length() {
+        let response = Response::new(StatusCode::Ok)
+            .set_header("content-type", "text/plain")
+            .set_body("hello")
+            .without_body();
+
+        assert_eq!(response.get_header("content-length"), Some("5"));
+        assert_eq!(response.body(), b"");
+
+        let response = String::from_utf8(response.to_bytes()).unwrap();
+        assert!(response.contains("content-length: 5\r\n"));
         assert!(response.ends_with("\r\n\r\n"));
     }
 }

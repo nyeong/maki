@@ -499,6 +499,18 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
     }
 }
 
+fn response_for_request(
+    state: &AppState,
+    request: &http::Request,
+) -> Result<http::Response, Error> {
+    let response = handle_request(state, request)?;
+
+    Ok(match request.method() {
+        http::Method::Get => response,
+        http::Method::Head => response.without_body(),
+    })
+}
+
 fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, Error> {
     // TODO: 최적화 가능
     // 매 요청마다 버퍼, Vec 새로 만들지 않고 만들어진 것 쓰기
@@ -625,11 +637,11 @@ where
         }
     };
 
-    if request.target() == LIVE_RELOAD_PATH {
+    if request.method() == http::Method::Get && request.target() == LIVE_RELOAD_PATH {
         return handle_live_reload_connection(state, stream);
     }
 
-    let response = match handle_request(state, &request) {
+    let response = match response_for_request(state, &request) {
         Ok(response) => response,
         Err(err) => err.into_response(),
     };
@@ -1073,6 +1085,27 @@ mod tests {
         assert!(body.contains("broken link: missing"));
         assert!(body.contains("broken link: ghost"));
         assert!(!body.contains("maki-diagnostics-table"));
+    }
+
+    #[test]
+    fn test_head_diagnostics_page_returns_headers_without_body() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::new(http::Method::Head, "/@");
+
+        let response = response_for_request(&state, &request).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::Ok);
+        assert_eq!(
+            response.get_header("Content-Type"),
+            Some("text/html; charset=utf-8")
+        );
+        assert!(
+            response
+                .get_header("Content-Length")
+                .is_some_and(|length| length.parse::<usize>().unwrap() > 0)
+        );
+        assert_eq!(response.body(), b"");
     }
 
     #[test]
