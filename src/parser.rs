@@ -153,7 +153,7 @@ fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
 }
 
 /// Parses a given line into Vec<Inline>
-fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
+pub(crate) fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     let mut cursor = InlineCursor::new(source);
     let mut inlines = vec![];
     let mut text_start = 0;

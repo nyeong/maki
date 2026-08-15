@@ -1,10 +1,14 @@
 //! HTML renderer for parsed Maki documents.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     maki::{
-        self, NoteLinkResolution, NoteRef, ProjectDiagnostic, ProjectDiagnosticSummary, SearchEntry,
+        self, NoteLinkResolution, NoteRef, ProjectDiagnostic, ProjectDiagnosticKind,
+        ProjectDiagnosticSummary, SearchEntry,
     },
     parser::{self, BlockKind, Document, Inline, ListItem, ListKind},
 };
@@ -138,9 +142,15 @@ struct Renderer<'a> {
     context: RenderContext<'a>,
 }
 
+#[derive(Clone, Copy)]
+enum HeadingTag {
+    Native(usize),
+    Aria,
+}
+
 impl<'a> Renderer<'a> {
     fn render_navigation(&mut self) {
-        if self.context.project.is_none() {
+        if !self.context.project_navigation {
             return;
         }
 
@@ -332,7 +342,7 @@ impl<'a> Renderer<'a> {
             BlockKind::Code { lines, lang } => self.render_code(lines, *lang),
             BlockKind::Heading { level, body } => {
                 // 문서의 title이 h1이 될 거라서 하나씩 올려줌
-                self.render_heading(level + 1, body);
+                self.render_heading_with_inlines(level + 1, body);
             }
             BlockKind::List { items } => self.render_list(items),
             BlockKind::Quote { lines } => self.render_quote(lines),
@@ -365,6 +375,20 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_heading(&mut self, level: usize, body: &str) {
+        let tag = self.begin_heading(level, body);
+        self.escape_html_into(body);
+        self.end_heading(tag);
+    }
+
+    fn render_heading_with_inlines(&mut self, level: usize, body: &str) {
+        let inlines = parser::parse_inline(body);
+        let tag = self.begin_heading(level, body);
+
+        self.render_inlines(&inlines);
+        self.end_heading(tag);
+    }
+
+    fn begin_heading(&mut self, level: usize, body: &str) -> HeadingTag {
         if (1..=6).contains(&level) {
             self.html.push_str("<h");
             self.html.push_str(&level.to_string());
@@ -372,20 +396,30 @@ impl<'a> Renderer<'a> {
             self.escape_html_into(body);
             self.html.push('"');
             self.html.push('>');
-            self.escape_html_into(body);
-            self.html.push_str("</h");
-            self.html.push_str(&level.to_string());
-            self.html.push('>');
+            HeadingTag::Native(level)
         } else {
             self.html.push_str("<div role=\"heading\" aria-level=\"");
             self.html.push_str(&level.to_string());
             self.html.push_str("\" id=\"");
             self.escape_html_into(body);
             self.html.push_str("\">");
-            self.escape_html_into(body);
-            self.html.push_str("</div>");
+            HeadingTag::Aria
         }
     }
+
+    fn end_heading(&mut self, tag: HeadingTag) {
+        match tag {
+            HeadingTag::Native(level) => {
+                self.html.push_str("</h");
+                self.html.push_str(&level.to_string());
+                self.html.push('>');
+            }
+            HeadingTag::Aria => {
+                self.html.push_str("</div>");
+            }
+        }
+    }
+
     fn render(&mut self, document: &Document<'a>) -> String {
         let title = document.title();
         self.begin_html(title);
@@ -431,6 +465,7 @@ impl<'a> Renderer<'a> {
 pub(crate) struct RenderContext<'a> {
     project: Option<ProjectRenderContext<'a>>,
     asset_mode: AssetMode,
+    project_navigation: bool,
 }
 
 impl<'a> RenderContext<'a> {
@@ -444,11 +479,17 @@ impl<'a> RenderContext<'a> {
                 get_note,
             }),
             asset_mode: AssetMode::Inline,
+            project_navigation: true,
         }
     }
 
     pub(crate) fn with_asset_mode(mut self, asset_mode: AssetMode) -> Self {
         self.asset_mode = asset_mode;
+        self
+    }
+
+    pub(crate) fn with_project_navigation(mut self) -> Self {
+        self.project_navigation = true;
         self
     }
 }
@@ -472,6 +513,12 @@ pub(crate) fn render_document_with_context(
 
 pub(crate) fn render_document(document: &Document<'_>) -> String {
     render_document_with_context(document, RenderContext::default())
+}
+
+pub(crate) fn render_maki_source_with_context(source: &str, context: RenderContext<'_>) -> String {
+    let parsed = parser::parse(source);
+
+    render_document_with_context(&parsed.document, context)
 }
 
 pub(crate) fn render_search_page(
@@ -543,18 +590,21 @@ pub(crate) fn render_diagnostics_page(
     total_notes: usize,
     asset_mode: AssetMode,
 ) -> String {
-    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
-    renderer.begin_project_page("Diagnostics");
-    renderer
-        .html
-        .push_str("<main class=\"maki-diagnostics-page\">");
+    let source = diagnostics_page_source(diagnostics, total_notes);
 
+    render_maki_source_with_context(
+        &source,
+        RenderContext::default()
+            .with_asset_mode(asset_mode)
+            .with_project_navigation(),
+    )
+}
+
+fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {
     let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
+    let mut source = String::from("--^ title: Diagnostics\n\n");
 
-    renderer
-        .html
-        .push_str("<p class=\"maki-diagnostics-summary\">");
-    renderer.html.push_str(&format!(
+    source.push_str(&format!(
         "{} issue(s) across {total_notes} note(s): {} broken link(s), {} ambiguous link(s), {} parser warning(s), {} read failure(s).",
         summary.total(),
         summary.broken_links(),
@@ -562,38 +612,72 @@ pub(crate) fn render_diagnostics_page(
         summary.parse_warnings(),
         summary.read_failures()
     ));
-    renderer.html.push_str("</p>");
+    source.push_str("\n\n");
 
     if diagnostics.is_empty() {
-        renderer
-            .html
-            .push_str("<p class=\"maki-diagnostics-empty\">No diagnostics.</p>");
-    } else {
-        renderer
-            .html
-            .push_str("<table class=\"maki-diagnostics-table\"><thead><tr><th>Kind</th><th>Source</th><th>Message</th></tr></thead><tbody>");
-        for diagnostic in diagnostics {
-            renderer.html.push_str("<tr><td>");
-            renderer.escape_html_into(diagnostic.kind().label());
-            renderer.html.push_str("</td><td>");
-            let source_href = format!("/{}", diagnostic.source_path().with_extension("").display());
-            renderer.html.push_str("<a href=\"");
-            renderer.escape_html_attr_into(&source_href);
-            renderer.html.push_str("\">");
-            renderer.escape_html_into(&diagnostic.source_path().display().to_string());
-            if let Some(line) = diagnostic.line() {
-                renderer.html.push(':');
-                renderer.html.push_str(&line.to_string());
-            }
-            renderer.html.push_str("</a></td><td>");
-            renderer.escape_html_into(&diagnostic.message());
-            renderer.html.push_str("</td></tr>");
-        }
-        renderer.html.push_str("</tbody></table>");
+        source.push_str("No diagnostics.\n");
+        return source;
     }
 
-    renderer.html.push_str("</main></body></html>");
-    renderer.html
+    let mut by_source: BTreeMap<PathBuf, Vec<&ProjectDiagnostic>> = BTreeMap::new();
+    for diagnostic in diagnostics {
+        by_source
+            .entry(diagnostic.source_path().to_path_buf())
+            .or_default()
+            .push(diagnostic);
+    }
+
+    for (source_path, diagnostics) in by_source {
+        let source_href = format!("/{}", source_path.with_extension("").display());
+        source.push_str("== [");
+        push_maki_single_line(&mut source, &source_path.display().to_string());
+        source.push_str("](");
+        push_maki_single_line(&mut source, &source_href);
+        source.push_str(")\n\n");
+
+        for diagnostic in diagnostics {
+            source.push_str("- ");
+            push_diagnostic_item(&mut source, diagnostic);
+            source.push('\n');
+        }
+        source.push('\n');
+    }
+
+    source
+}
+
+fn push_diagnostic_item(source: &mut String, diagnostic: &ProjectDiagnostic) {
+    source.push_str(diagnostic.kind().label());
+    source.push_str(": ");
+    if let Some(line) = diagnostic.line() {
+        source.push_str("line ");
+        source.push_str(&line.to_string());
+        source.push_str(": ");
+    }
+
+    match diagnostic.kind() {
+        ProjectDiagnosticKind::ParseWarning { message } => {
+            push_maki_single_line(source, message);
+        }
+        ProjectDiagnosticKind::BrokenLink { target } => {
+            push_maki_single_line(source, target);
+        }
+        ProjectDiagnosticKind::AmbiguousLink { target } => {
+            push_maki_single_line(source, target);
+        }
+        ProjectDiagnosticKind::ReadFailed => {
+            source.push_str("failed to read note");
+        }
+    }
+}
+
+fn push_maki_single_line(source: &mut String, input: &str) {
+    for ch in input.chars() {
+        match ch {
+            '\r' | '\n' => source.push(' '),
+            _ => source.push(ch),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -631,6 +715,21 @@ hello <maki> & friends
         ));
         assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
         assert!(html.contains("<ol><li>first</li><li>second</li></ol>"));
+    }
+
+    #[test]
+    fn test_render_heading_supports_inline_links() {
+        let parsed = parser::parse(
+            r#"--^ title: Diagnostics
+
+== [home.maki](/home)"#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(
+            html.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>")
+        );
     }
 
     #[test]

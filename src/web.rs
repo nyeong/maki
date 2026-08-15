@@ -1067,8 +1067,12 @@ mod tests {
         assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
         assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
         assert!(body.contains("2 issue(s)"));
+        assert!(
+            body.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>")
+        );
         assert!(body.contains("broken link: missing"));
         assert!(body.contains("broken link: ghost"));
+        assert!(!body.contains("maki-diagnostics-table"));
     }
 
     #[test]

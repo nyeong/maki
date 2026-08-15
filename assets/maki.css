@@ -150,8 +150,6 @@ body {
 
 .maki-search-summary,
 .maki-search-empty,
-.maki-diagnostics-summary,
-.maki-diagnostics-empty,
 .maki-not-found-summary {
   color: var(--muted);
 }
@@ -267,15 +265,6 @@ body {
   visibility: visible;
   pointer-events: auto;
   transition-delay: 0s;
-}
-
-.maki-diagnostics-table {
-  font-size: 0.9rem;
-}
-
-.maki-diagnostics-table th:first-child,
-.maki-diagnostics-table td:first-child {
-  width: 8.5rem;
 }
 
 .maki-not-found-page {
