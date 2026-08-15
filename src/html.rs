@@ -803,7 +803,7 @@ pub(crate) fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMo
     let mut current_month = None;
     let mut list_open = false;
 
-    for (date, backlinks) in date_index.dates() {
+    for (date, backlinks) in date_index.dates().rev() {
         has_dates = true;
 
         if current_year != Some(date.year()) {

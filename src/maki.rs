@@ -247,7 +247,7 @@ impl DateIndex {
         }
     }
 
-    pub(crate) fn dates(&self) -> impl Iterator<Item = (&Date, &[DateBacklink])> {
+    pub(crate) fn dates(&self) -> impl DoubleEndedIterator<Item = (&Date, &[DateBacklink])> {
         self.index_by_date
             .iter()
             .map(|(date, backlinks)| (date, backlinks.as_slice()))
