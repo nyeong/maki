@@ -76,7 +76,7 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 
 - `src/parser.rs`: parse pipeline, line scan, draft build, document build.
 - `src/parser.rs`: `NumberDot { width }`, paragraph boundary, ordered/unordered list parser.
-- `src/parser.rs`: pipe table parser, inline table cell parsing, digit-only numeric column detection.
+- `src/parser.rs`: pipe table parser, middle separator row, inline table cell parsing, digit-only numeric column detection.
 - `src/parser.rs`: inline code, wikilink, markdown link, plain URL parser.
 
 평가:

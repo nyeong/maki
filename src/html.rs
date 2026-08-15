@@ -519,6 +519,11 @@ impl<'a> Renderer<'a> {
 
         self.html.push_str("<tbody>");
         for row in rows {
+            if row.is_separator() {
+                self.render_table_separator(alignments.len());
+                continue;
+            }
+
             self.html.push_str("<tr>");
             for (index, cell) in row.cells.iter().enumerate() {
                 self.html.push_str("<td");
@@ -530,6 +535,13 @@ impl<'a> Renderer<'a> {
             self.html.push_str("</tr>");
         }
         self.html.push_str("</tbody>");
+    }
+
+    fn render_table_separator(&mut self, column_count: usize) {
+        self.html
+            .push_str("<tr class=\"maki-table-separator\" aria-hidden=\"true\"><td colspan=\"");
+        self.html.push_str(&column_count.to_string());
+        self.html.push_str("\"></td></tr>");
     }
 
     fn render_table(
@@ -1147,6 +1159,24 @@ hello <maki> & friends
         assert!(html.contains(
             "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><a href=\"/bob\">Bob</a></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
         ));
+    }
+
+    #[test]
+    fn render_table_with_middle_separator() {
+        let parsed = parser::parse(
+            r#"| 일시 | 시간 |
+|---+---|
+| [2025-11-05 Wed] | 5H |
+|---+---|
+| [2026-04-04 Sat] | 5H |"#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains(
+            "<tr class=\"maki-table-separator\" aria-hidden=\"true\"><td colspan=\"2\"></td></tr>"
+        ));
+        assert!(html.contains("2026-04-04 Sat"));
     }
 
     #[test]

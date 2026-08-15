@@ -586,6 +586,14 @@ th {
   font-variant-numeric: tabular-nums;
 }
 
+.maki-table-separator td {
+  height: 0;
+  padding: 0;
+  border-right: 0;
+  border-left: 0;
+  background: var(--line);
+}
+
 @media (max-width: 640px) {
   html {
     font-size: 17px;

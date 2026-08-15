@@ -521,8 +521,9 @@ fn build_list_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Option
     })
 }
 
-fn build_table_row<'a>(cells: &[&'a str]) -> TableRow<'a> {
+fn build_table_row<'a>(kind: TableRowKind, cells: &[&'a str]) -> TableRow<'a> {
     TableRow {
+        kind,
         cells: cells
             .iter()
             .map(|cell| TableCell {
@@ -538,14 +539,23 @@ fn is_integer_table_cell(cell: &str) -> bool {
     !cell.is_empty() && cell.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn table_column_alignments(rows: &[Vec<&str>], column_count: usize) -> Vec<TableColumnAlignment> {
+fn table_column_alignments(
+    rows: &[TableRowDraft<'_>],
+    column_count: usize,
+) -> Vec<TableColumnAlignment> {
     (0..column_count)
         .map(|column| {
-            if !rows.is_empty()
-                && rows.iter().all(|row| {
-                    row.get(column)
-                        .is_some_and(|cell| is_integer_table_cell(cell))
-                })
+            let mut has_data_rows = false;
+
+            if rows.iter().all(|row| {
+                if row.kind == TableRowKind::Separator {
+                    return true;
+                }
+                has_data_rows = true;
+                row.cells
+                    .get(column)
+                    .is_some_and(|cell| is_integer_table_cell(cell))
+            }) && has_data_rows
             {
                 TableColumnAlignment::Number
             } else {
@@ -557,14 +567,17 @@ fn table_column_alignments(rows: &[Vec<&str>], column_count: usize) -> Vec<Table
 
 fn build_table_block<'a>(
     header: &[&'a str],
-    rows: &[Vec<&'a str>],
+    rows: &[TableRowDraft<'a>],
     props: Properties<'a>,
 ) -> Block<'a> {
     Block {
         kind: BlockKind::Table {
-            header: build_table_row(header),
+            header: build_table_row(TableRowKind::Data, header),
             alignments: table_column_alignments(rows, header.len()),
-            rows: rows.iter().map(|row| build_table_row(row)).collect(),
+            rows: rows
+                .iter()
+                .map(|row| build_table_row(row.kind, &row.cells))
+                .collect(),
         },
         props,
     }
@@ -709,7 +722,14 @@ pub(crate) enum BlockKind<'a> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct TableRow<'a> {
+    pub(crate) kind: TableRowKind,
     pub(crate) cells: Vec<TableCell<'a>>,
+}
+
+impl TableRow<'_> {
+    pub(crate) fn is_separator(&self) -> bool {
+        self.kind == TableRowKind::Separator
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -721,6 +741,12 @@ pub(crate) struct TableCell<'a> {
 pub(crate) enum TableColumnAlignment {
     Text,
     Number,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum TableRowKind {
+    Data,
+    Separator,
 }
 
 #[derive(Debug, PartialEq)]
@@ -920,8 +946,14 @@ enum BlockDraft<'a> {
 
     Table {
         header: Vec<&'a str>,
-        rows: Vec<Vec<&'a str>>,
+        rows: Vec<TableRowDraft<'a>>,
     },
+}
+
+#[derive(Debug, PartialEq)]
+struct TableRowDraft<'a> {
+    kind: TableRowKind,
+    cells: Vec<&'a str>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1400,14 +1432,22 @@ fn parse_table_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'
     let mut rows = vec![];
     while let Some(line) = cursor.peek() {
         if parse_table_separator_columns(line) == Some(separator_columns) {
-            break;
+            cursor.next();
+            rows.push(TableRowDraft {
+                kind: TableRowKind::Separator,
+                cells: vec![],
+            });
+            continue;
         }
         let Some(cells) = parse_table_row_cells(line) else {
             break;
         };
 
         cursor.next();
-        rows.push(cells);
+        rows.push(TableRowDraft {
+            kind: TableRowKind::Data,
+            cells,
+        });
     }
 
     Some(BlockDraft::Table { header, rows })
@@ -1778,6 +1818,7 @@ plain text"#;
             ]
         );
         assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, TableRowKind::Data);
         assert_eq!(rows[0].cells[0].body, vec![Inline::Code("Alice")]);
         assert_eq!(rows[0].cells[1].body, vec![Inline::Text("10")]);
         assert_eq!(
@@ -1811,6 +1852,7 @@ plain text"#;
             panic!("expected the second block to become table");
         };
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, TableRowKind::Data);
     }
 
     #[test]
@@ -1827,7 +1869,47 @@ plain text"#;
             panic!("expected a table block");
         };
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, TableRowKind::Data);
         assert_eq!(rows[0].cells[1].body, vec![Inline::Text("---")]);
+    }
+
+    #[test]
+    fn parse_table_keeps_middle_separator_inside_table() {
+        let parsed = parse(
+            r#"| 일시 | 시간 |
+|---+---|
+| [2025-11-05 Wed] | 5H |
+|---+---|
+| [2026-04-04 Sat] | 5H |"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 1);
+
+        let BlockKind::Table {
+            alignments, rows, ..
+        } = &parsed.document.blocks[0].kind
+        else {
+            panic!("expected a table block");
+        };
+
+        assert_eq!(
+            alignments,
+            &vec![TableColumnAlignment::Text, TableColumnAlignment::Text]
+        );
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].kind, TableRowKind::Data);
+        assert_eq!(rows[1].kind, TableRowKind::Separator);
+        assert!(rows[1].cells.is_empty());
+        assert_eq!(rows[2].kind, TableRowKind::Data);
+        assert_eq!(
+            rows[2].cells[0].body,
+            vec![Inline::DateStamp(DateStamp {
+                kind: DateStampKind::Date,
+                date: Date::new(2026, 4, 4).unwrap(),
+                body: "2026-04-04 Sat",
+            })]
+        );
     }
 
     #[test]

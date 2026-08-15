@@ -1227,6 +1227,10 @@ fn collect_table_row_external_links(
     source_path: &Path,
     row: &parser::TableRow<'_>,
 ) {
+    if row.is_separator() {
+        return;
+    }
+
     for cell in &row.cells {
         collect_inline_external_links(external_links, source_path, &cell.body);
     }
@@ -1609,6 +1613,10 @@ fn list_item_date_context(item: &parser::ListItem<'_>) -> String {
 }
 
 fn table_row_date_context(row: &parser::TableRow<'_>) -> String {
+    if row.is_separator() {
+        return String::from("| --- |");
+    }
+
     let mut context = String::from("| ");
     context.push_str(
         &row.cells
@@ -1737,6 +1745,10 @@ fn collect_table_row_dates(
     row: &parser::TableRow<'_>,
     context: &str,
 ) {
+    if row.is_separator() {
+        return;
+    }
+
     for cell in &row.cells {
         collect_inline_dates(collector, &cell.body, context);
     }
@@ -1874,6 +1886,10 @@ fn collect_table_row_link_diagnostics(
     source_path: &Path,
     row: &parser::TableRow<'_>,
 ) {
+    if row.is_separator() {
+        return;
+    }
+
     for cell in &row.cells {
         collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &cell.body);
     }
