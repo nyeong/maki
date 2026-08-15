@@ -1,18 +1,10 @@
 (() => {
-  const DESKTOP_QUERY = "(min-width: 960px)";
   const HEADING_SELECTOR =
     "h2, h3, h4, h5, h6, [role='heading'][aria-level]";
-  const PANEL_HOVER_WIDTH = 280;
-  const RAIL_HOVER_WIDTH = 52;
-  const MARKER_HIT_RADIUS = 28;
-  const TRACK_MARGIN = 16;
   const DEFAULT_CONTENT_HEADING_LEVEL = 3;
   const MIN_CONTENT_HEADING_LEVEL = 1;
-  const LABEL_HEIGHT = 32;
-  const SEVERE_OVERLAP_GAP = LABEL_HEIGHT / 2;
-  const DENSE_CLUSTER_HEADING_COUNT = 5;
-  const SCROLL_HEIGHT_TOLERANCE = 1;
-  const isDesktop = () => globalThis.matchMedia(DESKTOP_QUERY).matches;
+  const ACTIVE_ANCHOR_RATIO = 0.32;
+  const ACTIVE_ANCHOR_MAX = 260;
 
   const getHeadingLevel = (heading) => {
     const ariaLevel = Number(heading.getAttribute("aria-level"));
@@ -54,21 +46,6 @@
   const headingTop = (heading) =>
     heading.getBoundingClientRect().top + globalThis.scrollY;
 
-  const documentHeight = () => {
-    const { body, documentElement } = document;
-
-    return Math.max(
-      body.offsetHeight,
-      body.scrollHeight,
-      documentElement.offsetHeight,
-      documentElement.scrollHeight,
-      globalThis.innerHeight,
-    );
-  };
-
-  const hasScrollablePage = () =>
-    documentHeight() > globalThis.innerHeight + SCROLL_HEIGHT_TOLERANCE;
-
   const insertToc = (toc) => {
     const title = document.querySelector("body > h1");
     if (title) {
@@ -85,48 +62,13 @@
     document.body.prepend(toc);
   };
 
-  const markerY = (heading) => {
-    const trackHeight = globalThis.innerHeight - TRACK_MARGIN * 2;
-    const ratio = Math.min(Math.max(headingTop(heading) / documentHeight(), 0), 1);
-
-    return TRACK_MARGIN + ratio * trackHeight;
-  };
-
-  const hasDenseCluster = (headings) => {
-    const positions = headings.map(markerY).sort((left, right) => left - right);
-    let clusterSize = 1;
-
-    for (let index = 1; index < positions.length; index += 1) {
-      if (positions[index] - positions[index - 1] <= SEVERE_OVERLAP_GAP) {
-        clusterSize += 1;
-        if (clusterSize >= DENSE_CLUSTER_HEADING_COUNT) return true;
-      } else {
-        clusterSize = 1;
-      }
-    }
-
-    return false;
-  };
-
-  const headingsUpToLevel = (headings, maxLevel) =>
-    headings.filter((heading) => getContentHeadingLevel(heading) <= maxLevel);
-
   const chooseHeadings = (headings) => {
-    let fallback = headings;
+    const visibleDepth = headings.filter(
+      (heading) =>
+        getContentHeadingLevel(heading) <= DEFAULT_CONTENT_HEADING_LEVEL,
+    );
 
-    for (
-      let level = DEFAULT_CONTENT_HEADING_LEVEL;
-      level >= MIN_CONTENT_HEADING_LEVEL;
-      level -= 1
-    ) {
-      const candidate = headingsUpToLevel(headings, level);
-      if (!candidate.length) continue;
-
-      fallback = candidate;
-      if (!hasDenseCluster(candidate)) return candidate;
-    }
-
-    return fallback;
+    return visibleDepth.length ? visibleDepth : headings;
   };
 
   const labelParts = (labelText) => {
@@ -135,6 +77,10 @@
       ? { number: match[1], title: match[2] }
       : { number: "", title: labelText };
   };
+
+  const activeAnchorY = () =>
+    globalThis.scrollY +
+    Math.min(globalThis.innerHeight * ACTIVE_ANCHOR_RATIO, ACTIVE_ANCHOR_MAX);
 
   const start = () => {
     if (document.querySelector(".maki-toc")) return;
@@ -146,10 +92,6 @@
     toc.className = "maki-toc";
     toc.setAttribute("aria-label", "Section map");
 
-    const markers = document.createElement("div");
-    markers.className = "maki-toc-markers";
-    const labels = document.createElement("div");
-    labels.className = "maki-toc-labels";
     const panel = document.createElement("details");
     panel.className = "maki-toc-panel";
     panel.open = true;
@@ -159,29 +101,24 @@
     const list = document.createElement("ol");
     list.className = "maki-toc-list";
     panel.append(summary, list);
-    toc.append(markers, labels, panel);
+    toc.append(panel);
     insertToc(toc);
 
     const labelTexts = numberedLabels(headings);
     const items = headings.map((heading, index) => {
       const labelText = labelTexts[index];
       const parts = labelParts(labelText);
-      const marker = document.createElement("button");
-      marker.type = "button";
-      marker.className = "maki-toc-marker";
-      marker.setAttribute("aria-label", labelText);
-      marker.style.setProperty(
-        "--maki-toc-delay",
-        `${Math.min(index * 14, 180)}ms`,
+      const item = document.createElement("li");
+      item.className = "maki-toc-item";
+      item.style.setProperty(
+        "--maki-toc-depth",
+        Math.max(getContentHeadingLevel(heading) - 1, 0).toString(),
       );
 
-      const label = document.createElement("button");
-      label.type = "button";
-      label.className = "maki-toc-label";
-      label.textContent = labelText;
-      label.setAttribute("aria-hidden", "true");
-
-      const navigate = () => {
+      const link = document.createElement("a");
+      link.href = heading.id ? `#${encodeURIComponent(heading.id)}` : "#";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
         heading.scrollIntoView({ block: "start" });
         if (heading.id) {
           globalThis.history.replaceState(
@@ -190,19 +127,9 @@
             `${globalThis.location.pathname}${globalThis.location.search}#${encodeURIComponent(heading.id)}`,
           );
         }
-      };
-
-      const item = document.createElement("li");
-      item.style.setProperty(
-        "--maki-toc-depth",
-        Math.max(getContentHeadingLevel(heading) - 1, 0).toString(),
-      );
-      const link = document.createElement("a");
-      link.href = heading.id ? `#${encodeURIComponent(heading.id)}` : "#";
-      link.addEventListener("click", (event) => {
-        event.preventDefault();
-        navigate();
+        scheduleActiveUpdate();
       });
+
       if (parts.number) {
         const number = document.createElement("span");
         number.className = "maki-toc-list-number";
@@ -212,124 +139,62 @@
       }
       link.append(document.createTextNode(parts.title));
       item.append(link);
-
-      marker.addEventListener("click", navigate);
-      label.addEventListener("click", navigate);
-      marker.addEventListener("mouseenter", () => showSingle(index));
-      label.addEventListener("mouseenter", () => showAll(index));
-
-      markers.append(marker);
-      labels.append(label);
       list.append(item);
 
-      return { heading, label, marker, y: 0 };
+      return { heading, item, link };
     });
 
     let frame = 0;
-    let mode = "hidden";
     let activeIndex = -1;
 
-    const setMode = (nextMode, nextActiveIndex = -1) => {
-      if (mode === nextMode && activeIndex === nextActiveIndex) return;
+    const findActiveIndex = () => {
+      const anchorY = activeAnchorY();
 
-      mode = nextMode;
-      activeIndex = nextActiveIndex;
-
-      items.forEach((item, index) => {
-        const showLabel =
-          mode === "all" || (mode === "single" && index === activeIndex);
-        item.label.classList.toggle("is-visible", showLabel);
-        item.label.setAttribute("aria-hidden", showLabel ? "false" : "true");
-        item.marker.classList.toggle("is-active", index === activeIndex);
-      });
-    };
-
-    function showSingle(index) {
-      setMode("single", index);
-    }
-
-    function showAll(index) {
-      setMode("all", index);
-    }
-
-    const hideLabels = () => {
-      setMode("hidden");
-    };
-
-    const nearestItem = (clientY) => {
-      let nearest = null;
-
-      items.forEach((item, index) => {
-        const distance = Math.abs(item.y - clientY);
-        if (!nearest || distance < nearest.distance) {
-          nearest = { distance, index };
-        }
-      });
-
-      return nearest && nearest.distance <= MARKER_HIT_RADIUS ? nearest : null;
-    };
-
-    const layout = () => {
-      const desktop = isDesktop();
-      const showRail = desktop && hasScrollablePage();
-      markers.hidden = !showRail;
-      labels.hidden = !showRail;
-      if (!showRail) {
-        hideLabels();
-        return;
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (headingTop(items[index].heading) <= anchorY) return index;
       }
 
-      items.forEach((item) => {
-        item.y = markerY(item.heading);
-        const top = `${item.y}px`;
-        item.marker.style.top = top;
-        item.label.style.top = top;
+      return items.findIndex(({ heading }) => {
+        const rect = heading.getBoundingClientRect();
+        return rect.top < globalThis.innerHeight && rect.bottom >= 0;
       });
     };
 
-    const scheduleLayout = () => {
+    const setActiveIndex = (nextActiveIndex) => {
+      if (activeIndex === nextActiveIndex) return;
+
+      activeIndex = nextActiveIndex;
+      items.forEach(({ item, link }, index) => {
+        const active = index === activeIndex;
+        item.classList.toggle("is-active", active);
+        if (active) {
+          link.setAttribute("aria-current", "location");
+        } else {
+          link.removeAttribute("aria-current");
+        }
+      });
+    };
+
+    function scheduleActiveUpdate() {
       if (frame) return;
 
       frame = globalThis.requestAnimationFrame(() => {
         frame = 0;
-        layout();
+        setActiveIndex(findActiveIndex());
       });
-    };
+    }
 
-    const handlePointerMove = (event) => {
-      if (!isDesktop()) {
-        hideLabels();
-        return;
-      }
-
-      const panelLeft = globalThis.innerWidth - PANEL_HOVER_WIDTH;
-      if (event.clientX < panelLeft) {
-        hideLabels();
-        return;
-      }
-
-      const nearest = nearestItem(event.clientY);
-      if (!nearest) {
-        hideLabels();
-        return;
-      }
-
-      const railLeft = globalThis.innerWidth - RAIL_HOVER_WIDTH;
-      if (event.clientX >= railLeft) {
-        showSingle(nearest.index);
-      } else {
-        showAll(nearest.index);
-      }
-    };
-
-    layout();
+    scheduleActiveUpdate();
     globalThis.requestAnimationFrame(() => toc.classList.add("is-ready"));
-    globalThis.addEventListener("load", scheduleLayout, { passive: true });
-    globalThis.addEventListener("resize", scheduleLayout, { passive: true });
-    globalThis.addEventListener("mousemove", handlePointerMove, {
+    globalThis.addEventListener("load", scheduleActiveUpdate, {
       passive: true,
     });
-    document.addEventListener("mouseleave", hideLabels);
+    globalThis.addEventListener("resize", scheduleActiveUpdate, {
+      passive: true,
+    });
+    globalThis.addEventListener("scroll", scheduleActiveUpdate, {
+      passive: true,
+    });
   };
 
   const startWhenReady = () => {

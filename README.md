@@ -9,7 +9,8 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 - `[[note]]`, `[title](note)`, `[title](https://...)`, plain HTTP/HTTPS URL을 링크로 렌더링한다.
 - wikilink는 exact path를 우선하고, 그 다음 case-insensitive path/stem lookup을 사용한다.
 - paragraph, heading, property, quote, code, unordered/ordered list, hyphen-fenced container를 파싱한다.
-- project page에는 home, meta, title search가 있는 navigation shell이 붙는다.
+- project page에는 home, meta, title search와 섹션 ToC가 있는 navigation shell이 붙는다.
+- 충분히 넓은 화면에서는 ToC가 왼쪽 overlay로 고정되고, 현재 화면의 섹션만 강조된다.
 - `/@/diagnostics`에서 diagnostics를 보고, `/@/dates`에서 date index를 보며, `/.maki/search`와 `/.maki/search-index.json`에서 title search를 쓸 수 있다.
 - local serve는 live reload를 지원한다.
 - `serve --git`는 git repository를 mirror/checkout하고 주기적으로 branch를 poll한다.

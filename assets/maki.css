@@ -273,92 +273,6 @@ body {
   pointer-events: auto;
 }
 
-.maki-toc-markers,
-.maki-toc-labels {
-  display: none;
-}
-
-.maki-toc-marker {
-  position: absolute;
-  right: 14px;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  transform: translateY(-50%) scale(0.55);
-  opacity: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  pointer-events: auto;
-  transition:
-    opacity 160ms ease,
-    transform 180ms ease;
-  transition-delay: var(--maki-toc-delay, 0ms);
-}
-
-.maki-toc.is-ready .maki-toc-marker {
-  transform: translateY(-50%) scale(1);
-  opacity: 1;
-}
-
-.maki-toc-marker::before {
-  display: block;
-  width: 5px;
-  height: 5px;
-  margin: auto;
-  border-radius: 50%;
-  background: var(--muted);
-  content: "";
-  transition:
-    background-color 140ms ease,
-    transform 140ms ease;
-}
-
-.maki-toc-marker:hover::before,
-.maki-toc-marker.is-active::before {
-  background: var(--fg);
-  transform: scale(1.35);
-}
-
-.maki-toc-label {
-  position: absolute;
-  right: 46px;
-  max-width: 210px;
-  padding: 0.22rem 0.5rem;
-  transform: translateY(-50%) translateX(8px) scale(0.98);
-  opacity: 0;
-  visibility: hidden;
-  overflow: hidden;
-  border: 1px solid #cfd4dc;
-  border-radius: 6px;
-  background: #ffffff;
-  box-shadow: 0 6px 16px rgb(32 33 36 / 16%);
-  color: var(--fg);
-  cursor: pointer;
-  font: inherit;
-  line-height: 1.45;
-  pointer-events: none;
-  text-align: left;
-  text-overflow: ellipsis;
-  transition:
-    opacity 140ms ease,
-    transform 160ms ease,
-    visibility 0s linear 160ms;
-  white-space: nowrap;
-}
-
-.maki-toc-label:hover {
-  border-color: var(--link);
-}
-
-.maki-toc-label.is-visible {
-  transform: translateY(-50%) translateX(0) scale(1);
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  transition-delay: 0s;
-}
-
 .maki-toc-panel {
   display: block;
 }
@@ -402,11 +316,13 @@ body {
 .maki-toc-list li {
   margin: 0.2rem 0;
   padding-left: calc(var(--maki-toc-depth, 0) * 1.1rem);
+  transition: opacity 140ms ease;
 }
 
 .maki-toc-list a {
   display: inline-block;
   min-height: 1.65rem;
+  border-radius: 4px;
   color: var(--fg);
   text-decoration: none;
 }
@@ -417,6 +333,10 @@ body {
 
 .maki-toc-list-number {
   color: var(--link);
+}
+
+.maki-toc-list li.is-active a {
+  font-weight: 700;
 }
 
 .maki-not-found-page {
@@ -712,30 +632,45 @@ th {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 1360px) {
   .maki-toc {
-    width: fit-content;
-    min-width: 16rem;
-    max-width: min(100%, 34rem);
-  }
-
-  .maki-toc-markers,
-  .maki-toc-labels {
-    display: block;
     position: fixed;
     z-index: 20;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 280px;
-    pointer-events: none;
+    top: clamp(4rem, 10vh, 7rem);
+    left: max(1rem, calc((100vw - var(--page-max)) / 2 - 17.5rem));
+    width: 16rem;
+    max-height: calc(100vh - 8rem);
+    margin: 0;
+    overflow: hidden;
+    box-shadow: 0 12px 30px rgb(32 33 36 / 12%);
+  }
+
+  .maki-toc-list {
+    max-height: calc(100vh - 12rem);
+  }
+
+  .maki-toc-list li {
+    opacity: 0.38;
+  }
+
+  .maki-toc-list li.is-active {
+    opacity: 1;
+  }
+
+  .maki-toc-list a {
+    display: block;
+    padding: 0.04rem 0.2rem;
+  }
+
+  .maki-toc-list a:hover,
+  .maki-toc-list li.is-active a {
+    background: #f4f6fb;
+    text-decoration: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .maki-toc-marker,
-  .maki-toc-marker::before,
-  .maki-toc-label {
+  .maki-toc-list li {
     transition: none;
   }
 }
