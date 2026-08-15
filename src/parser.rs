@@ -85,6 +85,7 @@ const INLINE_CODE_BEGIN_END: &str = "`";
 const INLINE_LINK_BEGIN: &str = "[";
 const INLINE_LINK_SEPARATOR: &str = "](";
 const INLINE_LINK_END: &str = ")";
+const PLAIN_URL_PREFIXES: &[&str] = &["https://", "http://"];
 
 fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let rest = cursor.rest();
@@ -139,6 +140,41 @@ fn parse_inline_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     Some(Inline::Link { title, target })
 }
 
+fn parse_plain_url<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let rest = cursor.rest();
+    let prefix = PLAIN_URL_PREFIXES
+        .iter()
+        .find(|prefix| rest.starts_with(**prefix))?;
+    let raw_end = rest
+        .char_indices()
+        .find_map(|(index, ch)| (ch.is_whitespace() || ch == '<').then_some(index))
+        .unwrap_or(rest.len());
+    let target = trim_plain_url_suffix(&rest[..raw_end]);
+
+    if target.len() <= prefix.len() {
+        return None;
+    }
+
+    cursor.bump(target.len());
+
+    Some(Inline::Link {
+        title: target,
+        target,
+    })
+}
+
+fn trim_plain_url_suffix(mut url: &str) -> &str {
+    while let Some(ch) = url.chars().next_back() {
+        if matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}') {
+            url = &url[..url.len() - ch.len_utf8()];
+        } else {
+            break;
+        }
+    }
+
+    url
+}
+
 fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
     let mut inlines = vec![];
 
@@ -164,6 +200,7 @@ pub(crate) fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
         if let Some(inline) = parse_inline_code(&mut cursor)
             .or_else(|| parse_inline_note_link(&mut cursor))
             .or_else(|| parse_inline_link(&mut cursor))
+            .or_else(|| parse_plain_url(&mut cursor))
         {
             if text_start < start {
                 inlines.push(Inline::Text(&source[text_start..start]));
@@ -1154,6 +1191,23 @@ mod tests {
                 },
                 Inline::Text(" and "),
                 Inline::NoteLink { target: "Maki" },
+                Inline::Text(".")
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_inline_autolinks_plain_http_urls() {
+        assert_eq!(
+            parse_inline("Read https://example.com/docs, then `https://example.com/code`."),
+            vec![
+                Inline::Text("Read "),
+                Inline::Link {
+                    title: "https://example.com/docs",
+                    target: "https://example.com/docs"
+                },
+                Inline::Text(", then "),
+                Inline::Code("https://example.com/code"),
                 Inline::Text(".")
             ]
         );

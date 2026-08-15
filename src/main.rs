@@ -259,10 +259,11 @@ fn format_project_diagnostic_summary(diagnostics: &[ProjectDiagnostic]) -> Strin
     let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
 
     format!(
-        "diagnostics: {} issue(s): {} broken link(s), {} ambiguous link(s), {} parser warning(s), {} read failure(s)",
+        "diagnostics: {} issue(s): {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s)",
         summary.total(),
         summary.broken_links(),
         summary.ambiguous_links(),
+        summary.broken_external_links(),
         summary.parse_warnings(),
         summary.read_failures()
     )

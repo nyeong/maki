@@ -177,7 +177,11 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_anchor(&mut self, href: &str, title: &str) {
-        self.html.push_str("<a href=\"");
+        self.html.push_str("<a");
+        if maki::is_external_href(href) {
+            self.html.push_str(" class=\"external-link\"");
+        }
+        self.html.push_str(" href=\"");
         self.escape_html_attr_into(href);
         self.html.push_str("\">");
         self.escape_html_into(title);
@@ -607,10 +611,11 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
     let mut source = String::from("--^ title: Diagnostics\n\n");
 
     source.push_str(&format!(
-        "{} issue(s) across {total_notes} note(s): {} broken link(s), {} ambiguous link(s), {} parser warning(s), {} read failure(s).",
+        "{} issue(s) across {total_notes} note(s): {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s).",
         summary.total(),
         summary.broken_links(),
         summary.ambiguous_links(),
+        summary.broken_external_links(),
         summary.parse_warnings(),
         summary.read_failures()
     ));
@@ -666,6 +671,12 @@ fn push_diagnostic_item(source: &mut String, diagnostic: &ProjectDiagnostic) {
         }
         ProjectDiagnosticKind::AmbiguousLink { target } => {
             push_maki_single_line(source, target);
+        }
+        ProjectDiagnosticKind::BrokenExternalLink { target, reason } => {
+            push_maki_single_line(source, target);
+            source.push_str(" (");
+            push_maki_single_line(source, reason);
+            source.push(')');
         }
         ProjectDiagnosticKind::ReadFailed => {
             source.push_str("failed to read note");

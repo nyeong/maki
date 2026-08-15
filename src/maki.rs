@@ -13,8 +13,9 @@ const MAKI_SOURCE_EXTENSION: &str = ".maki";
 pub(crate) const PROJECT_FILE_NAME: &str = "maki.toml";
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 use crate::{
@@ -104,6 +105,7 @@ pub(crate) struct Maki {
     root: PathBuf,                  // canonical absolute path
     notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     index: NoteIndex,
+    external_links: Vec<ExternalLinkRef>,
     search_entries: Vec<SearchEntry>,
     config: MakiConfig,
 }
@@ -122,6 +124,12 @@ pub(crate) struct SearchEntry {
     title: String,
     path: String,
     source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ExternalLinkRef {
+    source_path: PathBuf,
+    target: String,
 }
 
 impl SearchEntry {
@@ -662,6 +670,91 @@ fn has_uri_scheme(target: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
+pub(crate) fn is_external_href(target: &str) -> bool {
+    let target = target.trim();
+
+    target.starts_with("//") || has_uri_scheme(target)
+}
+
+fn is_checkable_external_href(target: &str) -> bool {
+    let target = target.trim();
+
+    target.starts_with("https://") || target.starts_with("http://")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExternalLinkCheck {
+    Ok,
+    Broken { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExternalLinkCheckError {
+    Status(u16),
+    Transport(String),
+}
+
+impl std::fmt::Display for ExternalLinkCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Status(status) => write!(f, "HTTP {status}"),
+            Self::Transport(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalLinkCheckMethod {
+    Head,
+    Get,
+}
+
+fn check_external_link(target: &str) -> ExternalLinkCheck {
+    if !is_checkable_external_href(target) {
+        return ExternalLinkCheck::Ok;
+    }
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(3))
+        .redirects(5)
+        .build();
+
+    let result = match request_external_link(&agent, ExternalLinkCheckMethod::Head, target) {
+        Ok(()) => return ExternalLinkCheck::Ok,
+        Err(ExternalLinkCheckError::Status(_)) => {
+            request_external_link(&agent, ExternalLinkCheckMethod::Get, target)
+        }
+        Err(error) => Err(error),
+    };
+
+    match result {
+        Ok(()) => ExternalLinkCheck::Ok,
+        Err(error) => ExternalLinkCheck::Broken {
+            reason: error.to_string(),
+        },
+    }
+}
+
+fn request_external_link(
+    agent: &ureq::Agent,
+    method: ExternalLinkCheckMethod,
+    target: &str,
+) -> Result<(), ExternalLinkCheckError> {
+    let response = match method {
+        ExternalLinkCheckMethod::Head => agent.head(target).call(),
+        ExternalLinkCheckMethod::Get => agent.get(target).call(),
+    };
+
+    match response {
+        Ok(response) if response.status() < 400 => Ok(()),
+        Ok(response) => Err(ExternalLinkCheckError::Status(response.status())),
+        Err(ureq::Error::Status(status, _response)) => Err(ExternalLinkCheckError::Status(status)),
+        Err(ureq::Error::Transport(error)) => {
+            Err(ExternalLinkCheckError::Transport(error.to_string()))
+        }
+    }
+}
+
 fn normalize_note_link_target(target: &str) -> String {
     let target = target.strip_prefix('/').unwrap_or(target);
     target
@@ -768,6 +861,7 @@ pub(crate) enum ProjectDiagnosticKind {
     ParseWarning { message: String },
     BrokenLink { target: String },
     AmbiguousLink { target: String },
+    BrokenExternalLink { target: String, reason: String },
     ReadFailed,
 }
 
@@ -777,6 +871,7 @@ impl ProjectDiagnosticKind {
             Self::ParseWarning { .. } => "parser",
             Self::BrokenLink { .. } => "broken link",
             Self::AmbiguousLink { .. } => "ambiguous link",
+            Self::BrokenExternalLink { .. } => "external link",
             Self::ReadFailed => "read",
         }
     }
@@ -786,6 +881,9 @@ impl ProjectDiagnosticKind {
             Self::ParseWarning { message } => message.clone(),
             Self::BrokenLink { target } => format!("broken link: {target}"),
             Self::AmbiguousLink { target } => format!("ambiguous link: {target}"),
+            Self::BrokenExternalLink { target, reason } => {
+                format!("broken external link: {target} ({reason})")
+            }
             Self::ReadFailed => "failed to read note".to_string(),
         }
     }
@@ -797,6 +895,7 @@ pub(crate) struct ProjectDiagnosticSummary {
     parse_warnings: usize,
     broken_links: usize,
     ambiguous_links: usize,
+    broken_external_links: usize,
     read_failures: usize,
 }
 
@@ -812,6 +911,9 @@ impl ProjectDiagnosticSummary {
                 ProjectDiagnosticKind::ParseWarning { .. } => summary.parse_warnings += 1,
                 ProjectDiagnosticKind::BrokenLink { .. } => summary.broken_links += 1,
                 ProjectDiagnosticKind::AmbiguousLink { .. } => summary.ambiguous_links += 1,
+                ProjectDiagnosticKind::BrokenExternalLink { .. } => {
+                    summary.broken_external_links += 1
+                }
                 ProjectDiagnosticKind::ReadFailed => summary.read_failures += 1,
             }
         }
@@ -835,9 +937,96 @@ impl ProjectDiagnosticSummary {
         self.ambiguous_links
     }
 
+    pub(crate) fn broken_external_links(&self) -> usize {
+        self.broken_external_links
+    }
+
     pub(crate) fn read_failures(&self) -> usize {
         self.read_failures
     }
+}
+
+fn collect_inline_external_links(
+    external_links: &mut BTreeSet<ExternalLinkRef>,
+    source_path: &Path,
+    inlines: &[Inline<'_>],
+) {
+    for inline in inlines {
+        match inline {
+            Inline::Link { target, .. } if is_checkable_external_href(target) => {
+                external_links.insert(ExternalLinkRef {
+                    source_path: source_path.to_path_buf(),
+                    target: target.trim().to_string(),
+                });
+            }
+            Inline::NoteLink { .. }
+            | Inline::Link { .. }
+            | Inline::Text(_)
+            | Inline::SoftBreak
+            | Inline::Code(_) => {}
+        }
+    }
+}
+
+fn collect_block_external_links(
+    external_links: &mut BTreeSet<ExternalLinkRef>,
+    source_path: &Path,
+    block: &BlockKind<'_>,
+) {
+    match block {
+        BlockKind::Paragraph { body } => {
+            collect_inline_external_links(external_links, source_path, body)
+        }
+        BlockKind::Heading { body, .. } => {
+            let inlines = parser::parse_inline(body);
+            collect_inline_external_links(external_links, source_path, &inlines);
+        }
+        BlockKind::List { items } => {
+            for item in items {
+                collect_inline_external_links(external_links, source_path, &item.body);
+                for child in &item.children {
+                    collect_block_external_links(external_links, source_path, &child.kind);
+                }
+            }
+        }
+        BlockKind::Quote { lines } => {
+            collect_maki_lines_external_links(external_links, source_path, lines)
+        }
+        BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
+            collect_maki_lines_external_links(external_links, source_path, lines)
+        }
+        BlockKind::Code { .. } | BlockKind::Container { .. } => {}
+    }
+}
+
+fn collect_maki_lines_external_links(
+    external_links: &mut BTreeSet<ExternalLinkRef>,
+    source_path: &Path,
+    lines: &[&str],
+) {
+    let source = lines.join("\n");
+    let parsed = parser::parse(&source);
+
+    for block in &parsed.document.blocks {
+        collect_block_external_links(external_links, source_path, &block.kind);
+    }
+}
+
+fn collect_external_links(notes: &BTreeMap<NoteRef, Note>) -> Vec<ExternalLinkRef> {
+    let mut external_links = BTreeSet::new();
+
+    for note in notes.values() {
+        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+            continue;
+        };
+        let parsed = parser::parse(&source);
+
+        for block in &parsed.document.blocks {
+            collect_block_external_links(&mut external_links, note.source_path(), &block.kind);
+        }
+    }
+
+    external_links.into_iter().collect()
 }
 
 fn collect_inline_link_diagnostics(
@@ -881,6 +1070,10 @@ fn collect_block_link_diagnostics(
         BlockKind::Paragraph { body } => {
             collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body)
         }
+        BlockKind::Heading { body, .. } => {
+            let inlines = parser::parse_inline(body);
+            collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &inlines);
+        }
         BlockKind::List { items } => {
             for item in items {
                 collect_inline_link_diagnostics(
@@ -907,7 +1100,7 @@ fn collect_block_link_diagnostics(
         BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
             collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)
         }
-        BlockKind::Code { .. } | BlockKind::Heading { .. } | BlockKind::Container { .. } => {}
+        BlockKind::Code { .. } | BlockKind::Container { .. } => {}
     }
 }
 
@@ -1007,6 +1200,13 @@ impl Maki {
     }
 
     pub(crate) fn diagnostics(&self) -> Vec<ProjectDiagnostic> {
+        self.diagnostics_with_external_link_checker(&check_external_link)
+    }
+
+    fn diagnostics_with_external_link_checker(
+        &self,
+        check_external_link: &dyn Fn(&str) -> ExternalLinkCheck,
+    ) -> Vec<ProjectDiagnostic> {
         let mut diagnostics = vec![];
 
         for note in self.notes.values() {
@@ -1046,7 +1246,35 @@ impl Maki {
             }
         }
 
+        self.push_external_link_diagnostics(&mut diagnostics, check_external_link);
+
         diagnostics
+    }
+
+    fn push_external_link_diagnostics(
+        &self,
+        diagnostics: &mut Vec<ProjectDiagnostic>,
+        check_external_link: &dyn Fn(&str) -> ExternalLinkCheck,
+    ) {
+        let mut checks = BTreeMap::new();
+
+        for external_link in &self.external_links {
+            let check = checks
+                .entry(external_link.target.clone())
+                .or_insert_with(|| check_external_link(&external_link.target))
+                .clone();
+
+            if let ExternalLinkCheck::Broken { reason } = check {
+                diagnostics.push(ProjectDiagnostic::new(
+                    external_link.source_path.clone(),
+                    None,
+                    ProjectDiagnosticKind::BrokenExternalLink {
+                        target: external_link.target.clone(),
+                        reason,
+                    },
+                ));
+            }
+        }
     }
 
     pub(crate) fn get_raw_content(&self, path: &Path) -> Result<String, Error> {
@@ -1126,12 +1354,14 @@ impl Maki {
             notes.insert(note.note_ref(), note);
         }
         let index = NoteIndex::build(notes.keys());
+        let external_links = collect_external_links(&notes);
         let search_entries = notes.values().map(Note::search_entry).collect();
 
         Ok(Self {
             root,
             notes,
             index,
+            external_links,
             search_entries,
             config,
         })
@@ -1222,6 +1452,7 @@ impl Maki {
 mod tests {
     use super::*;
     use std::{
+        cell::RefCell,
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -1431,7 +1662,24 @@ mod tests {
         let maki = Maki::load(&project.root).unwrap();
         let html = maki.render_html(Path::new("start.maki")).unwrap();
 
-        assert!(html.contains("<a href=\"https://github.com/jgm/djot\">djot</a>"));
+        assert!(
+            html.contains(
+                "<a class=\"external-link\" href=\"https://github.com/jgm/djot\">djot</a>"
+            )
+        );
+    }
+
+    #[test]
+    fn plain_external_urls_render_as_links() {
+        let project = temp_project("plain-external-link");
+        write_note_with_content(&project, "start.maki", "See https://example.com/docs.");
+
+        let maki = Maki::load(&project.root).unwrap();
+        let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+        assert!(html.contains(
+            "<a class=\"external-link\" href=\"https://example.com/docs\">https://example.com/docs</a>."
+        ));
     }
 
     #[test]
@@ -1496,6 +1744,57 @@ See [[container-missing]].
                 diagnostic.kind(),
                 ProjectDiagnosticKind::AmbiguousLink { target }
                     if target == "same"
+            )
+        }));
+    }
+
+    #[test]
+    fn diagnostics_collect_broken_external_links() {
+        let project = temp_project("external-link-diagnostics");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"See [Down](https://down.example/path), https://ok.example/docs, and `https://code.example`.
+
+--- quote
+See https://down.example/path.
+---"#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let checked = RefCell::new(vec![]);
+        let diagnostics = maki.diagnostics_with_external_link_checker(&|target| {
+            checked.borrow_mut().push(target.to_string());
+            if target == "https://down.example/path" {
+                ExternalLinkCheck::Broken {
+                    reason: "HTTP 404".to_string(),
+                }
+            } else {
+                ExternalLinkCheck::Ok
+            }
+        });
+
+        assert_eq!(
+            checked.into_inner(),
+            vec![
+                "https://down.example/path".to_string(),
+                "https://ok.example/docs".to_string(),
+            ]
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.source_path() == Path::new("start.maki")
+                && matches!(
+                    diagnostic.kind(),
+                    ProjectDiagnosticKind::BrokenExternalLink { target, reason }
+                        if target == "https://down.example/path" && reason == "HTTP 404"
+                )
+        }));
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenExternalLink { target, .. }
+                    if target == "https://ok.example/docs"
+                        || target == "https://code.example"
             )
         }));
     }
