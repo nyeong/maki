@@ -45,39 +45,68 @@ const FILE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-struct AppState {
-    root: PathBuf,
+pub(crate) struct AppState {
     config_overrides: MakiConfigOverrides,
     maki: RwLock<Maki>,
-    live_reload: LiveReload,
+    live_reload: Option<LiveReload>,
 }
 
 impl AppState {
     #[cfg(test)]
     fn new(maki: Maki) -> Self {
-        Self::new_with_overrides(maki, MakiConfigOverrides::default())
+        Self::new_with_overrides(maki, MakiConfigOverrides::default(), true)
     }
 
-    fn new_with_overrides(maki: Maki, config_overrides: MakiConfigOverrides) -> Self {
+    fn new_with_overrides(
+        maki: Maki,
+        config_overrides: MakiConfigOverrides,
+        live_reload: bool,
+    ) -> Self {
         Self {
-            root: maki.root().to_path_buf(),
             config_overrides,
             maki: RwLock::new(maki),
-            live_reload: LiveReload::new(MAX_SSE_CLIENTS),
+            live_reload: live_reload.then(|| LiveReload::new(MAX_SSE_CLIENTS)),
         }
     }
 
     fn reload(&self) -> Result<(), maki::Error> {
-        let mut config = maki::MakiConfig::load_project(&self.root)?;
+        let root = self.current_root()?;
+        let mut config = maki::MakiConfig::load_project(&root)?;
         self.config_overrides.apply_to(&mut config);
-        let next = Maki::load_with_config(&self.root, config)?;
+        let next = Maki::load_with_config(&root, config)?;
+        self.replace_maki(next)
+    }
+
+    fn current_root(&self) -> Result<PathBuf, maki::Error> {
+        let maki = self
+            .maki
+            .read()
+            .map_err(|_| maki::Error::ReadDirectoryFailed(PathBuf::from(".")))?;
+
+        Ok(maki.root().to_path_buf())
+    }
+
+    pub(crate) fn replace_maki(&self, next: Maki) -> Result<(), maki::Error> {
         let mut maki = self
             .maki
             .write()
-            .map_err(|_| maki::Error::ReadDirectoryFailed(self.root.to_path_buf()))?;
+            .map_err(|_| maki::Error::ReadDirectoryFailed(next.root().to_path_buf()))?;
         *maki = next;
-        self.live_reload.broadcast_reload();
+        if let Some(live_reload) = &self.live_reload {
+            live_reload.broadcast_reload();
+        }
         Ok(())
+    }
+
+    fn with_live_reload(&self, html: String) -> String {
+        match &self.live_reload {
+            Some(live_reload) => inject_live_reload_script(html, &live_reload.token()),
+            None => html,
+        }
+    }
+
+    fn live_reload(&self) -> Option<&LiveReload> {
+        self.live_reload.as_ref()
     }
 }
 
@@ -394,7 +423,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
     }
 
     let maki = state.maki.read().map_err(|_| Error::Maki {
-        source: maki::Error::ReadDirectoryFailed(state.root.clone()),
+        source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
     })?;
 
     if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_NO_SLASH {
@@ -406,7 +435,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         );
         return Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/html; charset=utf-8")
-            .set_body(inject_live_reload_script(html, &state.live_reload.token())));
+            .set_body(state.with_live_reload(html)));
     }
 
     if target.path == SEARCH_INDEX_PATH {
@@ -426,7 +455,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         );
         return Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/html; charset=utf-8")
-            .set_body(inject_live_reload_script(html, &state.live_reload.token())));
+            .set_body(state.with_live_reload(html)));
     }
 
     match maki.resolve_route(&target.path) {
@@ -434,7 +463,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
             let html = maki.render_html_with_asset_mode(&path, AssetMode::External)?;
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(inject_live_reload_script(html, &state.live_reload.token())))
+                .set_body(state.with_live_reload(html)))
         }
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
@@ -449,7 +478,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
             let html = crate::html::render_not_found_page(&target.path, AssetMode::External);
             Ok(http::Response::new(http::StatusCode::NotFound)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(inject_live_reload_script(html, &state.live_reload.token())))
+                .set_body(state.with_live_reload(html)))
         }
         Err(e) => Err(e.into()),
     }
@@ -516,7 +545,16 @@ fn handle_live_reload_connection<S>(state: &AppState, stream: &mut S) -> Result<
 where
     S: Write,
 {
-    let (client_id, token, receiver) = match state.live_reload.register_client() {
+    let Some(live_reload) = state.live_reload() else {
+        let response = not_found(&Error::Maki {
+            source: maki::Error::NoteNotFound(PathBuf::from(LIVE_RELOAD_PATH)),
+        });
+        return stream
+            .write_all(&response.to_bytes())
+            .map_err(|source| RunError::IoError { source });
+    };
+
+    let (client_id, token, receiver) = match live_reload.register_client() {
         Ok(client) => client,
         Err(LiveReloadError::TooManyClients) => {
             let response = service_unavailable("Too many live reload clients");
@@ -526,7 +564,7 @@ where
         }
         Err(LiveReloadError::StatePoisoned) => {
             let response = internal_server_error(&Error::Maki {
-                source: maki::Error::ReadDirectoryFailed(state.root.clone()),
+                source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
             });
             return stream
                 .write_all(&response.to_bytes())
@@ -534,7 +572,7 @@ where
         }
     };
     let _registration = LiveClientRegistration {
-        live_reload: &state.live_reload,
+        live_reload,
         id: client_id,
     };
 
@@ -548,7 +586,7 @@ where
     loop {
         match receiver.recv_timeout(SSE_KEEPALIVE_INTERVAL) {
             Ok(LiveReloadEvent::Reload { version }) => {
-                write_sse_event(stream, "reload", state.live_reload.token_for(version))?;
+                write_sse_event(stream, "reload", live_reload.token_for(version))?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 write_sse_keepalive(stream)?;
@@ -669,7 +707,14 @@ fn collect_watched_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::E
 
 fn spawn_file_watcher(state: Arc<AppState>) {
     thread::spawn(move || {
-        let mut snapshot = match collect_watched_file_snapshot(&state.root) {
+        let mut root = match state.current_root() {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!("Failed to initialize file watcher: {}", error);
+                PathBuf::from(".")
+            }
+        };
+        let mut snapshot = match collect_watched_file_snapshot(&root) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 eprintln!("Failed to initialize file watcher: {}", error);
@@ -680,7 +725,15 @@ fn spawn_file_watcher(state: Arc<AppState>) {
         loop {
             thread::sleep(FILE_WATCH_INTERVAL);
 
-            let next_snapshot = match collect_watched_file_snapshot(&state.root) {
+            root = match state.current_root() {
+                Ok(root) => root,
+                Err(error) => {
+                    eprintln!("Failed to read current project root: {}", error);
+                    continue;
+                }
+            };
+
+            let next_snapshot = match collect_watched_file_snapshot(&root) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     eprintln!("Failed to scan watched files: {}", error);
@@ -694,7 +747,7 @@ fn spawn_file_watcher(state: Arc<AppState>) {
 
             thread::sleep(FILE_WATCH_DEBOUNCE);
 
-            let stable_snapshot = match collect_watched_file_snapshot(&state.root) {
+            let stable_snapshot = match collect_watched_file_snapshot(&root) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     eprintln!("Failed to scan watched files after debounce: {}", error);
@@ -718,16 +771,50 @@ fn spawn_file_watcher(state: Arc<AppState>) {
     });
 }
 
+pub(crate) enum ServeRuntime {
+    Development,
+    Publish,
+}
+
 pub(crate) fn serve(
     maki: Maki,
     host: &str,
     port: u16,
     config_overrides: MakiConfigOverrides,
 ) -> Result<(), RunError> {
+    serve_with_runtime(
+        maki,
+        host,
+        port,
+        config_overrides,
+        ServeRuntime::Development,
+        |_| {},
+    )
+}
+
+pub(crate) fn serve_with_runtime<F>(
+    maki: Maki,
+    host: &str,
+    port: u16,
+    config_overrides: MakiConfigOverrides,
+    runtime: ServeRuntime,
+    setup: F,
+) -> Result<(), RunError>
+where
+    F: FnOnce(Arc<AppState>),
+{
     let listener =
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
-    let state = Arc::new(AppState::new_with_overrides(maki, config_overrides));
-    spawn_file_watcher(Arc::clone(&state));
+    let live_reload = matches!(runtime, ServeRuntime::Development);
+    let state = Arc::new(AppState::new_with_overrides(
+        maki,
+        config_overrides,
+        live_reload,
+    ));
+    if live_reload {
+        spawn_file_watcher(Arc::clone(&state));
+    }
+    setup(Arc::clone(&state));
 
     println!("Listening on http://{}:{}", host, port);
 

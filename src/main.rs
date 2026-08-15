@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
+mod git_source;
 mod html;
 mod http;
 mod maki;
@@ -12,12 +13,18 @@ use maki::{Maki, MakiConfig, MakiConfigOverrides, ProjectDiagnostic, ProjectDiag
 #[derive(Debug, PartialEq)]
 enum Command {
     Serve {
-        root: PathBuf,
+        source: ServeSource,
         options: ServeOptions,
     },
     Build {
         file: PathBuf,
     },
+}
+
+#[derive(Debug, PartialEq)]
+enum ServeSource {
+    Path(PathBuf),
+    Git(git_source::GitServeConfig),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -60,8 +67,15 @@ fn main() {
 #[derive(Debug)]
 enum RunError {
     IoError { source: std::io::Error },
+    Git(git_source::Error),
     Http(http::Error),
     Maki(maki::Error),
+}
+
+impl From<git_source::Error> for RunError {
+    fn from(source: git_source::Error) -> Self {
+        RunError::Git(source)
+    }
 }
 
 impl From<maki::Error> for RunError {
@@ -74,13 +88,14 @@ impl Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RunError::IoError { source } => write!(f, "IO error: {}", source),
+            RunError::Git(error) => write!(f, "Git source error: {}", error),
             RunError::Http(error) => write!(f, "HTTP error: {:?}", error),
             RunError::Maki(maki_error) => write!(f, "Maki error: {}", maki_error),
         }
     }
 }
 
-fn run_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
+fn run_path_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
     let root = Maki::find_project_root(&root)?.unwrap_or(root);
     let mut config = MakiConfig::load_project(&root)?;
     let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
@@ -96,6 +111,50 @@ fn run_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
     }
     emit_project_diagnostic_summary(&maki.diagnostics());
     web::serve(maki, &options.host, options.port, config_overrides)
+}
+
+fn run_git_serve(
+    git_config: git_source::GitServeConfig,
+    options: ServeOptions,
+) -> Result<(), RunError> {
+    let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
+    let source = git_source::GitSource::new(git_config);
+    eprintln!("Preparing git source...");
+    let checkout = source.prepare()?;
+    eprintln!("Loading git checkout {}...", checkout.commit());
+    let maki = source.load_maki(&checkout, &config_overrides)?;
+
+    if let Some(project_title) = maki.config().project_title() {
+        println!("Project: {project_title}");
+    }
+    println!("Git commit: {}", checkout.commit());
+    println!("Found {} files", maki.notes_len());
+    for note in maki.notes() {
+        println!("- {}", note.source_path().display());
+    }
+    emit_project_diagnostic_summary(&maki.diagnostics());
+    source.record_active(&checkout)?;
+
+    let initial_commit = checkout.commit().to_string();
+    let updater_source = source.clone();
+    let updater_overrides = config_overrides.clone();
+    web::serve_with_runtime(
+        maki,
+        &options.host,
+        options.port,
+        config_overrides,
+        web::ServeRuntime::Publish,
+        move |state| {
+            git_source::spawn_updater(updater_source, updater_overrides, state, initial_commit);
+        },
+    )
+}
+
+fn run_serve(source: ServeSource, options: ServeOptions) -> Result<(), RunError> {
+    match source {
+        ServeSource::Path(root) => run_path_serve(root, options),
+        ServeSource::Git(git_config) => run_git_serve(git_config, options),
+    }
 }
 
 fn run_build(file: PathBuf) -> Result<(), RunError> {
@@ -174,7 +233,7 @@ fn format_project_diagnostic(diagnostic: &ProjectDiagnostic) -> String {
 
 fn run_command(command: Command) -> Result<(), RunError> {
     match command {
-        Command::Serve { root, options } => run_serve(root, options),
+        Command::Serve { source, options } => run_serve(source, options),
         Command::Build { file } => run_build(file),
     }
 }
@@ -185,7 +244,9 @@ enum CliError {
     UnknownCommand(String),
     UnknownOption(String),
     MissingOptionValue(String),
+    InvalidDuration(String),
     InvalidPort(String),
+    InvalidServeSource(String),
     UnexpectedArgument(String),
 }
 
@@ -196,7 +257,9 @@ impl Display for CliError {
             CliError::MissingCommand => write!(f, "Missing command"),
             CliError::UnknownOption(s) => write!(f, "Unknown option: {}", s),
             CliError::MissingOptionValue(s) => write!(f, "Missing value for option: {}", s),
+            CliError::InvalidDuration(s) => write!(f, "Invalid duration: {}", s),
             CliError::InvalidPort(s) => write!(f, "Invalid port: {}", s),
+            CliError::InvalidServeSource(s) => write!(f, "Invalid serve source: {}", s),
             CliError::UnexpectedArgument(s) => write!(f, "Unexpected argument: {}", s),
         }
     }
@@ -212,11 +275,46 @@ fn normalize_redirect_target(target: &str) -> String {
 
 fn parse_serve_args(args: &[String]) -> Result<Command, CliError> {
     let mut root = None;
+    let mut git_url = None;
+    let mut git_branch = None;
+    let mut git_state_dir = None;
+    let mut git_fetch_interval = None;
     let mut options = ServeOptions::default();
     let mut index = 2;
 
     while index < args.len() {
         match args[index].as_str() {
+            "--git" => {
+                index += 1;
+                git_url = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::MissingOptionValue("--git".to_string()))?
+                        .clone(),
+                );
+            }
+            "--branch" => {
+                index += 1;
+                git_branch = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::MissingOptionValue("--branch".to_string()))?
+                        .clone(),
+                );
+            }
+            "--state-dir" => {
+                index += 1;
+                git_state_dir =
+                    Some(PathBuf::from(args.get(index).ok_or_else(|| {
+                        CliError::MissingOptionValue("--state-dir".to_string())
+                    })?));
+            }
+            "--fetch-interval" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| CliError::MissingOptionValue("--fetch-interval".to_string()))?;
+                git_fetch_interval =
+                    Some(git_source::parse_fetch_interval(raw).map_err(CliError::InvalidDuration)?);
+            }
             "--host" => {
                 index += 1;
                 options.host = args
@@ -254,10 +352,35 @@ fn parse_serve_args(args: &[String]) -> Result<Command, CliError> {
         index += 1;
     }
 
-    Ok(Command::Serve {
-        root: root.unwrap_or_else(|| PathBuf::from(".")),
-        options,
-    })
+    let source = if let Some(url) = git_url {
+        if let Some(root) = root {
+            return Err(CliError::InvalidServeSource(format!(
+                "cannot combine path {} with --git",
+                root.display()
+            )));
+        }
+
+        let mut config = git_source::GitServeConfig::new(url);
+        if let Some(branch) = git_branch {
+            config.branch = branch;
+        }
+        if let Some(state_dir) = git_state_dir {
+            config.state_dir = state_dir;
+        }
+        if let Some(fetch_interval) = git_fetch_interval {
+            config.fetch_interval = fetch_interval;
+        }
+        ServeSource::Git(config)
+    } else {
+        if git_branch.is_some() || git_state_dir.is_some() || git_fetch_interval.is_some() {
+            return Err(CliError::InvalidServeSource(
+                "--branch, --state-dir, and --fetch-interval require --git".to_string(),
+            ));
+        }
+        ServeSource::Path(root.unwrap_or_else(|| PathBuf::from(".")))
+    };
+
+    Ok(Command::Serve { source, options })
 }
 
 fn parse_args(args: &[String]) -> Result<Command, CliError> {
@@ -305,7 +428,7 @@ mod tests {
         let path = PathBuf::from("./tests/not-exists");
 
         let error = run_command(Command::Serve {
-            root: path.clone(),
+            source: ServeSource::Path(path.clone()),
             options: ServeOptions::default(),
         })
         .unwrap_err();
@@ -321,7 +444,7 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["maki", "serve", "path/to/maki"])),
             Ok(Command::Serve {
-                root: PathBuf::from("path/to/maki"),
+                source: ServeSource::Path(PathBuf::from("path/to/maki")),
                 options: ServeOptions::default(),
             })
         )
@@ -342,7 +465,7 @@ mod tests {
                 "docs/index",
             ])),
             Ok(Command::Serve {
-                root: PathBuf::from("path/to/maki"),
+                source: ServeSource::Path(PathBuf::from("path/to/maki")),
                 options: ServeOptions {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
@@ -365,7 +488,7 @@ mod tests {
                 "path/to/maki",
             ])),
             Ok(Command::Serve {
-                root: PathBuf::from("path/to/maki"),
+                source: ServeSource::Path(PathBuf::from("path/to/maki")),
                 options: ServeOptions {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
@@ -401,9 +524,75 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["maki", "serve"])),
             Ok(Command::Serve {
-                root: PathBuf::from("."),
+                source: ServeSource::Path(PathBuf::from(".")),
                 options: ServeOptions::default(),
             })
+        )
+    }
+
+    #[test]
+    fn test_parse_git_serve_options() {
+        let state_dir = PathBuf::from("/tmp/maki-state");
+        assert_eq!(
+            parse_args(&args(&[
+                "maki",
+                "serve",
+                "--git",
+                "git@example.com:nyeong/blog.git",
+                "--branch",
+                "main",
+                "--state-dir",
+                "/tmp/maki-state",
+                "--fetch-interval",
+                "5s",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8080",
+                "--index-redirect",
+                "index",
+            ])),
+            Ok(Command::Serve {
+                source: ServeSource::Git(git_source::GitServeConfig {
+                    url: "git@example.com:nyeong/blog.git".to_string(),
+                    branch: "main".to_string(),
+                    state_dir,
+                    fetch_interval: std::time::Duration::from_secs(5),
+                }),
+                options: ServeOptions {
+                    host: "0.0.0.0".to_string(),
+                    port: 8080,
+                    index_redirect: Some("/index".to_string()),
+                },
+            })
+        )
+    }
+
+    #[test]
+    fn test_parse_git_serve_defaults() {
+        assert_eq!(
+            parse_args(&args(&[
+                "maki",
+                "serve",
+                "--git",
+                "https://example.com/blog.git"
+            ])),
+            Ok(Command::Serve {
+                source: ServeSource::Git(git_source::GitServeConfig::new(
+                    "https://example.com/blog.git".to_string()
+                )),
+                options: ServeOptions::default(),
+            })
+        )
+    }
+
+    #[test]
+    fn test_parse_git_options_require_git_source() {
+        assert_eq!(
+            parse_args(&args(&["maki", "serve", "--branch", "main"])),
+            Err(CliError::InvalidServeSource(
+                "--branch, --state-dir, and --fetch-interval require --git".to_string()
+            ))
         )
     }
 }

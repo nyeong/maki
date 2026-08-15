@@ -8,6 +8,14 @@ use std::{
 };
 
 const BIN: &str = env!("CARGO_BIN_EXE_maki");
+const REPOSITORY_GIT_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
 
 struct TestServer {
     child: Child,
@@ -136,6 +144,30 @@ fn start_server_with_project_config(root: &Path, port: u16) -> TestServer {
     server
 }
 
+fn start_git_server(repo: &Path, state_dir: &Path, port: u16) -> TestServer {
+    let mut child = Command::new(BIN)
+        .arg("serve")
+        .arg("--git")
+        .arg(repo)
+        .arg("--branch")
+        .arg("main")
+        .arg("--state-dir")
+        .arg(state_dir)
+        .arg("--fetch-interval")
+        .arg("1s")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    wait_until_child_serving(&mut child, port);
+    TestServer { child }
+}
+
 fn wait_until_serving(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(5);
 
@@ -147,6 +179,131 @@ fn wait_until_serving(port: u16) {
     }
 
     panic!("server did not start on port {port}");
+}
+
+fn wait_until_child_serving(child: &mut Child, port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    while Instant::now() < deadline {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!(
+                "server exited before listening on port {port} with {status}\n{}",
+                read_child_output(child)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!(
+        "server did not start on port {port}\n{}",
+        read_child_output(child)
+    );
+}
+
+fn read_child_output(child: &mut Child) -> String {
+    let mut output = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        if !text.is_empty() {
+            output.push_str("stdout:\n");
+            output.push_str(&text);
+        }
+    }
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        if !text.is_empty() {
+            output.push_str("stderr:\n");
+            output.push_str(&text);
+        }
+    }
+    output
+}
+
+fn wait_until_body_contains(port: u16, target: &str, expected: &str) -> HttpResponse {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut latest = None;
+
+    while Instant::now() < deadline {
+        let response = http_get(port, target);
+        if response.body.contains(expected) {
+            return response;
+        }
+        latest = Some(response.body);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    panic!(
+        "timed out waiting for {expected:?}; latest body:\n{}",
+        latest.unwrap_or_default()
+    );
+}
+
+fn git_is_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn run_git(repo: &Path, args: &[&str]) {
+    let mut command = Command::new("git");
+    command
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-C")
+        .arg(repo)
+        .args(args);
+    for key in REPOSITORY_GIT_ENV {
+        command.env_remove(key);
+    }
+
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn commit_git_project(repo: &Path, message: &str, body: &str) {
+    fs::write(
+        repo.join("maki.toml"),
+        "[project]\ntitle = \"Git Fixture\"\nhome = \"home\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("home.maki"),
+        format!("--^ title: Git Home\n\n{body}\n"),
+    )
+    .unwrap();
+    run_git(repo, &["add", "maki.toml", "home.maki"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+    );
+}
+
+fn temp_git_project(name: &str) -> TestProject {
+    let project = temp_project(name);
+    run_git(&project.root, &["init", "--initial-branch", "main"]);
+    run_git(&project.root, &["config", "user.name", "Maki Test"]);
+    run_git(
+        &project.root,
+        &["config", "user.email", "maki-test@example.invalid"],
+    );
+    commit_git_project(&project.root, "initial", "Git content marker: version one");
+    project
 }
 
 #[derive(Debug)]
@@ -432,4 +589,27 @@ fn v1_fixture_supports_serve_options_and_live_reload() {
 
     let edited = http_get(port, "/home");
     edited.assert_body_contains("Edited content marker: v1-edited");
+}
+
+#[test]
+fn git_serve_polls_commits_without_live_reload() {
+    if !git_is_available() {
+        return;
+    }
+
+    let repo = temp_git_project("git-serve-repo");
+    let state = temp_project("git-serve-state");
+    let port = free_port();
+    let _server = start_git_server(&repo.root, &state.root, port);
+
+    let initial = http_get(port, "/home");
+    initial.assert_status("HTTP/1.1 200 OK");
+    initial.assert_body_contains("Git content marker: version one");
+    initial.assert_body_excludes("new EventSource(\"/.maki/events\")");
+
+    commit_git_project(&repo.root, "second", "Git content marker: version two");
+
+    let updated = wait_until_body_contains(port, "/home", "Git content marker: version two");
+    updated.assert_status("HTTP/1.1 200 OK");
+    updated.assert_body_excludes("new EventSource(\"/.maki/events\")");
 }
