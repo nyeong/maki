@@ -7,7 +7,8 @@
 특히 `NoteIndex`, case-insensitive wikilink, paragraph boundary, ordered list, project diagnostics, title search, navigation shell, runtime assets, git source serving이 이미 들어와 있다.
 
 이제 병목은 "NoteIndex를 세우기"가 아니라, 현재 흩어져 있는 note lookup, title loading, diagnostics, search metadata를 안정적인 project index로 정리하는 것이다.
-현재 구현은 동작하지만 note title을 여러 경로에서 다시 읽고 파싱하며, diagnostics는 link graph/source span 없이 재파싱하고, external link check를 동기적으로 수행한다.
+현재 구현은 동작하지만 note title을 여러 경로에서 다시 읽고 파싱하며, diagnostics는 link graph/source span 없이 재파싱한다.
+external link check는 serve의 기본 diagnostics에서는 빠져 있지만, full/build diagnostics에는 아직 동기적으로 붙어 있다.
 
 추천 순서:
 
@@ -100,7 +101,7 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 - 그러나 아직 index라기보다 lookup table과 derived metadata 묶음에 가깝다.
 - title/search metadata는 만들어지지만, link graph, block index, heading index, publish boundary는 없다.
 - link 렌더링 때 대상 note title을 다시 파일에서 읽고 파싱한다.
-- diagnostics도 각 note를 다시 읽고 파싱한다.
+- diagnostics도 response cache miss나 warm 단계에서는 각 note를 다시 읽고 파싱한다.
 
 == Wikilink
 
@@ -152,11 +153,14 @@ project page에는 nav shell, search input, diagnostics link, TOC/search scripts
 웹 서버는 직접 만든 HTTP parser/response 위에 thread-per-connection으로 동작한다.
 SSE live reload와 polling file watcher를 갖고 있고, `.maki` 파일과 `maki.toml` 변경을 감지한다.
 project page에서는 runtime asset을 external route로 제공한다.
+프로젝트 snapshot마다 response cache를 갖고, `/@/`, `/.maki/search-index.json`, note page HTML을 cache miss 시 렌더한 뒤 재사용한다.
+serve 시작 후에는 background warmer가 cacheable route를 순차적으로 채운다.
+local file watcher나 git updater가 새 `Maki` snapshot을 교체하면 response cache도 함께 새 세대로 바뀐다.
 
 근거:
 
-- `src/web.rs`: route handling, search routes, diagnostics route, runtime asset routes, live reload, watcher.
-- `tests/milestone_quality.rs`, `src/web.rs` tests: rendered pages, search index/page, diagnostics page, runtime assets, live reload.
+- `src/web.rs`: route handling, search routes, diagnostics route, runtime asset routes, response cache warmer, live reload, watcher.
+- `tests/milestone_quality.rs`, `src/web.rs` tests: rendered pages, search index/page, diagnostics page, response cache invalidation/warmup, runtime assets, live reload.
 
 평가:
 
@@ -164,7 +168,7 @@ project page에서는 runtime asset을 external route로 제공한다.
 - public publishing을 하려면 현재 HTTP stack은 보수적으로 봐야 한다.
 - `/@/`은 diagnostics page다. 사람이 보는 sitemap인 `/@/sitemap`은 아직 없다.
 - `sitemap.xml`도 아직 없다.
-- diagnostics page가 external link check를 동기적으로 수행할 수 있으므로 public/server runtime에서는 정책 분리가 필요하다.
+- response cache는 프로젝트 snapshot 단위라 정확성은 단순하지만, note별 부분 무효화나 AST 재사용은 아직 없다.
 
 = 추상화 수준 평가
 
@@ -186,6 +190,7 @@ project page에서는 runtime asset을 external route로 제공한다.
 - `Block`에 span/id가 없어 lint, heading link, precise diagnostics, query가 어렵다.
 - link diagnostics에 line number가 거의 없다. parser diagnostics만 line을 가진다.
 - route, render, search, diagnostics, sitemap, publish policy가 공유할 "public note set" 개념이 없다.
+- response cache는 `web` 계층에 있어 HTTP 응답 재사용만 해결한다. `maki` 계층의 raw/source/AST/metadata 재사용 경계는 아직 없다.
 - external link check 정책이 diagnostics 수집에 직접 붙어 있다.
 
 == 과하게 앞서가면 안 되는 추상화
@@ -229,9 +234,10 @@ project page에서는 runtime asset을 external route로 제공한다.
 완료:
 
 - project page에 home link, diagnostics link, title search form이 있는 nav header가 들어간다.
-- `/@/` diagnostics page가 parse warning, broken link, ambiguous link, broken external link, read failure summary를 보여준다.
+- `/@/` diagnostics page가 parse warning, broken internal link, ambiguous internal link, read failure summary를 보여준다.
 - `/.maki/search-index.json`과 `/.maki/search?q=...`가 title search를 제공한다.
 - runtime assets는 `/.maki/assets/...`로 제공된다.
+- `/@/`, `/.maki/search-index.json`, note page HTML은 프로젝트 snapshot 단위 response cache로 재사용된다.
 
 남은 점:
 
@@ -260,8 +266,8 @@ project page에서는 runtime asset을 external route로 제공한다.
 
 == P0: External link diagnostics 정책
 
-현재 P0 위험은 external link diagnostics가 project diagnostics 수집에 동기적으로 붙어 있다는 점이다.
-`serve` 시작, diagnostics page 접근, build diagnostics가 네트워크 상태에 영향을 받을 수 있다.
+현재 P0 위험은 external link diagnostics가 full/build project diagnostics 수집에 동기적으로 붙어 있다는 점이다.
+`serve` 시작과 diagnostics page 접근은 external link check를 건너뛰지만, `maki build`의 full diagnostics는 네트워크 상태에 영향을 받을 수 있다.
 
 권장 구현:
 

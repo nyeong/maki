@@ -153,7 +153,7 @@ pub(crate) fn parse_request_headers<'a>(
     Ok(headers)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Headers(HashMap<String, String>);
 
 impl Display for StatusCode {
@@ -184,7 +184,7 @@ impl std::str::FromStr for Method {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Response {
     status: StatusCode,
     version: Version,

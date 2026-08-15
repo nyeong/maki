@@ -48,8 +48,50 @@ const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 pub(crate) struct AppState {
     project_root: PathBuf,
     config_overrides: MakiConfigOverrides,
-    maki: RwLock<Maki>,
+    project: RwLock<ProjectState>,
     live_reload: Option<LiveReload>,
+}
+
+struct ProjectState {
+    maki: Maki,
+    response_cache: Mutex<BTreeMap<ResponseCacheKey, http::Response>>,
+}
+
+impl ProjectState {
+    fn new(maki: Maki) -> Self {
+        Self {
+            maki,
+            response_cache: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn cached_response(&self, key: &ResponseCacheKey) -> Option<http::Response> {
+        self.response_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(key).cloned())
+    }
+
+    fn insert_response(&self, key: ResponseCacheKey, response: http::Response) {
+        if let Ok(mut cache) = self.response_cache.lock() {
+            cache.insert(key, response);
+        }
+    }
+
+    #[cfg(test)]
+    fn cached_response_count(&self) -> usize {
+        self.response_cache
+            .lock()
+            .map(|cache| cache.len())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ResponseCacheKey {
+    Diagnostics,
+    SearchIndex,
+    NotePage(PathBuf),
 }
 
 impl AppState {
@@ -72,7 +114,7 @@ impl AppState {
         Self {
             project_root,
             config_overrides,
-            maki: RwLock::new(maki),
+            project: RwLock::new(ProjectState::new(maki)),
             live_reload: live_reload.then(|| LiveReload::new(MAX_SSE_CLIENTS)),
         }
     }
@@ -86,20 +128,23 @@ impl AppState {
     }
 
     fn current_root(&self) -> Result<PathBuf, maki::Error> {
-        let maki = self
-            .maki
+        let project = self
+            .project
             .read()
             .map_err(|_| maki::Error::ReadDirectoryFailed(PathBuf::from(".")))?;
 
-        Ok(maki.root().to_path_buf())
+        Ok(project.maki.root().to_path_buf())
     }
 
     pub(crate) fn replace_maki(&self, next: Maki) -> Result<(), maki::Error> {
-        let mut maki = self
-            .maki
-            .write()
-            .map_err(|_| maki::Error::ReadDirectoryFailed(next.root().to_path_buf()))?;
-        *maki = next;
+        let root = next.root().to_path_buf();
+        {
+            let mut project = self
+                .project
+                .write()
+                .map_err(|_| maki::Error::ReadDirectoryFailed(root))?;
+            *project = ProjectState::new(next);
+        }
         if let Some(live_reload) = &self.live_reload {
             live_reload.broadcast_reload();
         }
@@ -122,6 +167,14 @@ impl AppState {
             .current_root()
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         collect_watched_project_snapshot(&self.project_root, &source_root)
+    }
+
+    #[cfg(test)]
+    fn cached_response_count(&self) -> usize {
+        self.project
+            .read()
+            .map(|project| project.cached_response_count())
+            .unwrap_or_default()
     }
 }
 
@@ -423,6 +476,49 @@ fn runtime_asset_response(asset: crate::html::RuntimeAsset) -> http::Response {
         .set_body(body)
 }
 
+fn cacheable_response(
+    state: &AppState,
+    project: &ProjectState,
+    key: ResponseCacheKey,
+) -> Result<http::Response, Error> {
+    if let Some(response) = project.cached_response(&key) {
+        return Ok(response);
+    }
+
+    let response = render_cacheable_response(state, &project.maki, &key)?;
+    project.insert_response(key, response.clone());
+    Ok(response)
+}
+
+fn render_cacheable_response(
+    state: &AppState,
+    maki: &Maki,
+    key: &ResponseCacheKey,
+) -> Result<http::Response, Error> {
+    match key {
+        ResponseCacheKey::Diagnostics => {
+            let diagnostics = maki.diagnostics_without_external_links();
+            let html = crate::html::render_diagnostics_page(
+                &diagnostics,
+                maki.notes_len(),
+                AssetMode::External,
+            );
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
+        ResponseCacheKey::SearchIndex => Ok(http::Response::new(http::StatusCode::Ok)
+            .set_header("Content-Type", "application/json; charset=utf-8")
+            .set_body(search_index_json(maki.search_entries()))),
+        ResponseCacheKey::NotePage(path) => {
+            let html = maki.render_html_with_asset_mode(path, AssetMode::External)?;
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
+    }
+}
+
 fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Response, Error> {
     let target = parse_request_target(request.target())?;
 
@@ -437,26 +533,17 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         return Ok(runtime_asset_response(asset));
     }
 
-    let maki = state.maki.read().map_err(|_| Error::Maki {
+    let project = state.project.read().map_err(|_| Error::Maki {
         source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
     })?;
+    let maki = &project.maki;
 
     if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_NO_SLASH {
-        let diagnostics = maki.diagnostics_without_external_links();
-        let html = crate::html::render_diagnostics_page(
-            &diagnostics,
-            maki.notes_len(),
-            AssetMode::External,
-        );
-        return Ok(http::Response::new(http::StatusCode::Ok)
-            .set_header("Content-Type", "text/html; charset=utf-8")
-            .set_body(state.with_live_reload(html)));
+        return cacheable_response(state, &project, ResponseCacheKey::Diagnostics);
     }
 
     if target.path == SEARCH_INDEX_PATH {
-        return Ok(http::Response::new(http::StatusCode::Ok)
-            .set_header("Content-Type", "application/json; charset=utf-8")
-            .set_body(search_index_json(maki.search_entries())));
+        return cacheable_response(state, &project, ResponseCacheKey::SearchIndex);
     }
 
     if target.path == SEARCH_PATH {
@@ -475,10 +562,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
 
     match maki.resolve_route(&target.path) {
         Ok(MakiRoute::NotePage(path)) => {
-            let html = maki.render_html_with_asset_mode(&path, AssetMode::External)?;
-            Ok(http::Response::new(http::StatusCode::Ok)
-                .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(state.with_live_reload(html)))
+            cacheable_response(state, &project, ResponseCacheKey::NotePage(path))
         }
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
@@ -803,6 +887,46 @@ fn spawn_file_watcher(state: Arc<AppState>) {
     });
 }
 
+fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
+    let mut keys = Vec::with_capacity(maki.notes_len() + 2);
+    keys.push(ResponseCacheKey::SearchIndex);
+    keys.push(ResponseCacheKey::Diagnostics);
+    keys.extend(
+        maki.notes()
+            .map(|note| ResponseCacheKey::NotePage(note.source_path().to_path_buf())),
+    );
+    keys
+}
+
+fn warm_response_cache(state: &AppState) -> Result<(), Error> {
+    let keys = {
+        let project = state.project.read().map_err(|_| Error::Maki {
+            source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
+        })?;
+        response_cache_warmup_keys(&project.maki)
+    };
+
+    for key in keys {
+        let project = state.project.read().map_err(|_| Error::Maki {
+            source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
+        })?;
+
+        if let Err(error) = cacheable_response(state, &project, key) {
+            eprintln!("Failed to warm response cache: {}", error);
+        }
+    }
+
+    Ok(())
+}
+
+fn spawn_response_cache_warmer(state: Arc<AppState>) {
+    thread::spawn(move || {
+        if let Err(error) = warm_response_cache(&state) {
+            eprintln!("Failed to warm response cache: {}", error);
+        }
+    });
+}
+
 pub(crate) enum ServeRuntime {
     Development,
     Publish,
@@ -851,6 +975,7 @@ where
         spawn_file_watcher(Arc::clone(&state));
     }
     setup(Arc::clone(&state));
+    spawn_response_cache_warmer(Arc::clone(&state));
 
     println!("Listening on http://{}:{}", host, port);
 
@@ -1005,6 +1130,53 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
         assert!(body.contains("Quote \\\"Note\\\""));
+    }
+
+    #[test]
+    fn test_note_page_response_cache_is_replaced_with_project() {
+        let root = std::env::temp_dir().join(format!("maki-response-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("home.maki"), "Cache marker: first generation").unwrap();
+
+        let maki = Maki::load(&root).unwrap();
+        let state = AppState::new(maki);
+        let request = http::Request::get("/home");
+
+        let first = handle_request(&state, &request).unwrap();
+        let first_body = String::from_utf8(first.body().to_vec()).unwrap();
+        assert!(first_body.contains("Cache marker: first generation"));
+        assert_eq!(state.cached_response_count(), 1);
+
+        fs::write(root.join("home.maki"), "Cache marker: second generation").unwrap();
+
+        let cached = handle_request(&state, &request).unwrap();
+        let cached_body = String::from_utf8(cached.body().to_vec()).unwrap();
+        assert!(cached_body.contains("Cache marker: first generation"));
+        assert!(!cached_body.contains("Cache marker: second generation"));
+
+        state.reload().unwrap();
+        assert_eq!(state.cached_response_count(), 0);
+
+        let reloaded = handle_request(&state, &request).unwrap();
+        let reloaded_body = String::from_utf8(reloaded.body().to_vec()).unwrap();
+        assert!(reloaded_body.contains("Cache marker: second generation"));
+        assert_eq!(state.cached_response_count(), 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_warm_response_cache_populates_cacheable_project_routes() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let expected_entries = maki.notes_len() + 2;
+        let state = AppState::new(maki);
+
+        assert_eq!(state.cached_response_count(), 0);
+
+        warm_response_cache(&state).unwrap();
+
+        assert_eq!(state.cached_response_count(), expected_entries);
     }
 
     #[test]
