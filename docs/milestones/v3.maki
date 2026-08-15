@@ -23,7 +23,7 @@ v3에서는 다른 사람에게도 공유할 수 있는 플랫폼을 목표로 �
 - [html] 공개 문서에서 비공개 문서로 향하는 Note Link는 숨김처리한다.
   - [ 데이터 말소 ]
 - [serve] 비공개 문서에 접근하면 Not Found로 응답함
-- [serve] 느린 요청에 대해 어느 phase가 오래 걸렸는지 확인할 수 있다.
+- [serve] 느린 요청, cache miss, render, reload 병목을 aggregate metric으로 확인할 수 있다.
 
 = 비목표
 
@@ -72,8 +72,10 @@ v3에서는 다른 사람에게도 공유할 수 있는 플랫폼을 목표로 �
 == 웹서버 메트릭 수집
 
 공개되게 웹서버를 올릴 경우, 성능 측정 및 개선을 위해 메트릭을 수집해야한다.
+구체적인 Prometheus scrape endpoint 작업은 [[v5]]에서 다룬다.
 
-요청 처리 시간을 phase별로 측정한다.
+초기 관측성은 request 전체, cache, render, reload 중심의 aggregate metric을 우선한다.
+요청 처리 phase별 측정은 Prometheus scrape endpoint가 안정화된 뒤 refine 단계에서 다룬다.
 
 - request_read
 - route_resolve

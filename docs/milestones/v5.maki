@@ -1,0 +1,180 @@
+--^ title: v5: Observability
+--^ status: todo
+
+`maki serve`를 운영하면서 성능 병목을 추적할 수 있도록 Prometheus scrape endpoint를 제공한다.
+
+= 상황
+
+[[v3]]의 publishing 목표에는 공개 서버 운용에 필요한 최소 메트릭 수집이 포함되어 있다.
+또한 serve response cache가 들어오면서, 이제 단순히 "요청이 느리다"가 아니라 다음 질문을 구분해야 한다.
+
+- 요청 경계가 느린가?
+- route resolve나 source read가 느린가?
+- cache hit ratio가 낮은가?
+- cache miss 시 render가 느린가?
+- background warmer가 부팅 후 cache를 충분히 빨리 채우는가?
+- directory watcher나 git updater가 snapshot을 자주 교체하는가?
+- project load/index 단계가 병목인가?
+
+v5는 이 질문에 답하기 위한 관측성 기반을 만든다.
+Grafana dashboard 자체는 maki의 책임이 아니고, maki는 Prometheus가 scrape할 수 있는 표준 endpoint를 제공한다.
+
+= 목표
+
+- `maki serve`가 Prometheus text exposition 형식의 metrics endpoint를 제공한다.
+- HTTP request, response cache, render, project reload, git refresh의 최소 메트릭을 수집한다.
+- 낮은 cardinality label 정책을 문서화하고 코드에 반영한다.
+- metrics 기능은 꺼둘 수 있고, 기본 운영에서 민감한 path/query가 노출되지 않는다.
+- 수집된 정보를 바탕으로 이후 ProjectIndex, render cache, warmup, reload 최적화를 판단할 수 있다.
+
+= 비목표
+
+- Grafana dashboard 구현
+- Prometheus 배포/운영 자동화
+- alert rule 제공
+- per-note path를 label로 노출하는 상세 분석
+- OpenTelemetry trace/log pipeline
+- request body, query string, 원문 문서 내용 수집
+
+= 사용자 흐름
+
+운영자는 `maki serve` 실행 시 metrics endpoint를 켠다.
+
+--v lang: bash
+: maki serve docs --metrics 127.0.0.1:4041
+
+Prometheus는 별도 scrape config로 endpoint를 읽는다.
+
+--v lang: yaml
+: scrape_configs:
+:   - job_name: maki
+:     static_configs:
+:       - targets: ["127.0.0.1:4041"]
+
+Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
+
+= maki가 제공할 것
+
+== Metrics listener
+
+- 별도 listener를 우선한다.
+  - 예: `--metrics 127.0.0.1:4041`
+  - app route와 같은 listener에 `/metrics`를 붙이는 방식은 나중 옵션으로 남긴다.
+- 기본값은 disabled 또는 localhost-only가 안전하다.
+- metrics endpoint는 `GET /metrics`만 처리한다.
+- metrics endpoint 자체의 요청도 별도 메트릭으로 세되, app request latency와 섞지 않는다.
+
+== Metric registry
+
+- `web` 계층에서 공유할 `Metrics` 또는 `Telemetry` 구조체를 둔다.
+- metrics disabled 상태에서는 no-op으로 동작한다.
+- scrape 시점에는 현재 누적 counter/gauge/histogram snapshot을 Prometheus text format으로 직렬화한다.
+- 초기는 외부 crate 없이 직접 구현해도 된다.
+  - 단, histogram bucket과 escaping 규칙이 번거로워지면 `prometheus-client` 같은 crate 도입을 검토한다.
+
+== Label 정책
+
+허용 label:
+
+- `method`: `GET`, `HEAD`
+- `route`: `home`, `note`, `source`, `diagnostics`, `search`, `search_index`, `asset`, `events`, `not_found`, `metrics`
+- `status`: exact HTTP status code. 예: `200`, `302`, `404`, `500`
+- `cache`: `hit`, `miss`
+- `kind`: `note`, `diagnostics`, `search_index`, `search_page`
+- `source`: `directory`, `git`
+- `result`: `ok`, `error`, `unchanged`, `updated`, `skipped`
+- `phase`: project load phase. `list_files`, `load_notes`, `index`, `metadata`, `render`, `write`
+
+금지 label:
+
+- 실제 note path
+- query string
+- raw target
+- git commit hash
+- 에러 메시지 원문
+- 사용자/문서 내용에서 파생된 문자열
+
+= 최소 메트릭
+
+초기 구현은 request 전체, cache, render, reload 중심의 coarse metric을 우선한다.
+[[v3]]에 적힌 `request_read`, `route_resolve`, `source_read` 같은 phase별 request timing은 v5 이후 refine 단계로 남긴다.
+다만 `Maki::load_with_config`처럼 이미 단계가 명확한 project load는 phase label을 허용한다.
+
+== HTTP
+
+--v lang: text
+: maki_http_requests_total{method,route,status}
+: maki_http_request_duration_seconds_bucket{method,route,status,le}
+: maki_http_request_duration_seconds_sum{method,route,status}
+: maki_http_request_duration_seconds_count{method,route,status}
+: maki_http_response_bytes_bucket{route,status,le}
+: maki_http_inflight_requests
+
+== Response cache
+
+--v lang: text
+: maki_response_cache_requests_total{kind,cache}
+: maki_response_cache_entries
+: maki_response_cache_warmup_items_total{kind,result}
+: maki_response_cache_warmup_duration_seconds_bucket{le}
+
+== Render
+
+--v lang: text
+: maki_render_duration_seconds_bucket{kind,le}
+: maki_render_errors_total{kind}
+
+== Project load / reload
+
+--v lang: text
+: maki_project_notes
+: maki_project_load_duration_seconds_bucket{phase,le}
+: maki_project_reload_total{source,result}
+: maki_project_reload_duration_seconds_bucket{source,le}
+
+== Git source
+
+--v lang: text
+: maki_git_refresh_total{result}
+: maki_git_refresh_duration_seconds_bucket{le}
+: maki_git_last_success_timestamp_seconds
+
+== Live reload
+
+--v lang: text
+: maki_live_reload_clients
+: maki_live_reload_events_total
+
+= 계측 지점
+
+- HTTP 요청 전체 시간: `web::handle_connection` 또는 `web::response_for_request`
+- route 분류: `web::handle_request`
+- response cache hit/miss: `web::cacheable_response`
+- cacheable render 시간: `web::render_cacheable_response`
+- warmer 처리량과 실패율: `web::warm_response_cache`
+- directory reload: `web::spawn_file_watcher`와 `AppState::reload`
+- git refresh/update: `git_source::spawn_updater`
+- project load phase: `Maki::load_with_config`
+- note render 내부: `Maki::render_html_with_asset_mode`
+
+= 성공기준
+
+- [serve] `--metrics 127.0.0.1:PORT`로 별도 metrics listener를 켤 수 있다.
+- [serve] `GET /metrics`가 Prometheus text exposition 형태로 응답한다.
+- [serve] metrics disabled 상태에서는 기존 serve 동작과 출력이 바뀌지 않는다.
+- [serve] HTTP request duration, request total, response cache hit/miss, render duration, project reload total을 확인할 수 있다.
+- [serve] note path, query string, 문서 내용이 metric label/value로 노출되지 않는다.
+- [test] metrics endpoint smoke test가 있다.
+- [test] cache hit/miss counter가 요청에 따라 증가하는 테스트가 있다.
+- [test] reload 후 project gauge/cache gauge가 새 snapshot 기준으로 갱신되는 테스트가 있다.
+
+= 다음 최적화 질문
+
+v5가 완료되면 다음 기준으로 최적화 우선순위를 정한다.
+
+- p95/p99 request latency가 cache hit에서도 높은가?
+- cache hit ratio가 낮은가?
+- diagnostics나 note render cache miss가 긴가?
+- project reload duration이 문서 수에 비례해 너무 빠르게 증가하는가?
+- background warmer가 부팅 직후 요청과 lock contention을 만들고 있는가?
+- git refresh가 publish runtime latency나 availability에 영향을 주는가?
