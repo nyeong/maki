@@ -48,7 +48,7 @@ let
       source = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "/srv/hanassig";
+        example = "/srv/maki/wiki";
         description = "Runtime path to a local Maki project or note directory.";
       };
 
@@ -226,8 +226,8 @@ in
       default = { };
       example = lib.literalExpression ''
         {
-          hanassig = {
-            git.url = "https://git.example.com/me/hanassig.git";
+          wiki = {
+            git.url = "https://git.example.com/me/wiki.git";
             port = 4000;
           };
           docs = {

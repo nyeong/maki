@@ -82,14 +82,14 @@
                   enable = true;
                   package = fakeMaki;
                   targets = {
-                    hanassig = {
-                      git.url = "https://git.eska.nyeong.me/nyeong/hanassig";
+                    wiki = {
+                      git.url = "https://example.invalid/maki/wiki.git";
                       host = "0.0.0.0";
                       port = 8080;
                       openFirewall = true;
                     };
                     docs = {
-                      git.url = "https://git.eska.nyeong.me/nyeong/maki";
+                      git.url = "https://example.invalid/maki/docs.git";
                       git.fetchInterval = "5m";
                       port = 8081;
                       openFirewall = true;
@@ -107,10 +107,10 @@
           targetService = name: targetsModuleEval.config.systemd.services."maki-${name}";
           serviceExecStart =
             name: builtins.unsafeDiscardStringContext (targetService name).serviceConfig.ExecStart;
-          hanassigExecStart = serviceExecStart "hanassig";
+          wikiExecStart = serviceExecStart "wiki";
           docsExecStart = serviceExecStart "docs";
           localExecStart = serviceExecStart "local";
-          hanassigStateDirectory = builtins.unsafeDiscardStringContext (targetService "hanassig")
+          wikiStateDirectory = builtins.unsafeDiscardStringContext (targetService "wiki")
             .serviceConfig.StateDirectory;
           targetsPorts = targetsModuleEval.config.networking.firewall.allowedTCPPorts;
           targetsPortsAreOpen = builtins.all (port: builtins.elem port targetsPorts) [
@@ -121,7 +121,7 @@
           wantedByMultiUser =
             builtins.all (name: builtins.elem "multi-user.target" (targetService name).wantedBy)
               [
-                "hanassig"
+                "wiki"
                 "docs"
                 "local"
               ];
@@ -170,24 +170,24 @@
               '';
 
           nixos-module-eval = pkgs.runCommand "maki-nixos-module-eval" { } ''
-            hanassig_exec_start=${lib.escapeShellArg hanassigExecStart}
-            case "$hanassig_exec_start" in
-              *"serve --git https://git.eska.nyeong.me/nyeong/hanassig --branch main --state-dir /var/lib/maki/hanassig --fetch-interval 60s --host 0.0.0.0 --port 8080"*) ;;
+            wiki_exec_start=${lib.escapeShellArg wikiExecStart}
+            case "$wiki_exec_start" in
+              *"serve --git https://example.invalid/maki/wiki.git --branch main --state-dir /var/lib/maki/wiki --fetch-interval 60s --host 0.0.0.0 --port 8080"*) ;;
               *)
-                echo "unexpected hanassig ExecStart: $hanassig_exec_start"
+                echo "unexpected wiki ExecStart: $wiki_exec_start"
                 exit 1
                 ;;
             esac
-            case "$hanassig_exec_start" in
+            case "$wiki_exec_start" in
               *"--index-redirect"*)
-                echo "hanassig target should not override maki.toml home by default"
+                echo "wiki target should not override maki.toml home by default"
                 exit 1
                 ;;
             esac
 
             docs_exec_start=${lib.escapeShellArg docsExecStart}
             case "$docs_exec_start" in
-              *"serve --git https://git.eska.nyeong.me/nyeong/maki --branch main --state-dir /var/lib/maki/docs --fetch-interval 5m --host 127.0.0.1 --port 8081"*) ;;
+              *"serve --git https://example.invalid/maki/docs.git --branch main --state-dir /var/lib/maki/docs --fetch-interval 5m --host 127.0.0.1 --port 8081"*) ;;
               *)
                 echo "unexpected docs ExecStart: $docs_exec_start"
                 exit 1
@@ -203,9 +203,9 @@
                 ;;
             esac
 
-            state_directory=${lib.escapeShellArg hanassigStateDirectory}
-            if [ "$state_directory" != maki/hanassig ]; then
-              echo "expected StateDirectory=maki/hanassig, got $state_directory"
+            state_directory=${lib.escapeShellArg wikiStateDirectory}
+            if [ "$state_directory" != maki/wiki ]; then
+              echo "expected StateDirectory=maki/wiki, got $state_directory"
               exit 1
             fi
 

@@ -30,7 +30,7 @@ its own `maki-<name>.service`.
 
 ```nix
 {
-  inputs.maki.url = "git+https://git.eska.nyeong.me/nyeong/maki";
+  inputs.maki.url = "git+https://example.invalid/maki.git";
 
   outputs =
     { maki, nixpkgs, ... }:
@@ -42,14 +42,14 @@ its own `maki-<name>.service`.
             services.maki = {
               enable = true;
 
-              targets.hanassig = {
-                git.url = "https://git.eska.nyeong.me/nyeong/hanassig";
+              targets.wiki = {
+                git.url = "https://example.invalid/wiki.git";
                 port = 4000;
                 openFirewall = true;
               };
 
               targets.docs = {
-                git.url = "https://git.eska.nyeong.me/nyeong/maki";
+                git.url = "https://example.invalid/docs.git";
                 port = 4001;
                 openFirewall = true;
               };
