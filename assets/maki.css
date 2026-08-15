@@ -654,11 +654,22 @@ th {
     width: 16rem;
     max-height: calc(100vh - 8rem);
     margin: 0;
+    padding: 0.2rem 0;
+    border: 0;
+    background: transparent;
     overflow: hidden;
-    box-shadow: 0 12px 30px rgb(32 33 36 / 12%);
+    box-shadow: none;
+    color: var(--muted);
+  }
+
+  .maki-toc-summary {
+    min-height: 1.6rem;
+    color: var(--muted);
+    font-weight: 600;
   }
 
   .maki-toc-list {
+    margin-top: 0.25rem;
     max-height: calc(100vh - 12rem);
   }
 
@@ -673,11 +684,16 @@ th {
   .maki-toc-list a {
     display: block;
     padding: 0.04rem 0.2rem;
+    color: var(--muted);
+  }
+
+  .maki-toc-list-number {
+    color: currentColor;
   }
 
   .maki-toc-list a:hover,
   .maki-toc-list li.is-active a {
-    background: #f4f6fb;
+    color: var(--fg);
     text-decoration: none;
   }
 }
