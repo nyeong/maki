@@ -11,6 +11,7 @@
   const LABEL_HEIGHT = 32;
   const SEVERE_OVERLAP_GAP = LABEL_HEIGHT / 2;
   const DENSE_CLUSTER_HEADING_COUNT = 5;
+  const SCROLL_HEIGHT_TOLERANCE = 1;
 
   const getHeadingLevel = (heading) => {
     const ariaLevel = Number(heading.getAttribute("aria-level"));
@@ -64,6 +65,9 @@
     );
   };
 
+  const hasScrollablePage = () =>
+    documentHeight() > globalThis.innerHeight + SCROLL_HEIGHT_TOLERANCE;
+
   const markerY = (heading) => {
     const trackHeight = globalThis.innerHeight - TRACK_MARGIN * 2;
     const ratio = Math.min(Math.max(headingTop(heading) / documentHeight(), 0), 1);
@@ -110,6 +114,8 @@
 
   const start = () => {
     if (!globalThis.matchMedia(DESKTOP_QUERY).matches) return;
+    if (document.querySelector(".maki-toc")) return;
+    if (!hasScrollablePage()) return;
 
     const headings = chooseHeadings(collectHeadings());
     if (!headings.length) return;
@@ -210,6 +216,12 @@
     };
 
     const layout = () => {
+      toc.hidden = !hasScrollablePage();
+      if (toc.hidden) {
+        hideLabels();
+        return;
+      }
+
       items.forEach((item) => {
         item.y = markerY(item.heading);
         const top = `${item.y}px`;
@@ -258,9 +270,16 @@
     document.addEventListener("mouseleave", hideLabels);
   };
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start, { once: true });
-  } else {
-    start();
-  }
+  const startWhenReady = () => {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start, { once: true });
+    } else {
+      start();
+    }
+
+    globalThis.addEventListener("load", start, { once: true });
+    globalThis.addEventListener("resize", start, { passive: true });
+  };
+
+  startWhenReady();
 })();
