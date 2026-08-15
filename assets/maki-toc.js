@@ -12,6 +12,7 @@
   const SEVERE_OVERLAP_GAP = LABEL_HEIGHT / 2;
   const DENSE_CLUSTER_HEADING_COUNT = 5;
   const SCROLL_HEIGHT_TOLERANCE = 1;
+  const isDesktop = () => globalThis.matchMedia(DESKTOP_QUERY).matches;
 
   const getHeadingLevel = (heading) => {
     const ariaLevel = Number(heading.getAttribute("aria-level"));
@@ -68,6 +69,22 @@
   const hasScrollablePage = () =>
     documentHeight() > globalThis.innerHeight + SCROLL_HEIGHT_TOLERANCE;
 
+  const insertToc = (toc) => {
+    const title = document.querySelector("body > h1");
+    if (title) {
+      title.insertAdjacentElement("afterend", toc);
+      return;
+    }
+
+    const nav = document.querySelector("body > .maki-nav");
+    if (nav) {
+      nav.insertAdjacentElement("afterend", toc);
+      return;
+    }
+
+    document.body.prepend(toc);
+  };
+
   const markerY = (heading) => {
     const trackHeight = globalThis.innerHeight - TRACK_MARGIN * 2;
     const ratio = Math.min(Math.max(headingTop(heading) / documentHeight(), 0), 1);
@@ -112,13 +129,19 @@
     return fallback;
   };
 
+  const labelParts = (labelText) => {
+    const match = labelText.match(/^(\d+(?:\.\d+)*\.)(?:\s+)?(.*)$/);
+    return match
+      ? { number: match[1], title: match[2] }
+      : { number: "", title: labelText };
+  };
+
   const start = () => {
-    if (!globalThis.matchMedia(DESKTOP_QUERY).matches) return;
     if (document.querySelector(".maki-toc")) return;
-    if (!hasScrollablePage()) return;
 
     const headings = chooseHeadings(collectHeadings());
     if (!headings.length) return;
+    if (isDesktop() && !hasScrollablePage()) return;
 
     const toc = document.createElement("nav");
     toc.className = "maki-toc";
@@ -128,12 +151,22 @@
     markers.className = "maki-toc-markers";
     const labels = document.createElement("div");
     labels.className = "maki-toc-labels";
-    toc.append(markers, labels);
-    document.body.append(toc);
+    const panel = document.createElement("details");
+    panel.className = "maki-toc-panel";
+    panel.open = true;
+    const summary = document.createElement("summary");
+    summary.className = "maki-toc-summary";
+    summary.textContent = "목차";
+    const list = document.createElement("ol");
+    list.className = "maki-toc-list";
+    panel.append(summary, list);
+    toc.append(markers, labels, panel);
+    insertToc(toc);
 
     const labelTexts = numberedLabels(headings);
     const items = headings.map((heading, index) => {
       const labelText = labelTexts[index];
+      const parts = labelParts(labelText);
       const marker = document.createElement("button");
       marker.type = "button";
       marker.className = "maki-toc-marker";
@@ -160,6 +193,27 @@
         }
       };
 
+      const item = document.createElement("li");
+      item.style.setProperty(
+        "--maki-toc-depth",
+        Math.max(getContentHeadingLevel(heading) - 1, 0).toString(),
+      );
+      const link = document.createElement("a");
+      link.href = heading.id ? `#${encodeURIComponent(heading.id)}` : "#";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        navigate();
+      });
+      if (parts.number) {
+        const number = document.createElement("span");
+        number.className = "maki-toc-list-number";
+        const nestedNumber = parts.number.replace(/\.$/, "");
+        number.textContent = `${nestedNumber.includes(".") ? nestedNumber : parts.number} `;
+        link.append(number);
+      }
+      link.append(document.createTextNode(parts.title));
+      item.append(link);
+
       marker.addEventListener("click", navigate);
       label.addEventListener("click", navigate);
       marker.addEventListener("mouseenter", () => showSingle(index));
@@ -167,6 +221,7 @@
 
       markers.append(marker);
       labels.append(label);
+      list.append(item);
 
       return { heading, label, marker, y: 0 };
     });
@@ -216,8 +271,9 @@
     };
 
     const layout = () => {
-      toc.hidden = !hasScrollablePage();
-      if (toc.hidden) {
+      const desktop = isDesktop();
+      toc.hidden = desktop && !hasScrollablePage();
+      if (toc.hidden || !desktop) {
         hideLabels();
         return;
       }
@@ -240,6 +296,11 @@
     };
 
     const handlePointerMove = (event) => {
+      if (!isDesktop()) {
+        hideLabels();
+        return;
+      }
+
       const panelLeft = globalThis.innerWidth - PANEL_HOVER_WIDTH;
       if (event.clientX < panelLeft) {
         hideLabels();

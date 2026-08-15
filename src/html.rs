@@ -158,7 +158,9 @@ impl<'a> Renderer<'a> {
     }
 
     fn begin_html(&mut self, title: Option<&str>) {
-        self.html = String::from("<!doctype html><html><head><meta charset=\"utf-8\">");
+        self.html = String::from(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        );
         push_stylesheet(&mut self.html, self.context.asset_mode);
         if let Some(title) = title {
             self.html.push_str("<title>");
@@ -707,6 +709,11 @@ hello <maki> & friends
 
         let html = render_document(&parsed.document);
 
+        assert!(
+            html.contains(
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            )
+        );
         assert!(html.contains("<title>Maki</title>"));
         assert!(html.contains("<h2"));
         assert!(html.contains("<p>hello &lt;maki&gt; &amp; friends</p>"));
