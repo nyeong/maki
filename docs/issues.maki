@@ -18,6 +18,9 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 - HTML 렌더링은 pre, code로
 - 커서 올리면 미구현이라고 띄우기
 
+현재 unknown container는 `pre.maki-container-unknown`로 보존된다.
+아직 별도 `Unsupported`/`Fallback` block kind와 source span은 없다.
+
 --v status: done
 --v type: feature
 = `maki.toml` 중심으로 프로젝트 루트 인식 개편
@@ -73,7 +76,7 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 
 - `maki.toml`이 없을 때의 fallback을 오래 유지할 것인가, 특정 버전 이후 필수로 만들 것인가?
 
---v status: todo
+--v status: in_progress
 --v type: feature
 = container block을 line-first 문법의 보조 form으로 재정의
 
@@ -159,6 +162,13 @@ parser는 외부 command를 실행하지 않고 container block의 kind, args, b
 command는 shell string이 아니라 argv 배열로 받는다.
 `$input`, `$output`, `$assets_dir` 같은 제한된 placeholder만 치환한다.
 
+== 현재 구현 상태
+
+- hyphen fence container는 구현되어 있다.
+- `code`, `quote`, `text`/`pre` built-in container는 HTML renderer가 처리한다.
+- unknown container는 손실 없이 fallback HTML로 보존한다.
+- config 기반 external command adapter는 아직 없다.
+
 == 실행 정책
 
 - 외부 command 실행은 기본적으로 명시적이어야 한다.
@@ -186,11 +196,13 @@ command는 shell string이 아니라 argv 배열로 받는다.
 - `maki.toml`에 등록된 `typst` container를 build/export 단계에서 외부 command로 렌더링할 수 있다.
 - command 실행을 허용하지 않은 경우 외부 command는 실행되지 않는다.
 
---v status: todo
+--v status: done
 --v type: feature
 = 네비 헤더 추가
 
 네비게이션 헤더 추가하여 편하게 `/`로 돌아올 수 있도록
+
+현재 project-aware HTML page에는 `/` home link, `/@/` diagnostics link, title search form이 있는 navigation shell이 렌더링된다.
 
 --v status: todo
 --v type: feature
@@ -200,7 +212,9 @@ command는 shell string이 아니라 argv 배열로 받는다.
 - [ ] /@/sitemap
   - 사람이 읽을 수 있게
 
---v status: todo
+주의: 현재 `/@/`은 diagnostics page다. sitemap은 별도 route로 남아 있다.
+
+--v status: done
 --v type: bug
 = wikilink가 case-insensitive하지 않음
 
@@ -210,3 +224,5 @@ command는 shell string이 아니라 argv 배열로 받는다.
 : - devenv.maki
 
 `devenv.maki`에서 `[[Nix]]`로 링크하면 `nix.maki`로 연결되어야 하나, broken link가 되어버림.
+
+현재 `NoteIndex`가 exact path, normalized path, sibling normalized stem, project-wide normalized stem lookup을 제공하여 이 케이스는 해결되어 있다.

@@ -2,6 +2,18 @@
 
 Line-based lightweight mark-up language and file based personal wiki runtime.
 
+## 현재 동작
+
+- `.maki` 파일을 프로젝트 단위로 읽고 HTML로 렌더링한다.
+- `maki.toml`의 `[project] title`, `source`, `home`을 읽는다.
+- `[[note]]`, `[title](note)`, `[title](https://...)`, plain HTTP/HTTPS URL을 링크로 렌더링한다.
+- wikilink는 exact path를 우선하고, 그 다음 case-insensitive path/stem lookup을 사용한다.
+- paragraph, heading, property, quote, code, unordered/ordered list, hyphen-fenced container를 파싱한다.
+- project page에는 home, diagnostics, title search가 있는 navigation shell이 붙는다.
+- `/@/`에서 diagnostics를 보고, `/.maki/search`와 `/.maki/search-index.json`에서 title search를 쓸 수 있다.
+- local serve는 live reload를 지원한다.
+- `serve --git`는 git repository를 mirror/checkout하고 주기적으로 branch를 poll한다.
+
 ## Goals
 
 - 텍스트 기반 불렛 저널
@@ -22,11 +34,49 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 ## 참고
 
 - 문법: [maki-syntax](docs/maki-syntax.maki)
+- 현재 구현 분석: [implementation-analysis](docs/implementation-analysis.maki)
+
+## Usage
+
+```bash
+maki serve docs
+maki build docs/index.maki
+maki serve --git https://example.invalid/maki.git --branch main --state-dir /var/lib/maki/docs --fetch-interval 60s
+```
+
+`maki serve <path>`는 `<path>` 또는 상위 디렉터리에서 `maki.toml`을 찾는다.
+찾으면 project root와 configured `source`를 기준으로 serve하고, 찾지 못하면 기존처럼 입력 directory를 root로 본다.
+
+`maki build <file>`도 같은 방식으로 project root를 찾는다.
+파일이 configured source root 안에 있으면 project-aware link resolution과 diagnostics를 사용하고, 아니면 standalone HTML render로 떨어진다.
+
+## maki.toml
+
+```toml
+[project]
+title = "My Maki Notes"
+source = "docs"
+home = "index"
+```
+
+`source`는 project 내부 relative path여야 한다.
+`home`은 note ref 기준이며, leading slash가 없으면 `/`가 붙은 redirect target으로 사용된다.
+
+## Web routes
+
+- `/`: configured home으로 redirect
+- `/<note>`: rendered note page
+- `/<note>.maki`: source text
+- `/@/`: diagnostics page
+- `/.maki/search`: title search page
+- `/.maki/search-index.json`: title search index
+- `/.maki/assets/...`: runtime CSS/JS assets
 
 ## NixOS
 
 Maki can run multiple named targets from the NixOS module. Each target becomes
-its own `maki-<name>.service`.
+its own `maki-<name>.service`. A target can serve either a local `source` path
+or a git repository.
 
 ```nix
 {
@@ -59,6 +109,17 @@ Git targets default to `branch = "main"`, `fetchInterval = "60s"`, and
 `stateDir = "/var/lib/maki/<target-name>"`. Put `maki.toml` at the repository
 root and use `source = "docs"` when the served Maki project lives in a
 subdirectory.
+
+For a local source target, set `source` instead of `git`:
+
+```nix
+{
+  services.maki.targets.local = {
+    source = "/srv/maki";
+    port = 4000;
+  };
+}
+```
 
 ## Development
 

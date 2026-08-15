@@ -1,0 +1,394 @@
+--^ title: Implementation Analysis
+--^ date: [2026-08-15]
+
+= 결론
+
+현재 maki는 v0/v1의 목표였던 "부분 파싱, HTML 렌더링, 프로젝트 단위 서빙, live reload"를 넘어서 v2 polishing의 일부까지 구현된 상태다.
+특히 `NoteIndex`, case-insensitive wikilink, paragraph boundary, ordered list, project diagnostics, title search, navigation shell, runtime assets, git source serving이 이미 들어와 있다.
+
+이제 병목은 "NoteIndex를 세우기"가 아니라, 현재 흩어져 있는 note lookup, title loading, diagnostics, search metadata를 안정적인 project index로 정리하는 것이다.
+현재 구현은 동작하지만 note title을 여러 경로에서 다시 읽고 파싱하며, diagnostics는 link graph/source span 없이 재파싱하고, external link check를 동기적으로 수행한다.
+
+추천 순서:
+
+- P0: `NoteIndex`를 `ProjectIndex`에 가깝게 확장해 note title/search metadata/link diagnostics의 중복 파싱을 줄인다.
+- P0: external link diagnostics를 명시 옵션 또는 캐시/타임아웃 정책 뒤로 옮긴다.
+- P1: `/@/sitemap`과 `sitemap.xml`을 추가한다. 현재 `/@/`은 sitemap이 아니라 diagnostics page다.
+- P1: Block span/id를 최소 도입해 line-precise link diagnostics, stable heading id, TOC 품질을 준비한다.
+- P1: `PublishPolicy`를 route/render/search/diagnostics boundary에 실제로 연결한다.
+- P2: TBD/미구현 문법 fallback의 의미를 별도 fallback block으로 보존한다.
+- P2 이후: Renderer trait, 큰 AST/CST 개편, full syntax 구현.
+- v3 이후: public publishing hardening, metrics, HTTP hardening.
+
+= 현재 구현 상태
+
+== CLI
+
+`maki serve`와 `maki build` 두 명령이 있다.
+`serve`는 local path 또는 `--git` source를 받을 수 있다.
+local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없으면 입력 path를 root로 보는 fallback을 유지한다.
+`build`도 파일 기준으로 `maki.toml`을 찾아 프로젝트 컨텍스트에서 링크를 해석하고, 없으면 단일 파일 렌더링으로 떨어진다.
+
+근거:
+
+- `src/main.rs`: path serve, git serve, build, project diagnostics summary.
+- `src/git_source.rs`: git mirror/checkout/update runtime.
+- `tests/milestone_quality.rs`: project root discovery, source directory, git serve polling, build diagnostics.
+
+평가:
+
+- `issues.maki`의 `maki.toml` 중심 루트 인식 개편은 구현과 테스트가 있다.
+- 이 저장소 루트에는 이제 `maki.toml`이 있으므로, dogfooding은 project source 설정을 거친 project-aware serve/build 모델에 가깝다.
+- CLI 파서는 단순하지만 현재 명령 규모에는 충분하다.
+- `serve --git`는 publish runtime으로 실행되어 branch polling은 하지만 live reload SSE는 켜지지 않는다.
+
+== Parser
+
+파서는 문서화된 구조와 거의 같은 흐름이다.
+
+--v lang: text
+: source
+: -> scan_lines
+: -> build_drafts
+: -> build_documents
+
+지원되는 주요 요소:
+
+- document/file property
+- heading
+- paragraph
+- unordered nested list
+- ordered list
+- colon-prefixed code
+- quote line과 quote container
+- hyphen-fenced container
+- inline code
+- markdown-style link
+- plain HTTP/HTTPS autolink
+- `[[note]]` wikilink
+- invalid property와 unclosed container diagnostics
+
+근거:
+
+- `src/parser.rs`: parse pipeline, line scan, draft build, document build.
+- `src/parser.rs`: `NumberDot { width }`, paragraph boundary, ordered/unordered list parser.
+- `src/parser.rs`: inline code, wikilink, markdown link, plain URL parser.
+
+평가:
+
+- v0/v1에는 충분하고, v2의 일부도 들어왔다.
+- v2 이후에는 source span, block id, fallback block kind가 필요하다.
+- 현재 `BlockKind`는 paragraph/code/heading/list/quote/container 중심이라 lint, query, precise diagnostics에는 아직 얕다.
+- 문법 확장 전에 block boundary 규칙부터 안정화해야 한다.
+- paragraph boundary와 NumberDot width는 이미 고쳐졌으므로 다음 parser 기반 작업은 span/id가 맞다.
+
+== Domain
+
+`Maki`는 root, note map, config를 가진 프로젝트 런타임 객체다.
+각 note는 root-relative `project_path`와 absolute path를 가진다.
+internal identity는 확장자를 제거한 root-relative canonical path다.
+`NoteIndex`는 exact path, normalized path, project-wide normalized stem, sibling normalized stem lookup을 가진다.
+
+근거:
+
+- `src/maki.rs`: `NoteRef`, `Maki`, `Note`, `NoteIndex`, `SearchEntry`.
+- `src/maki.rs`: project config parser, source directory validation, root discovery.
+
+평가:
+
+- "프로젝트 전체가 의미 단위"라는 멘탈 모델의 최소 형태는 구현되어 있다.
+- 그러나 아직 index라기보다 lookup table과 derived metadata 묶음에 가깝다.
+- title/search metadata는 만들어지지만, link graph, block index, heading index, publish boundary는 없다.
+- link 렌더링 때 대상 note title을 다시 파일에서 읽고 파싱한다.
+- diagnostics도 각 note를 다시 읽고 파싱한다.
+
+== Wikilink
+
+현재 link resolution 순서:
+
+- target에서 leading slash와 `.maki` suffix를 정규화한다.
+- target을 exact `NoteRef`로 본다. exact match가 최우선이다.
+- `#heading` 단독 target은 ambiguous로 둔다.
+- slash가 있는 target은 normalized path로 본다.
+- slash가 없는 target은 현재 문서 sibling stem을 먼저 본다.
+- 마지막으로 project-wide normalized file stem을 본다.
+- 여러 후보가 있으면 ambiguous다.
+
+근거:
+
+- `src/maki.rs`: `NoteIndex`, `normalize_note_link_target`, `resolve_note_link`.
+- `src/maki.rs` tests: case-insensitive path/stem lookup, sibling priority, ambiguity, exact priority.
+
+평가:
+
+- `wikilink가 case-insensitive하지 않음` 이슈는 구현상 해결되어 있다.
+- 현재 normalization은 `to_lowercase()` 기반이다. Unicode normalization/NFC-NFD 문제는 아직 별도 정책이 없다.
+- heading anchor resolution은 아직 구현되지 않았다.
+
+== HTML Renderer
+
+HTML 렌더러는 `Document`와 `RenderContext`를 받아 문자열을 생성한다.
+project context가 있으면 wikilink를 resolve하고, 없으면 target 그대로 링크를 만든다.
+project page에는 nav shell, search input, diagnostics link, TOC/search scripts가 들어간다.
+
+근거:
+
+- `src/html.rs`: project navigation, runtime assets, link rendering, built-in containers, search/diagnostics/not-found pages.
+- `assets/maki.css`, `assets/maki-search.js`, `assets/maki-toc.js`.
+
+평가:
+
+- 현재 규모에서는 string builder가 충분하다.
+- `RenderContext`가 이미 있어 project-aware behavior를 renderer에 주입하기 쉽다.
+- nav header는 구현되어 있다.
+- search page와 diagnostics page는 구현되어 있다.
+- `code`, `pre`/`text`, `quote` container는 renderer가 직접 처리한다.
+- unknown container는 `pre.maki-container-unknown`로 보존한다.
+- 다만 heading id가 heading text 그대로이고 중복/slug/anchor 안정성이 없다.
+- full Renderer trait 분리는 아직 이르다. HTML 외 렌더러가 생길 때 분리해도 늦지 않다.
+
+== Web
+
+웹 서버는 직접 만든 HTTP parser/response 위에 thread-per-connection으로 동작한다.
+SSE live reload와 polling file watcher를 갖고 있고, `.maki` 파일과 `maki.toml` 변경을 감지한다.
+project page에서는 runtime asset을 external route로 제공한다.
+
+근거:
+
+- `src/web.rs`: route handling, search routes, diagnostics route, runtime asset routes, live reload, watcher.
+- `tests/milestone_quality.rs`, `src/web.rs` tests: rendered pages, search index/page, diagnostics page, runtime assets, live reload.
+
+평가:
+
+- 개인 로컬/홈서버 dogfooding에는 충분하다.
+- public publishing을 하려면 현재 HTTP stack은 보수적으로 봐야 한다.
+- `/@/`은 diagnostics page다. 사람이 보는 sitemap인 `/@/sitemap`은 아직 없다.
+- `sitemap.xml`도 아직 없다.
+- diagnostics page가 external link check를 동기적으로 수행할 수 있으므로 public/server runtime에서는 정책 분리가 필요하다.
+
+= 추상화 수준 평가
+
+== 잘 맞는 추상화
+
+- Parser의 scan/draft/document 3단계는 현재 문서화된 architecture와 잘 맞는다.
+- `maki` domain과 `html` renderer가 분리되어 있어 project-aware render를 구현하기 쉽다.
+- `http` 모듈이 Maki route 정책을 모르도록 분리한 점은 좋다.
+- `RenderContext`가 이미 있어 renderer가 project lookup을 직접 알 필요가 없다.
+- `MakiConfigOverrides`는 CLI override와 project config의 우선순위를 표현하기 좋다.
+- `NoteIndex`가 생겨 link resolution policy를 한 곳에 모을 수 있다.
+- `RuntimeAsset`이 CSS/JS asset serving과 embedded fallback을 함께 표현한다.
+- git source runtime과 web runtime이 분리되어 local dev와 publish serving을 다르게 다룰 수 있다.
+
+== 부족한 추상화
+
+- `Maki`가 아직 "project index"가 아니라 note map, note lookup index, external links, search entries를 직접 들고 있다.
+- `NoteRef`가 case, unicode, slash, extension normalization 정책을 타입 차원에서 갖지 않는다.
+- `Block`에 span/id가 없어 lint, heading link, precise diagnostics, query가 어렵다.
+- link diagnostics에 line number가 거의 없다. parser diagnostics만 line을 가진다.
+- route, render, search, diagnostics, sitemap, publish policy가 공유할 "public note set" 개념이 없다.
+- external link check 정책이 diagnostics 수집에 직접 붙어 있다.
+
+== 과하게 앞서가면 안 되는 추상화
+
+- Renderer trait은 아직 두 번째 renderer가 없으므로 지금 당장 우선순위가 높지 않다.
+- full AST/CST 재작성은 필요하지만, 먼저 어떤 문법과 query가 실제로 span/id를 요구하는지 좁혀야 한다.
+- public publishing은 매력적이지만, 지금은 `PublishPolicy`를 실제 route/search/diagnostics boundary에 연결하는 작은 vertical slice가 먼저다.
+
+= 완료된 것
+
+== NoteIndex와 case-insensitive wikilink
+
+완료:
+
+- `Maki` 내부에 `NoteIndex`가 있다.
+- exact path -> note ref lookup이 있다.
+- normalized canonical path -> candidate note refs lookup이 있다.
+- sibling normalized stem -> candidate note refs lookup이 있다.
+- project-wide normalized stem -> candidate note refs lookup이 있다.
+- exact match, sibling 우선, project-wide fallback, ambiguity 판단이 테스트되어 있다.
+
+남은 점:
+
+- Unicode normalization 정책은 없다.
+- heading target은 아직 link target으로 resolve되지 않는다.
+
+== Paragraph boundary와 NumberDot width
+
+완료:
+
+- paragraph는 뒤따르는 root-level block starter를 삼키지 않는다.
+- ordered list marker는 숫자 값이 아니라 prefix width로 body slicing을 한다.
+- ordered list와 child paragraph 렌더링 테스트가 있다.
+
+남은 점:
+
+- 더 복잡한 mixed-prefix block을 지원하려면 span/id와 더 세밀한 line model이 필요하다.
+
+== Navigation, diagnostics, search
+
+완료:
+
+- project page에 home link, diagnostics link, title search form이 있는 nav header가 들어간다.
+- `/@/` diagnostics page가 parse warning, broken link, ambiguous link, broken external link, read failure summary를 보여준다.
+- `/.maki/search-index.json`과 `/.maki/search?q=...`가 title search를 제공한다.
+- runtime assets는 `/.maki/assets/...`로 제공된다.
+
+남은 점:
+
+- `/@/sitemap`과 `sitemap.xml`은 아직 없다.
+- diagnostics/search가 publish policy를 고려하지 않는다.
+- diagnostics의 link issue는 source line을 대부분 모른다.
+
+= 고칠 점
+
+== P0: ProjectIndex 정리
+
+권장 구현:
+
+- `Maki` 내부의 `notes`, `index`, `external_links`, `search_entries`를 `ProjectIndex` 또는 유사 구조로 묶는다.
+- note title은 load/index 단계에서 한 번만 읽고 재사용한다.
+- search entries도 note metadata에서 파생한다.
+- link diagnostics는 가능하면 link occurrence와 source span을 함께 저장한다.
+- heading id/anchor와 note identity normalization 정책을 같은 index 경계에서 다룬다.
+
+성공 기준:
+
+- 렌더링 중 대상 note title을 다시 파일에서 읽지 않는다.
+- diagnostics 수집과 search index 생성이 같은 note metadata를 공유한다.
+- link diagnostics가 최소한 inline link가 있는 block/line을 가리킬 수 있다.
+- 기존 case-insensitive wikilink 동작과 search 결과가 깨지지 않는다.
+
+== P0: External link diagnostics 정책
+
+현재 P0 위험은 external link diagnostics가 project diagnostics 수집에 동기적으로 붙어 있다는 점이다.
+`serve` 시작, diagnostics page 접근, build diagnostics가 네트워크 상태에 영향을 받을 수 있다.
+
+권장 구현:
+
+- CLI 옵션 또는 config로 external link check를 명시적으로 켠다.
+- 기본 diagnostics는 internal note link와 parser warning 중심으로 둔다.
+- external link check를 켜는 경우에도 timeout/cache/result reuse를 둔다.
+- diagnostics page에서 네트워크 check를 매 요청마다 수행하지 않는다.
+
+== P1: Sitemap
+
+`docs/issues.maki`의 sitemap 이슈는 아직 남아 있다.
+`/@/`은 현재 diagnostics page라서 sitemap과 구분해야 한다.
+
+권장 구현:
+
+- `MakiRoute` 또는 web route에 internal sitemap route를 추가한다.
+- `/@/sitemap`은 HTML page로 note title, canonical web path, source path를 나열한다.
+- `/sitemap.xml`은 XML로 canonical web path를 나열한다.
+- 초기는 `PublishAll` 기준으로 구현하고, publish policy 연결 후 filtering을 추가한다.
+
+== P1: Block span/id 최소 도입
+
+v2 milestone에는 AST/CST 중심 파서와 모든 block span/id가 적혀 있다.
+전면 재작성보다, 먼저 `Block`에 source line span만 넣는 작은 단계가 낫다.
+
+효과:
+
+- diagnostics가 더 정확해진다.
+- heading anchor 중복 처리와 heading link의 기반이 생긴다.
+- 추후 query/lint가 block 단위로 동작할 수 있다.
+
+== P1: PublishPolicy 연결
+
+`PublishPolicy::PublishAll` placeholder는 있다.
+하지만 route, render, search, diagnostics는 아직 publish boundary를 보지 않는다.
+
+권장 구현:
+
+- `Maki`가 public note set을 계산한다.
+- note page/source/search/sitemap/diagnostics가 같은 public note set을 사용한다.
+- publish runtime에서는 non-public source route가 열리지 않도록 한다.
+- local development runtime에서는 모든 note를 볼 수 있게 둔다.
+
+== P2: TBD fallback block
+
+unknown container fallback은 현재 일부 구현되어 있다.
+unknown container는 `pre.maki-container-unknown`로 보존된다.
+하지만 renderer가 "미구현 문법"과 "unknown container"를 더 세밀하게 구분하지는 않는다.
+
+권장 구현:
+
+- `BlockKind::Unsupported { syntax, raw_lines }` 또는 `BlockKind::Fallback`을 추가한다.
+- renderer는 `<pre class="maki-unsupported" title="unsupported syntax">`처럼 의미를 유지한다.
+- diagnostics와 HTML fallback이 같은 source span을 공유하게 한다.
+
+== P2 이후: 큰 parser 개편
+
+v2의 `1-token-1-block 의미론 폐지`는 방향은 맞다.
+하지만 지금 바로 전체 parser를 갈아엎기보다, 아래 순서가 낫다.
+
+- ProjectIndex 정리.
+- external link diagnostics 정책 분리.
+- block span/id 추가.
+- fallback block kind 분리.
+- 그 다음 mixed-prefix block을 요구하는 실제 문법 하나를 정한다.
+
+= 무엇을 우선할 것인가
+
+== 제일 먼저
+
+`ProjectIndex` 정리와 external link diagnostics 정책 분리를 먼저 한다.
+
+이유:
+
+- 현재 기능은 늘었지만 note title, diagnostics, search metadata가 같은 사실을 각자 다시 만든다.
+- public publishing으로 가려면 route/search/diagnostics가 같은 note set을 봐야 한다.
+- external link check는 사용자 체감 성능과 offline behavior를 흔들 수 있다.
+
+== 그 다음 사용자 체감 개선
+
+- `/@/sitemap`
+- `sitemap.xml`
+- stable heading slug와 TOC 개선
+
+diagnostics page와 search가 이미 있기 때문에 sitemap은 같은 project metadata를 검증하는 좋은 다음 vertical slice다.
+
+== 미루는 것
+
+- full syntax 구현
+- Renderer trait
+- 큰 AST/CST 전면 재작성
+- public publishing hardening 전체
+
+이들은 가치가 있지만, 현재 병목은 "문법을 더 많이 읽는 능력"보다 "프로젝트 전체를 한 번 읽고 일관되게 쓰는 능력"이다.
+
+= 접근 전략
+
+작게 자르는 기준은 "한 번에 사용자-visible behavior와 내부 기반 하나를 같이 개선하는가"다.
+
+추천 작업 묶음:
+
+- 작업 A: `ProjectIndex`로 note title/search metadata를 공유하고 regression tests를 유지한다.
+- 작업 B: external link diagnostics를 옵션/캐시 정책 뒤로 옮긴다.
+- 작업 C: block line span을 넣고 internal link diagnostics line number를 개선한다.
+- 작업 D: `/@/sitemap`과 `sitemap.xml`을 추가한다.
+- 작업 E: publish runtime에서 public note set을 route/search/source/diagnostics에 연결한다.
+- 작업 F: `Unsupported` block kind와 TBD fallback hover를 구현한다.
+
+이 순서면 이미 구현된 v2 polishing을 살리면서, v3 publishing과 later search/query로 가는 길도 막지 않는다.
+
+= 출처
+
+- `README.md`
+- `docs/architecture.maki`
+- `docs/maki-syntax.maki`
+- `docs/use-cases.maki`
+- `docs/issues.maki`
+- `docs/milestones/v0.maki`
+- `docs/milestones/v1.maki`
+- `docs/milestones/v2.maki`
+- `docs/milestones/v3.maki`
+- `docs/milestones/v4.maki`
+- `docs/milestones/later.maki`
+- `src/main.rs`
+- `src/maki.rs`
+- `src/parser.rs`
+- `src/html.rs`
+- `src/http.rs`
+- `src/web.rs`
+- `tests/milestone_quality.rs`
