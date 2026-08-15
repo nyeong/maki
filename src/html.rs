@@ -13,7 +13,7 @@ use crate::{
     },
     parser::{
         self, BlockKind, Date, DateRange, DateStamp, DateStampKind, Document, Inline, ListItem,
-        ListKind,
+        ListKind, TableColumnAlignment, TableRow,
     },
 };
 
@@ -475,8 +475,73 @@ impl<'a> Renderer<'a> {
             }
             BlockKind::List { items } => self.render_list(items),
             BlockKind::Quote { lines } => self.render_quote(lines),
+            BlockKind::Table {
+                header,
+                alignments,
+                rows,
+            } => self.render_table(header, alignments, rows),
             BlockKind::Container { kind, args, lines } => self.render_container(kind, args, lines),
         }
+    }
+
+    fn table_cell_alignment(
+        alignments: &[TableColumnAlignment],
+        index: usize,
+    ) -> TableColumnAlignment {
+        alignments
+            .get(index)
+            .copied()
+            .unwrap_or(TableColumnAlignment::Text)
+    }
+
+    fn render_table_alignment_attr(&mut self, alignment: TableColumnAlignment) {
+        if alignment == TableColumnAlignment::Number {
+            self.html.push_str(" class=\"maki-table-number\"");
+        }
+    }
+
+    fn render_table_header(&mut self, row: &TableRow<'_>, alignments: &[TableColumnAlignment]) {
+        self.html.push_str("<thead><tr>");
+        for (index, cell) in row.cells.iter().enumerate() {
+            self.html.push_str("<th");
+            self.render_table_alignment_attr(Self::table_cell_alignment(alignments, index));
+            self.html.push_str(" scope=\"col\">");
+            self.render_inlines(&cell.body);
+            self.html.push_str("</th>");
+        }
+        self.html.push_str("</tr></thead>");
+    }
+
+    fn render_table_body(&mut self, rows: &[TableRow<'_>], alignments: &[TableColumnAlignment]) {
+        if rows.is_empty() {
+            return;
+        }
+
+        self.html.push_str("<tbody>");
+        for row in rows {
+            self.html.push_str("<tr>");
+            for (index, cell) in row.cells.iter().enumerate() {
+                self.html.push_str("<td");
+                self.render_table_alignment_attr(Self::table_cell_alignment(alignments, index));
+                self.html.push('>');
+                self.render_inlines(&cell.body);
+                self.html.push_str("</td>");
+            }
+            self.html.push_str("</tr>");
+        }
+        self.html.push_str("</tbody>");
+    }
+
+    fn render_table(
+        &mut self,
+        header: &TableRow<'_>,
+        alignments: &[TableColumnAlignment],
+        rows: &[TableRow<'_>],
+    ) {
+        self.html.push_str("<table>");
+        self.render_table_header(header, alignments);
+        self.render_table_body(rows, alignments);
+        self.html.push_str("</table>");
     }
 
     fn render_list(&mut self, items: &[ListItem<'_>]) {
@@ -1065,6 +1130,22 @@ hello <maki> & friends
 
         assert!(html.contains(
             "<ol><li>Glider 활용 증진<p>현재 Glider의 CloudData를 더 넓게 활용합니다.</p></li></ol>"
+        ));
+    }
+
+    #[test]
+    fn render_table_with_inline_cells_and_numeric_alignment() {
+        let parsed = parser::parse(
+            r#"| 이름 | 점수 |
+|---+---|
+| `Alice` | 10 |
+| [Bob](/bob) | 2 |"#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains(
+            "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><a href=\"/bob\">Bob</a></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
         ));
     }
 

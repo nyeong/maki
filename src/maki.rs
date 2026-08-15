@@ -1222,6 +1222,16 @@ fn collect_inline_external_links(
     }
 }
 
+fn collect_table_row_external_links(
+    external_links: &mut BTreeSet<ExternalLinkRef>,
+    source_path: &Path,
+    row: &parser::TableRow<'_>,
+) {
+    for cell in &row.cells {
+        collect_inline_external_links(external_links, source_path, &cell.body);
+    }
+}
+
 fn collect_block_external_links(
     external_links: &mut BTreeSet<ExternalLinkRef>,
     source_path: &Path,
@@ -1245,6 +1255,12 @@ fn collect_block_external_links(
         }
         BlockKind::Quote { lines } => {
             collect_maki_lines_external_links(external_links, source_path, lines)
+        }
+        BlockKind::Table { header, rows, .. } => {
+            collect_table_row_external_links(external_links, source_path, header);
+            for row in rows {
+                collect_table_row_external_links(external_links, source_path, row);
+            }
         }
         BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
             collect_maki_lines_external_links(external_links, source_path, lines)
@@ -1592,6 +1608,31 @@ fn list_item_date_context(item: &parser::ListItem<'_>) -> String {
     truncate_date_context(context)
 }
 
+fn table_row_date_context(row: &parser::TableRow<'_>) -> String {
+    let mut context = String::from("| ");
+    context.push_str(
+        &row.cells
+            .iter()
+            .map(|cell| inline_date_context(&cell.body))
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    context.push_str(" |");
+
+    truncate_date_context(context)
+}
+
+fn table_date_context(header: &parser::TableRow<'_>, rows: &[parser::TableRow<'_>]) -> String {
+    let mut context = table_row_date_context(header);
+
+    for row in rows {
+        context.push('\n');
+        context.push_str(&table_row_date_context(row));
+    }
+
+    truncate_date_context(context)
+}
+
 fn block_date_context(block: &parser::Block<'_>) -> String {
     let context = match &block.kind {
         BlockKind::Paragraph { body } => inline_date_context(body),
@@ -1603,6 +1644,7 @@ fn block_date_context(block: &parser::Block<'_>) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         BlockKind::Quote { lines } => lines.join("\n"),
+        BlockKind::Table { header, rows, .. } => table_date_context(header, rows),
         BlockKind::Container { kind, args, lines } => {
             let mut context = String::from("--- ");
             context.push_str(kind);
@@ -1690,6 +1732,16 @@ fn collect_list_item_dates(
     }
 }
 
+fn collect_table_row_dates(
+    collector: &mut DateIndexCollector<'_>,
+    row: &parser::TableRow<'_>,
+    context: &str,
+) {
+    for cell in &row.cells {
+        collect_inline_dates(collector, &cell.body, context);
+    }
+}
+
 fn collect_block_dates(
     collector: &mut DateIndexCollector<'_>,
     block: &parser::Block<'_>,
@@ -1715,6 +1767,12 @@ fn collect_block_dates(
             }
         }
         BlockKind::Quote { lines } => collect_maki_lines_dates(collector, lines, context),
+        BlockKind::Table { header, rows, .. } => {
+            collect_table_row_dates(collector, header, &block_context);
+            for row in rows {
+                collect_table_row_dates(collector, row, &block_context);
+            }
+        }
         BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
             collect_maki_lines_dates(collector, lines, context)
         }
@@ -1809,6 +1867,18 @@ fn collect_inline_link_diagnostics(
     }
 }
 
+fn collect_table_row_link_diagnostics(
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+    maki: &Maki,
+    current: &NoteRef,
+    source_path: &Path,
+    row: &parser::TableRow<'_>,
+) {
+    for cell in &row.cells {
+        collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &cell.body);
+    }
+}
+
 fn collect_block_link_diagnostics(
     diagnostics: &mut Vec<ProjectDiagnostic>,
     maki: &Maki,
@@ -1846,6 +1916,12 @@ fn collect_block_link_diagnostics(
         }
         BlockKind::Quote { lines } => {
             collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)
+        }
+        BlockKind::Table { header, rows, .. } => {
+            collect_table_row_link_diagnostics(diagnostics, maki, current, source_path, header);
+            for row in rows {
+                collect_table_row_link_diagnostics(diagnostics, maki, current, source_path, row);
+            }
         }
         BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
             collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)

@@ -211,9 +211,24 @@ Maki의 기본 단위.
 - `=`으로 heading level을 지정한다.
 - 갯수로 depth를 더해감
 
---v milestone: later
+--v status: done
 === Table
 
+- 첫 줄은 header row다.
+- 둘째 줄은 separator row다.
+  - `|---+---|`처럼 hyphen run을 `+`로 구분한다.
+  - separator column 수가 header cell 수와 같을 때만 table로 파싱한다.
+- 이후 `| ... |` row가 이어지는 동안 table body로 묶는다.
+- cell body는 [[#Inline]]으로 파싱한다.
+- body cell이 모두 ASCII digit만 포함하는 column은 숫자 column으로 취급하여 HTML에서 우측 정렬한다.
+- 아직 row별 cell 수 검증, pipe escape, multiline cell, 명시적 정렬 문법은 지원하지 않는다.
+
+: | 이름 | 점수 |
+: |---+---|
+: | `Alice` | 10 |
+: | [Bob](/bob) | 2 |
+
+--v milestone: later
 ==== Formula
 
 - [[#Property Line]]으로 formula를 붙일 수 있다.

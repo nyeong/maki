@@ -521,6 +521,55 @@ fn build_list_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Option
     })
 }
 
+fn build_table_row<'a>(cells: &[&'a str]) -> TableRow<'a> {
+    TableRow {
+        cells: cells
+            .iter()
+            .map(|cell| TableCell {
+                body: parse_inline(cell),
+            })
+            .collect(),
+    }
+}
+
+fn is_integer_table_cell(cell: &str) -> bool {
+    let cell = cell.trim();
+
+    !cell.is_empty() && cell.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn table_column_alignments(rows: &[Vec<&str>], column_count: usize) -> Vec<TableColumnAlignment> {
+    (0..column_count)
+        .map(|column| {
+            if !rows.is_empty()
+                && rows.iter().all(|row| {
+                    row.get(column)
+                        .is_some_and(|cell| is_integer_table_cell(cell))
+                })
+            {
+                TableColumnAlignment::Number
+            } else {
+                TableColumnAlignment::Text
+            }
+        })
+        .collect()
+}
+
+fn build_table_block<'a>(
+    header: &[&'a str],
+    rows: &[Vec<&'a str>],
+    props: Properties<'a>,
+) -> Block<'a> {
+    Block {
+        kind: BlockKind::Table {
+            header: build_table_row(header),
+            alignments: table_column_alignments(rows, header.len()),
+            rows: rows.iter().map(|row| build_table_row(row)).collect(),
+        },
+        props,
+    }
+}
+
 fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
     match draft {
         BlockDraft::Property { .. } => panic!("No Property Block!"),
@@ -562,6 +611,7 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             },
             props,
         },
+        BlockDraft::Table { header, rows } => build_table_block(header, rows, props),
         BlockDraft::List { .. } => build_list_block(draft, props).unwrap(),
     }
 }
@@ -645,11 +695,32 @@ pub(crate) enum BlockKind<'a> {
     Quote {
         lines: Vec<&'a str>,
     },
+    Table {
+        header: TableRow<'a>,
+        alignments: Vec<TableColumnAlignment>,
+        rows: Vec<TableRow<'a>>,
+    },
     Container {
         kind: &'a str,
         args: Vec<&'a str>,
         lines: Vec<&'a str>,
     },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct TableRow<'a> {
+    pub(crate) cells: Vec<TableCell<'a>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct TableCell<'a> {
+    pub(crate) body: Vec<Inline<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum TableColumnAlignment {
+    Text,
+    Number,
 }
 
 #[derive(Debug, PartialEq)]
@@ -846,6 +917,11 @@ enum BlockDraft<'a> {
     List {
         items: Vec<ListItemDraft<'a>>,
     },
+
+    Table {
+        header: Vec<&'a str>,
+        rows: Vec<Vec<&'a str>>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -992,7 +1068,10 @@ fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDra
         if cursor.consume_blank() {
             break;
         }
-        if !raw_lines.is_empty() && cursor.peek().is_some_and(starts_block_after_paragraph) {
+        if !raw_lines.is_empty()
+            && (cursor.peek().is_some_and(starts_block_after_paragraph)
+                || cursor_starts_table(cursor))
+        {
             break;
         }
         raw_lines.push(cursor.next()?.raw_line());
@@ -1266,6 +1345,74 @@ fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a
     Some(BlockDraft::List { items })
 }
 
+fn table_line_body<'a>(line: &LineToken<'a>) -> Option<&'a str> {
+    let LineToken::Line {
+        indent: 0,
+        raw_line,
+        ..
+    } = line
+    else {
+        return None;
+    };
+
+    raw_line.trim_end().strip_prefix('|')?.strip_suffix('|')
+}
+
+fn parse_table_row_cells<'a>(line: &LineToken<'a>) -> Option<Vec<&'a str>> {
+    Some(table_line_body(line)?.split('|').map(str::trim).collect())
+}
+
+fn is_table_separator_part(part: &str) -> bool {
+    let part = part.trim();
+
+    part.len() >= 3 && part.bytes().all(|byte| byte == b'-')
+}
+
+fn parse_table_separator_columns(line: &LineToken<'_>) -> Option<usize> {
+    let parts = table_line_body(line)?.split('+').collect::<Vec<_>>();
+
+    parts
+        .iter()
+        .all(|part| is_table_separator_part(part))
+        .then_some(parts.len())
+}
+
+fn parse_table_start<'a>(cursor: &LineCursor<'_, 'a>) -> Option<(Vec<&'a str>, usize)> {
+    let header = cursor.peek().and_then(parse_table_row_cells)?;
+    let separator_columns = cursor
+        .lines
+        .get(cursor.pos + 1)
+        .and_then(parse_table_separator_columns)?;
+
+    (header.len() == separator_columns).then_some((header, separator_columns))
+}
+
+fn cursor_starts_table(cursor: &LineCursor<'_, '_>) -> bool {
+    parse_table_start(cursor).is_some()
+}
+
+fn parse_table_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+    let (header, separator_columns) = parse_table_start(cursor)?;
+
+    cursor.next();
+    cursor.next();
+
+    let mut rows = vec![];
+    while let Some(line) = cursor.peek() {
+        if parse_table_separator_columns(line) == Some(separator_columns) {
+            break;
+        }
+        let Some(cells) = parse_table_row_cells(line) else {
+            break;
+        };
+
+        cursor.next();
+        rows.push(cells);
+    }
+
+    Some(BlockDraft::Table { header, rows })
+}
+
 fn parse_root_prefixed_body_lines<'a>(
     cursor: &mut LineCursor<'_, 'a>,
     prefix: LinePrefix,
@@ -1320,6 +1467,8 @@ fn build_drafts<'a>(
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             drafts.push(draft);
         } else if let Some(draft) = parse_list_draft(&mut cursor) {
+            drafts.push(draft);
+        } else if let Some(draft) = parse_table_draft(&mut cursor) {
             drafts.push(draft);
         } else if cursor.consume_blank() {
             continue;
@@ -1595,6 +1744,90 @@ plain text"#;
             ]
         );
         assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn parse_table_with_inline_cells_and_numeric_alignment() {
+        let parsed = parse(
+            r#"| 이름 | 점수 | 취득일 |
+|---+---+---|
+| `Alice` | 10 | [2026-08-15] |
+| Bob | 2 | [2026-08-16] |"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 1);
+
+        let BlockKind::Table {
+            header,
+            alignments,
+            rows,
+        } = &parsed.document.blocks[0].kind
+        else {
+            panic!("expected a table block");
+        };
+
+        assert_eq!(header.cells[0].body, vec![Inline::Text("이름")]);
+        assert_eq!(header.cells[1].body, vec![Inline::Text("점수")]);
+        assert_eq!(
+            alignments,
+            &vec![
+                TableColumnAlignment::Text,
+                TableColumnAlignment::Number,
+                TableColumnAlignment::Text
+            ]
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].cells[0].body, vec![Inline::Code("Alice")]);
+        assert_eq!(rows[0].cells[1].body, vec![Inline::Text("10")]);
+        assert_eq!(
+            rows[0].cells[2].body,
+            vec![Inline::DateStamp(DateStamp {
+                kind: DateStampKind::Date,
+                date: Date::new(2026, 8, 15).unwrap(),
+                body: "2026-08-15",
+            })]
+        );
+    }
+
+    #[test]
+    fn parse_table_starts_after_paragraph_without_blank_line() {
+        let parsed = parse(
+            r#"intro
+| 이름 | 점수 |
+|---+---|
+| Alice | 10 |"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.document.blocks.len(), 2);
+
+        let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+            panic!("expected the first block to stay paragraph");
+        };
+        assert_eq!(body, &vec![Inline::Text("intro")]);
+
+        let BlockKind::Table { rows, .. } = &parsed.document.blocks[1].kind else {
+            panic!("expected the second block to become table");
+        };
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn parse_table_keeps_hyphen_cell_when_separator_width_differs() {
+        let parsed = parse(
+            r#"| 이름 | 값 |
+|---+---|
+| dash | --- |"#,
+        );
+
+        assert!(parsed.diagnostics.is_empty());
+
+        let BlockKind::Table { rows, .. } = &parsed.document.blocks[0].kind else {
+            panic!("expected a table block");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].cells[1].body, vec![Inline::Text("---")]);
     }
 
     #[test]

@@ -65,6 +65,7 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 - colon-prefixed code
 - quote line과 quote container
 - hyphen-fenced container
+- pipe table
 - inline code
 - markdown-style link
 - plain HTTP/HTTPS autolink
@@ -75,13 +76,14 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 
 - `src/parser.rs`: parse pipeline, line scan, draft build, document build.
 - `src/parser.rs`: `NumberDot { width }`, paragraph boundary, ordered/unordered list parser.
+- `src/parser.rs`: pipe table parser, inline table cell parsing, digit-only numeric column detection.
 - `src/parser.rs`: inline code, wikilink, markdown link, plain URL parser.
 
 평가:
 
 - v0/v1에는 충분하고, v2의 일부도 들어왔다.
 - v2 이후에는 source span, block id, fallback block kind가 필요하다.
-- 현재 `BlockKind`는 paragraph/code/heading/list/quote/container 중심이라 lint, query, precise diagnostics에는 아직 얕다.
+- 현재 `BlockKind`는 paragraph/code/heading/list/quote/table/container 중심이라 lint, query, precise diagnostics에는 아직 얕다.
 - 문법 확장 전에 block boundary 규칙부터 안정화해야 한다.
 - paragraph boundary와 NumberDot width는 이미 고쳐졌으므로 다음 parser 기반 작업은 span/id가 맞다.
 
@@ -227,6 +229,7 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 완료:
 
 - paragraph는 뒤따르는 root-level block starter를 삼키지 않는다.
+- paragraph는 뒤따르는 root-level table도 separator가 유효하면 삼키지 않는다.
 - ordered list marker는 숫자 값이 아니라 prefix width로 body slicing을 한다.
 - ordered list와 child paragraph 렌더링 테스트가 있다.
 

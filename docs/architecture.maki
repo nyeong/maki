@@ -47,6 +47,7 @@
 - 같은 길이의 hyphen fence로 둘러싸인 line들은 ContainerBlock의 raw body가 됨
 - `Colon` prefix로 시작한 연속 line들은 CodeBlock임
 - List context 안에서 indent가 증가한 Hyphen line은 Nested ListItem임
+- 유효한 `|---+---|` separator를 가진 pipe row 묶음은 Table임
 - ...
 
 == Build Document

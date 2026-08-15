@@ -581,6 +581,11 @@ th {
   font-weight: 700;
 }
 
+.maki-table-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 640px) {
   html {
     font-size: 17px;
