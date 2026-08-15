@@ -25,12 +25,12 @@
 - 필드에 이메일을 입력하면 이메일로 OTP 코드를 받는다.
 - 이메일로 받은 OTP 코드를 입력하면 문서 내용을 볼 수 있다.
 
-= 검색
+= 검색 확장
 
-maki serve에 검색 기능을 추가한다.
+v2에서 title 기반 검색은 들어왔으므로, 남은 검색 확장은 project index를 기준으로 넓힌다.
 
-1. title 기반으로 fuzzy하게 <- 이것만 돼도 good할듯
-2. heading까지도
+1. heading까지도
+2. file name, alias 자동완성까지도
 
 = org TODO percentage 옮기기
 

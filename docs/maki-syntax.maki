@@ -33,6 +33,13 @@
   - query block으로 쿼리한 결과를 별도 파일로 내보내지 않겠다면 문서 내에 포함되어야함
   - result block 같은 개념이 있어야
 
+== Export와 Index
+
+- Maki source를 다른 도구에서 쓰려면 렌더링 결과가 아니라 구조화된 project index를 내보낼 수 있어야 한다.
+- JSON export는 AST/CST, note metadata, heading index, property occurrence, date occurrence, link occurrence처럼 순서와 중첩이 있는 자료에 적합하다.
+- TOML은 전체 AST export보다 `maki.toml`, property schema, query preset, container adapter 같은 설정과 관습 선언에 적합하다.
+- 따라서 `maki -> JSON`은 core data surface로 보고, `maki -> TOML`은 config/schema surface로 제한하는 편이 좋다.
+
 = 참고함
 
 - 명백히 참고함
@@ -329,6 +336,41 @@ inline prefix는 두 종료가 있음
   - 명시적으로 배열로 전환?
     - `--^ key: [value1, value2, ...]`
 
+==== 관습적 Property
+
+Property는 문법적으로는 자유 key-value이지만, 일부 key는 project index, search, agenda, HTML render가 공통으로 이해할 수 있도록 관습을 둔다.
+
+- `title`: 문서나 block의 표시 제목.
+- `id`: heading/block의 stable anchor. heading text가 바뀌어도 오래 유지해야 하는 링크에 사용한다.
+- `alias`: note나 heading을 찾을 때 쓰는 보조 이름.
+- `status`: todo, in_progress, done처럼 진행 상태를 표현한다. agenda, issue list, HTML badge에서 사용할 수 있다.
+- `type`: issue, quote, person, project처럼 block/note의 의미 범주를 표현한다.
+- `tags`: 느슨한 분류. 여러 값을 허용할 필요가 있다.
+- `url`: 원문 링크. HTML render에서 외부 embed나 source link로 확장할 수 있다.
+- `from`: quote의 발언자, 출처, 보낸 사람처럼 attribution을 표현한다.
+- `author`: 저자. `from`보다 문헌/자료 쪽에 가깝다.
+- `lang`: code/container/source text의 언어.
+- `mode`: body 해석 방식. 기본값은 `maki`이고, `plain`, `pre`를 허용한다.
+- `scheduled`: 수행하거나 확인해야 하는 예약 날짜.
+- `deadline`: 마감 날짜.
+- `created`: 생성 날짜.
+- `updated`: 수정 날짜.
+- `publish`: publish boundary.
+
+예를 들어 quote block은 아래처럼 semantic metadata를 붙일 수 있다.
+
+--v lang: maki
+: --v url: https://example.com/source
+: --v from: Someone
+: --v mode: pre
+: > line one
+: > line two
+
+`mode: maki`는 quote body를 Maki로 다시 파싱한다.
+`mode: plain`은 inline/link 해석 없이 일반 텍스트로 렌더링한다.
+`mode: pre`는 줄바꿈과 공백을 보존한다.
+시, 문자, 메일 원문처럼 `[[...]]`가 note link로 오해되면 안 되는 자료에는 `plain` 또는 `pre`가 필요하다.
+
 === List
 
 --v milestone: v0
@@ -351,14 +393,20 @@ inline prefix는 두 종료가 있음
 - [[Note link]]
 - [^footnote]
 - date
-  - date marker: [2026-06-06], [2026-06-06 Sat]
-  - event marker: <2026-06-06>, <2026-06-06 Sat>
-  - range marker: [2026-06-06]--[2026-06-08], <2026-06-06>--<2026-06-08>
+  - reference date marker: [2026-06-06], [2026-06-06 Sat]
+  - timestamp marker: {2026-06-06}, {2026-06-06 Sat}
+  - scheduled marker: <2026-06-06>, <2026-06-06 Sat>
+  - range marker: [2026-06-06]--[2026-06-08], {2026-06-06}--{2026-06-08}, <2026-06-06>--<2026-06-08>
   - marker body에서 첫 `yyyy-mm-dd`가 index key이며, 뒤의 요일/시간 텍스트는 표시용으로 보존한다.
+  - range 양 끝의 marker kind는 같아야 한다.
+  - `[date]`는 자료가 가진 날짜다. 공고 시작일, 기사 발행일, 문서상 기준일처럼 reference로 다룬다.
+  - `{date}`는 개인 timeline에서 의미 있는 사실 발생 시점이다. 자격증 취득일, 입사일, 이사일, 프로젝트 시작일처럼 기록의 기준점으로 쓴다.
+  - `<date>`는 내가 행동해야 하거나 다시 확인해야 하는 예약 일정이다. agenda, reminder, ICS export 후보가 된다.
   - visible inline과 property value의 date marker는 `/@/dates`에서 날짜별 backlink로 볼 수 있다.
   - range marker는 `/@/dates` 목록에는 시작일과 종료일만 노출하고, `/@/dates/<date>`에는 중간 날짜 backlink도 낮은 우선순위로 보여준다.
   - 날짜별 backlink는 발생 위치의 맥락 excerpt와 함께, 있는 경우 상위 heading과 최상위 list item을 보여준다.
   - backlink를 클릭하면 원 note의 실제 발생 위치로 이동한다. visible inline date는 해당 date marker로, property value date는 해당 property가 붙은 block 또는 document 위치로 이동한다.
+  - 현재 구현은 `[date]`, `<date>`, 두 종류의 range만 지원한다.
 
 --v milestone: later
 == Inline Container
@@ -398,6 +446,7 @@ inline prefix는 두 종료가 있음
   - heading이 유일하다면 그 heading을 가리킴
     - 유일하지 않다면 heading path를 써줘야함
       - 예: `[[#heading#something]]`
+  - 오래 유지해야 하는 heading link는 heading block에 `id` property를 붙이고, heading index가 이를 stable anchor로 사용한다.
 
 --v milestone: later
 == List

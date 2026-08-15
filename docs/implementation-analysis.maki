@@ -15,7 +15,7 @@ external link check는 serve의 기본 diagnostics에서는 빠져 있지만, fu
 - P0: `NoteIndex`를 `ProjectIndex`에 가깝게 확장해 note title/search metadata/link diagnostics의 중복 파싱을 줄인다.
 - P0: external link diagnostics를 명시 옵션 또는 캐시/타임아웃 정책 뒤로 옮긴다.
 - P1: `/@/sitemap`과 `sitemap.xml`을 추가한다. 현재 `/@/`은 meta index이고 diagnostics는 `/@/diagnostics`다.
-- P1: Block span/id를 최소 도입해 line-precise link diagnostics, stable heading id, TOC 품질을 준비한다.
+- P1: Block span/id와 heading/property/date occurrence를 최소 도입해 line-precise link diagnostics, stable heading id, 검색 확장, agenda/timeline 기반을 준비한다.
 - P1: `PublishPolicy`를 route/render/search/diagnostics boundary에 실제로 연결한다.
 - P2: TBD/미구현 문법 fallback의 의미를 별도 fallback block으로 보존한다.
 - P2 이후: Renderer trait, 큰 AST/CST 개편, full syntax 구현.
@@ -261,15 +261,19 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 - `Maki` 내부의 `notes`, `index`, `external_links`, `search_entries`를 `ProjectIndex` 또는 유사 구조로 묶는다.
 - note title은 load/index 단계에서 한 번만 읽고 재사용한다.
-- search entries도 note metadata에서 파생한다.
+- search entries도 note, heading, file name, alias metadata에서 파생한다.
 - link diagnostics는 가능하면 link occurrence와 source span을 함께 저장한다.
 - heading id/anchor와 note identity normalization 정책을 같은 index 경계에서 다룬다.
+- property occurrence와 date occurrence를 같은 index 경계에서 수집한다.
+- JSON export는 이 project index와 note AST/CST를 기준으로 만든다.
 
 성공 기준:
 
 - 렌더링 중 대상 note title을 다시 파일에서 읽지 않는다.
 - diagnostics 수집과 search index 생성이 같은 note metadata를 공유한다.
 - link diagnostics가 최소한 inline link가 있는 block/line을 가리킬 수 있다.
+- 검색 자동완성이 title 외 heading/file/alias를 찾을 수 있다.
+- date occurrence가 reference/timestamp/scheduled 의미를 구분한다.
 - 기존 case-insensitive wikilink 동작과 search 결과가 깨지지 않는다.
 
 == P0: External link diagnostics 정책
@@ -383,6 +387,7 @@ diagnostics page와 search가 이미 있기 때문에 sitemap은 같은 project 
 - 작업 D: `/@/sitemap`과 `sitemap.xml`을 추가한다.
 - 작업 E: publish runtime에서 public note set을 route/search/source/diagnostics에 연결한다.
 - 작업 F: `Unsupported` block kind와 TBD fallback hover를 구현한다.
+- 작업 G: JSON export, heading search, date occurrence kind를 `ProjectIndex` 기반으로 추가한다.
 
 이 순서면 이미 구현된 v2 polishing을 살리면서, v3 publishing과 later search/query로 가는 길도 막지 않는다.
 

@@ -206,6 +206,129 @@ command는 shell string이 아니라 argv 배열로 받는다.
 
 --v status: todo
 --v type: feature
+--v milestone: v2
+= ProjectIndex를 semantic index로 확장
+
+현재 `Maki`는 note map, note lookup index, date index, external links, search entries를 따로 가진다.
+하지만 JSON export, heading 검색, inner link, agenda, timeline, property 기반 render는 모두 같은 project-level 의미 정보를 필요로 한다.
+
+따라서 `NoteIndex`를 단순 lookup table에서 `ProjectIndex`에 가까운 구조로 확장한다.
+
+== 의도
+
+- 문서를 한 번 읽고 파싱한 결과를 search, diagnostics, render, export가 공유한다.
+- `maki serve` 검색이 title뿐 아니라 heading, file name, alias를 찾을 수 있게 한다.
+- `[[#heading]]`, `[[target#heading]]` 같은 inner link를 link graph와 같은 기준으로 resolve한다.
+- date marker를 자료 날짜, timeline timestamp, 예약 일정으로 구분해 `/@/dates`, `/@/agenda`, `/@/timeline`의 근거로 삼는다.
+- property vocabulary를 renderer와 query가 공통으로 이해한다.
+
+== Index 초안
+
+- note metadata
+  - canonical path
+  - source path
+  - title
+  - aliases
+  - publish policy
+- block index
+  - stable block id
+  - source span
+  - attached properties
+  - parent heading/list context
+- heading index
+  - heading text
+  - heading path
+  - generated anchor
+  - optional `id` property anchor
+- link occurrence
+  - source block
+  - raw target
+  - resolved note/heading/block
+  - broken/ambiguous state
+- date occurrence
+  - raw marker
+  - normalized date
+  - kind: reference, timestamp, scheduled
+  - range relation
+  - source block and context
+- property occurrence
+  - key
+  - value
+  - attached target
+  - reserved property interpretation when applicable
+- search entry
+  - kind: note, heading, file, alias
+  - title
+  - path
+  - source path
+  - rank hints
+
+== Export 경계
+
+`maki -> JSON`은 project data surface로 본다.
+AST/CST, project index, search index, date index처럼 순서, 중첩, occurrence가 중요한 자료는 JSON으로 내보낸다.
+
+`maki -> TOML`은 config/schema surface로 본다.
+전체 AST를 TOML로 표현하려 하지 않고, `maki.toml`, property schema, query preset, container adapter 같은 설정을 담당하게 한다.
+
+초기 CLI는 아래 정도로 나눌 수 있다.
+
+--v lang: text
+: maki export ast <note>
+: maki export index <project>
+: maki export search-index <project>
+: maki export dates <project>
+
+== 검색 동작
+
+- 자동완성은 note title, heading, file name, alias를 함께 보여준다.
+- 검색 결과는 kind를 노출한다.
+- ranking은 title exact, title prefix, alias, heading, file name, substring 순으로 시작해도 충분하다.
+- file name match는 검색 페이지보다 자동완성에서 특히 중요하다.
+
+== Date marker 의미
+
+- `[date]`: 자료가 가진 날짜. 공고 시작일, 기사 발행일, 문서상 발생일처럼 reference로 다룬다.
+- `{date}`: 개인 timeline에서 의미 있는 사실 발생 시점. 취득일, 입사일, 이사일처럼 기록의 기준점이다.
+- `<date>`: 내가 행동하거나 확인해야 하는 예약 일정. agenda, reminder, ICS export 후보다.
+
+초기 구현은 기존 `[date]`, `<date>`를 유지한 뒤 `{date}`를 추가하고, `DateStampKind` 이름을 reference/timestamp/scheduled에 맞게 재정의한다.
+
+== 관습적 Property
+
+Property는 자유 key-value로 두되, 아래 key는 renderer/query/index가 의미를 이해할 수 있게 한다.
+
+- `title`
+- `id`
+- `alias`
+- `status`
+- `type`
+- `tags`
+- `url`
+- `from`
+- `author`
+- `lang`
+- `mode`
+- `scheduled`
+- `deadline`
+- `created`
+- `updated`
+- `publish`
+
+quote에는 `url`, `from`, `mode`가 특히 중요하다.
+`mode`는 `maki`, `plain`, `pre`를 우선 지원하면 된다.
+
+== 성공 기준
+
+- `/.maki/search-index.json`에 note 외 heading/file/alias entry가 포함된다.
+- `maki serve` 자동완성에서 heading과 file name을 찾을 수 있다.
+- `[[#heading]]`과 `[[target#heading]]`이 heading index로 resolve된다.
+- 중복 heading은 heading path 또는 `id` property로 구분할 수 있다.
+- JSON export가 note AST와 project index 중 적어도 하나를 안정적인 schema로 내보낸다.
+- date occurrence가 reference/timestamp/scheduled로 구분되어 agenda와 timeline을 분리할 수 있다.
+
+--v status: todo
+--v type: feature
 = sitemap 추가
 
 - [ ] sitemap.xml
