@@ -279,15 +279,16 @@ fn run_git(repo: &Path, args: &[&str]) {
 fn commit_git_project(repo: &Path, message: &str, body: &str) {
     fs::write(
         repo.join("maki.toml"),
-        "[project]\ntitle = \"Git Fixture\"\nhome = \"home\"\n",
+        "[project]\ntitle = \"Git Fixture\"\nsource = \"docs\"\nhome = \"home\"\n",
     )
     .unwrap();
+    fs::create_dir_all(repo.join("docs")).unwrap();
     fs::write(
-        repo.join("home.maki"),
+        repo.join("docs").join("home.maki"),
         format!("--^ title: Git Home\n\n{body}\n"),
     )
     .unwrap();
-    run_git(repo, &["add", "maki.toml", "home.maki"]);
+    run_git(repo, &["add", "maki.toml", "docs/home.maki"]);
     run_git(
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", message],
@@ -515,6 +516,37 @@ fn maki_serve_discovers_project_root_from_maki_toml() {
     let nested_page = http_get(port, "/notes/page");
     nested_page.assert_status("HTTP/1.1 200 OK");
     nested_page.assert_body_contains("<a href=\"/start\">Start</a>");
+}
+
+#[test]
+fn maki_serve_uses_project_source_from_maki_toml() {
+    let project = temp_project("serve-project-source");
+    let docs = project.root.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    fs::write(
+        project.root.join("maki.toml"),
+        "[project]\ntitle = \"Source Fixture\"\nsource = \"docs\"\nhome = \"index\"\n",
+    )
+    .unwrap();
+    fs::write(
+        docs.join("index.maki"),
+        "--^ title: Source Index\n\nProject source root.\n",
+    )
+    .unwrap();
+
+    let port = free_port();
+    let _server = start_server_with_project_config(&project.root, port);
+
+    let home = http_get(port, "/");
+    home.assert_status("HTTP/1.1 302 Found");
+    home.assert_header_contains("location: /index");
+
+    let index = http_get(port, "/index");
+    index.assert_status("HTTP/1.1 200 OK");
+    index.assert_body_contains("<title>Source Index</title>");
+
+    let nested_path = http_get(port, "/docs/index");
+    nested_path.assert_status("HTTP/1.1 404 Not Found");
 }
 
 #[test]

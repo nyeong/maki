@@ -96,12 +96,29 @@ impl Display for RunError {
 }
 
 fn run_path_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
-    let root = Maki::find_project_root(&root)?.unwrap_or(root);
-    let mut config = MakiConfig::load_project(&root)?;
+    let Some(project_root) = Maki::find_project_root(&root)? else {
+        return run_directory_serve(root.clone(), root, MakiConfig::default(), options);
+    };
+
+    let config = MakiConfig::load_project(&project_root)?;
+    let source_root = config.project_source_root(&project_root);
+    if same_path(&root, &project_root)? || is_project_source_path(&root, &source_root)? {
+        run_directory_serve(project_root, source_root, config, options)
+    } else {
+        run_directory_serve(root.clone(), root, MakiConfig::default(), options)
+    }
+}
+
+fn run_directory_serve(
+    project_root: PathBuf,
+    source_root: PathBuf,
+    mut config: MakiConfig,
+    options: ServeOptions,
+) -> Result<(), RunError> {
     let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
     config_overrides.apply_to(&mut config);
 
-    let maki = Maki::load_with_config(&root, config)?;
+    let maki = Maki::load_with_config(&source_root, config)?;
     if let Some(project_title) = maki.config().project_title() {
         println!("Project: {project_title}");
     }
@@ -110,7 +127,13 @@ fn run_path_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> 
         println!("- {}", note.source_path().display());
     }
     emit_project_diagnostic_summary(&maki.diagnostics());
-    web::serve(maki, &options.host, options.port, config_overrides)
+    web::serve_project(
+        maki,
+        project_root,
+        &options.host,
+        options.port,
+        config_overrides,
+    )
 }
 
 fn run_git_serve(
@@ -140,6 +163,7 @@ fn run_git_serve(
     let updater_overrides = config_overrides.clone();
     web::serve_with_runtime(
         maki,
+        checkout.root().to_path_buf(),
         &options.host,
         options.port,
         config_overrides,
@@ -164,9 +188,15 @@ fn run_build(file: PathBuf) -> Result<(), RunError> {
     let html = match Maki::find_project_root(&file)? {
         Some(root) => {
             let config = MakiConfig::load_project(&root)?;
-            let maki = Maki::load_with_config(&root, config)?;
-            emit_project_diagnostic_summary(&maki.diagnostics());
-            maki.render_file_html(&file)?
+            let source_root = config.project_source_root(&root);
+            if is_project_source_path(&file, &source_root)? {
+                let maki = Maki::load_with_config(&source_root, config)?;
+                emit_project_diagnostic_summary(&maki.diagnostics());
+                maki.render_file_html(&file)?
+            } else {
+                emit_parse_warnings(&file, &parsed.diagnostics);
+                html::render_document(&parsed.document)
+            }
         }
         None => {
             emit_parse_warnings(&file, &parsed.diagnostics);
@@ -176,6 +206,23 @@ fn run_build(file: PathBuf) -> Result<(), RunError> {
 
     println!("{html}");
     Ok(())
+}
+
+fn same_path(left: &Path, right: &Path) -> Result<bool, RunError> {
+    let left = std::fs::canonicalize(left)
+        .map_err(|_source| maki::Error::RootNotFound(left.to_path_buf()))?;
+    let right = std::fs::canonicalize(right)
+        .map_err(|_source| maki::Error::RootNotFound(right.to_path_buf()))?;
+    Ok(left == right)
+}
+
+fn is_project_source_path(path: &Path, source_root: &Path) -> Result<bool, RunError> {
+    let path = std::fs::canonicalize(path)
+        .map_err(|_source| maki::Error::RootNotFound(path.to_path_buf()))?;
+    let Ok(source_root) = std::fs::canonicalize(source_root) else {
+        return Ok(false);
+    };
+    Ok(path.starts_with(source_root))
 }
 
 fn emit_parse_warnings(file: &Path, diagnostics: &[parser::ParseDiagnostic<'_>]) {

@@ -46,6 +46,7 @@ const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 pub(crate) struct AppState {
+    project_root: PathBuf,
     config_overrides: MakiConfigOverrides,
     maki: RwLock<Maki>,
     live_reload: Option<LiveReload>,
@@ -54,15 +55,22 @@ pub(crate) struct AppState {
 impl AppState {
     #[cfg(test)]
     fn new(maki: Maki) -> Self {
-        Self::new_with_overrides(maki, MakiConfigOverrides::default(), true)
+        Self::new_with_overrides(
+            maki.root().to_path_buf(),
+            maki,
+            MakiConfigOverrides::default(),
+            true,
+        )
     }
 
     fn new_with_overrides(
+        project_root: PathBuf,
         maki: Maki,
         config_overrides: MakiConfigOverrides,
         live_reload: bool,
     ) -> Self {
         Self {
+            project_root,
             config_overrides,
             maki: RwLock::new(maki),
             live_reload: live_reload.then(|| LiveReload::new(MAX_SSE_CLIENTS)),
@@ -70,10 +78,10 @@ impl AppState {
     }
 
     fn reload(&self) -> Result<(), maki::Error> {
-        let root = self.current_root()?;
-        let mut config = maki::MakiConfig::load_project(&root)?;
+        let mut config = maki::MakiConfig::load_project(&self.project_root)?;
         self.config_overrides.apply_to(&mut config);
-        let next = Maki::load_with_config(&root, config)?;
+        let source_root = config.project_source_root(&self.project_root);
+        let next = Maki::load_with_config(&source_root, config)?;
         self.replace_maki(next)
     }
 
@@ -107,6 +115,13 @@ impl AppState {
 
     fn live_reload(&self) -> Option<&LiveReload> {
         self.live_reload.as_ref()
+    }
+
+    fn watched_snapshot(&self) -> Result<FileSnapshot, std::io::Error> {
+        let source_root = self
+            .current_root()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        collect_watched_project_snapshot(&self.project_root, &source_root)
     }
 }
 
@@ -705,16 +720,29 @@ fn collect_watched_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::E
     Ok(snapshot)
 }
 
+fn collect_watched_project_snapshot(
+    project_root: &Path,
+    source_root: &Path,
+) -> Result<FileSnapshot, std::io::Error> {
+    let mut snapshot = collect_watched_file_snapshot(source_root)?;
+
+    if project_root != source_root {
+        let project_file = project_root.join(maki::PROJECT_FILE_NAME);
+        if project_file.is_file() {
+            insert_file_stamp(
+                &mut snapshot,
+                PathBuf::from("__project__").join(maki::PROJECT_FILE_NAME),
+                &project_file,
+            )?;
+        }
+    }
+
+    Ok(snapshot)
+}
+
 fn spawn_file_watcher(state: Arc<AppState>) {
     thread::spawn(move || {
-        let mut root = match state.current_root() {
-            Ok(root) => root,
-            Err(error) => {
-                eprintln!("Failed to initialize file watcher: {}", error);
-                PathBuf::from(".")
-            }
-        };
-        let mut snapshot = match collect_watched_file_snapshot(&root) {
+        let mut snapshot = match state.watched_snapshot() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 eprintln!("Failed to initialize file watcher: {}", error);
@@ -725,15 +753,7 @@ fn spawn_file_watcher(state: Arc<AppState>) {
         loop {
             thread::sleep(FILE_WATCH_INTERVAL);
 
-            root = match state.current_root() {
-                Ok(root) => root,
-                Err(error) => {
-                    eprintln!("Failed to read current project root: {}", error);
-                    continue;
-                }
-            };
-
-            let next_snapshot = match collect_watched_file_snapshot(&root) {
+            let next_snapshot = match state.watched_snapshot() {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     eprintln!("Failed to scan watched files: {}", error);
@@ -747,7 +767,7 @@ fn spawn_file_watcher(state: Arc<AppState>) {
 
             thread::sleep(FILE_WATCH_DEBOUNCE);
 
-            let stable_snapshot = match collect_watched_file_snapshot(&root) {
+            let stable_snapshot = match state.watched_snapshot() {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     eprintln!("Failed to scan watched files after debounce: {}", error);
@@ -776,14 +796,16 @@ pub(crate) enum ServeRuntime {
     Publish,
 }
 
-pub(crate) fn serve(
+pub(crate) fn serve_project(
     maki: Maki,
+    project_root: PathBuf,
     host: &str,
     port: u16,
     config_overrides: MakiConfigOverrides,
 ) -> Result<(), RunError> {
     serve_with_runtime(
         maki,
+        project_root,
         host,
         port,
         config_overrides,
@@ -794,6 +816,7 @@ pub(crate) fn serve(
 
 pub(crate) fn serve_with_runtime<F>(
     maki: Maki,
+    project_root: PathBuf,
     host: &str,
     port: u16,
     config_overrides: MakiConfigOverrides,
@@ -807,6 +830,7 @@ where
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
     let live_reload = matches!(runtime, ServeRuntime::Development);
     let state = Arc::new(AppState::new_with_overrides(
+        project_root,
         maki,
         config_overrides,
         live_reload,

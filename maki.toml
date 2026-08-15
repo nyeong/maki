@@ -1,0 +1,4 @@
+[project]
+title = "Maki"
+source = "docs"
+home = "index"

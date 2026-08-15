@@ -14,7 +14,7 @@ pub(crate) const PROJECT_FILE_NAME: &str = "maki.toml";
 
 use std::{
     collections::BTreeMap,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use crate::{
@@ -141,6 +141,7 @@ impl SearchEntry {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct MakiConfig {
     project_title: Option<String>,
+    source_dir: PathBuf,
     home_mode: HomeMode,
     publish_policy: PublishPolicy,
 }
@@ -152,6 +153,10 @@ impl MakiConfig {
 
     pub(crate) fn home_mode(&self) -> &HomeMode {
         &self.home_mode
+    }
+
+    pub(crate) fn project_source_root(&self, project_root: &Path) -> PathBuf {
+        project_root.join(&self.source_dir)
     }
 
     pub(crate) fn load_project(root: &Path) -> Result<Self, Error> {
@@ -173,6 +178,11 @@ impl MakiConfig {
 
         let mut config = Self {
             project_title: project.title,
+            source_dir: project
+                .source
+                .map(|source| parse_project_source(&project_file, &source))
+                .transpose()?
+                .unwrap_or_else(|| PathBuf::from(".")),
             ..Default::default()
         };
         if let Some(home) = project.home {
@@ -194,6 +204,7 @@ impl Default for MakiConfig {
     fn default() -> Self {
         Self {
             project_title: None,
+            source_dir: PathBuf::from("."),
             home_mode: HomeMode::Redirect("/README".to_string()),
             publish_policy: PublishPolicy::PublishAll,
         }
@@ -220,6 +231,7 @@ impl MakiConfigOverrides {
 #[derive(Default)]
 struct ProjectToml {
     title: Option<String>,
+    source: Option<String>,
     home: Option<String>,
 }
 
@@ -272,12 +284,38 @@ impl ProjectToml {
                         raw_value.trim(),
                     )?)
                 }
+                "source" => {
+                    project.source = Some(parse_toml_string_value(
+                        path,
+                        line_number,
+                        raw_value.trim(),
+                    )?)
+                }
                 _ => continue,
             }
         }
 
         Ok(project)
     }
+}
+
+fn parse_project_source(project_file: &Path, source: &str) -> Result<PathBuf, Error> {
+    let path = Path::new(source);
+    if source.is_empty() || path.components().any(is_outside_project_component) {
+        return Err(Error::InvalidProjectFile(
+            project_file.to_path_buf(),
+            "project.source must be a relative path inside the project".to_string(),
+        ));
+    }
+
+    Ok(path.to_path_buf())
+}
+
+fn is_outside_project_component(component: Component<'_>) -> bool {
+    matches!(
+        component,
+        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+    )
 }
 
 fn note_ref_to_redirect_path(note_ref: &str) -> String {
@@ -1220,6 +1258,43 @@ mod tests {
 
     fn write_note(project: &TestProject, path: &str) {
         write_note_with_content(project, path, "");
+    }
+
+    #[test]
+    fn project_config_can_set_source_directory() {
+        let project = temp_project("project-source");
+        fs::write(
+            project.root.join(PROJECT_FILE_NAME),
+            "[project]\ntitle = \"Source Fixture\"\nsource = \"docs\"\nhome = \"index\"\n",
+        )
+        .unwrap();
+
+        let config = MakiConfig::load_project(&project.root).unwrap();
+
+        assert_eq!(
+            config.project_source_root(&project.root),
+            project.root.join("docs")
+        );
+        assert_eq!(
+            config.home_mode(),
+            &HomeMode::Redirect("/index".to_string())
+        );
+    }
+
+    #[test]
+    fn project_config_rejects_source_outside_project() {
+        let project = temp_project("project-source-invalid");
+        fs::write(
+            project.root.join(PROJECT_FILE_NAME),
+            "[project]\nsource = \"../docs\"\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            MakiConfig::load_project(&project.root),
+            Err(Error::InvalidProjectFile(_, message))
+                if message == "project.source must be a relative path inside the project"
+        ));
     }
 
     #[test]

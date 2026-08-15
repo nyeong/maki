@@ -249,7 +249,8 @@ impl GitSource {
 
         let mut config = MakiConfig::load_project(checkout.root())?;
         config_overrides.apply_to(&mut config);
-        Ok(Maki::load_with_config(checkout.root(), config)?)
+        let source_root = config.project_source_root(checkout.root());
+        Ok(Maki::load_with_config(&source_root, config)?)
     }
 
     pub(crate) fn record_active(&self, checkout: &GitCheckout) -> Result<(), Error> {
