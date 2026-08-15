@@ -42,15 +42,9 @@ its own `maki-<name>.service`.
             services.maki = {
               enable = true;
 
-              targets.wiki = {
-                git.url = "https://example.invalid/wiki.git";
-                port = 4000;
-                openFirewall = true;
-              };
-
               targets.docs = {
-                git.url = "https://example.invalid/docs.git";
-                port = 4001;
+                git.url = "https://example.invalid/maki.git";
+                port = 4000;
                 openFirewall = true;
               };
             };

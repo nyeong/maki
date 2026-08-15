@@ -82,22 +82,10 @@
                   enable = true;
                   package = fakeMaki;
                   targets = {
-                    wiki = {
-                      git.url = "https://example.invalid/maki/wiki.git";
-                      host = "0.0.0.0";
+                    docs = {
+                      git.url = "https://example.invalid/maki.git";
                       port = 8080;
                       openFirewall = true;
-                    };
-                    docs = {
-                      git.url = "https://example.invalid/maki/docs.git";
-                      git.fetchInterval = "5m";
-                      port = 8081;
-                      openFirewall = true;
-                    };
-                    local = {
-                      source = "/srv/local-maki";
-                      port = 8082;
-                      indexRedirect = "index";
                     };
                   };
                 };
@@ -107,23 +95,15 @@
           targetService = name: targetsModuleEval.config.systemd.services."maki-${name}";
           serviceExecStart =
             name: builtins.unsafeDiscardStringContext (targetService name).serviceConfig.ExecStart;
-          wikiExecStart = serviceExecStart "wiki";
           docsExecStart = serviceExecStart "docs";
-          localExecStart = serviceExecStart "local";
-          wikiStateDirectory = builtins.unsafeDiscardStringContext (targetService "wiki")
+          docsStateDirectory = builtins.unsafeDiscardStringContext (targetService "docs")
             .serviceConfig.StateDirectory;
           targetsPorts = targetsModuleEval.config.networking.firewall.allowedTCPPorts;
-          targetsPortsAreOpen = builtins.all (port: builtins.elem port targetsPorts) [
-            8080
-            8081
-          ];
-          localPortIsClosed = !(builtins.elem 8082 targetsPorts);
+          docsPortIsOpen = builtins.elem 8080 targetsPorts;
           wantedByMultiUser =
             builtins.all (name: builtins.elem "multi-user.target" (targetService name).wantedBy)
               [
-                "wiki"
                 "docs"
-                "local"
               ];
         in
         {
@@ -170,50 +150,30 @@
               '';
 
           nixos-module-eval = pkgs.runCommand "maki-nixos-module-eval" { } ''
-            wiki_exec_start=${lib.escapeShellArg wikiExecStart}
-            case "$wiki_exec_start" in
-              *"serve --git https://example.invalid/maki/wiki.git --branch main --state-dir /var/lib/maki/wiki --fetch-interval 60s --host 0.0.0.0 --port 8080"*) ;;
-              *)
-                echo "unexpected wiki ExecStart: $wiki_exec_start"
-                exit 1
-                ;;
-            esac
-            case "$wiki_exec_start" in
-              *"--index-redirect"*)
-                echo "wiki target should not override maki.toml home by default"
-                exit 1
-                ;;
-            esac
-
             docs_exec_start=${lib.escapeShellArg docsExecStart}
             case "$docs_exec_start" in
-              *"serve --git https://example.invalid/maki/docs.git --branch main --state-dir /var/lib/maki/docs --fetch-interval 5m --host 127.0.0.1 --port 8081"*) ;;
+              *"serve --git https://example.invalid/maki.git --branch main --state-dir /var/lib/maki/docs --fetch-interval 60s --host 127.0.0.1 --port 8080"*) ;;
               *)
                 echo "unexpected docs ExecStart: $docs_exec_start"
                 exit 1
                 ;;
             esac
-
-            local_exec_start=${lib.escapeShellArg localExecStart}
-            case "$local_exec_start" in
-              *"serve /srv/local-maki --host 127.0.0.1 --port 8082 --index-redirect index"*) ;;
-              *)
-                echo "unexpected local ExecStart: $local_exec_start"
+            case "$docs_exec_start" in
+              *"--index-redirect"*)
+                echo "docs target should not override maki.toml home by default"
                 exit 1
                 ;;
             esac
 
-            state_directory=${lib.escapeShellArg wikiStateDirectory}
-            if [ "$state_directory" != maki/wiki ]; then
-              echo "expected StateDirectory=maki/wiki, got $state_directory"
+            state_directory=${lib.escapeShellArg docsStateDirectory}
+            if [ "$state_directory" != maki/docs ]; then
+              echo "expected StateDirectory=maki/docs, got $state_directory"
               exit 1
             fi
 
-            firewall_open=${
-              lib.escapeShellArg (if targetsPortsAreOpen && localPortIsClosed then "yes" else "no")
-            }
+            firewall_open=${lib.escapeShellArg (if docsPortIsOpen then "yes" else "no")}
             if [ "$firewall_open" != yes ]; then
-              echo "expected firewall ports 8080 and 8081 to be open, and 8082 to stay closed"
+              echo "expected firewall port 8080 to be open"
               exit 1
             fi
 
