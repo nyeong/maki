@@ -141,7 +141,6 @@
 
     const headings = chooseHeadings(collectHeadings());
     if (!headings.length) return;
-    if (isDesktop() && !hasScrollablePage()) return;
 
     const toc = document.createElement("nav");
     toc.className = "maki-toc";
@@ -272,8 +271,10 @@
 
     const layout = () => {
       const desktop = isDesktop();
-      toc.hidden = desktop && !hasScrollablePage();
-      if (toc.hidden || !desktop) {
+      const showRail = desktop && hasScrollablePage();
+      markers.hidden = !showRail;
+      labels.hidden = !showRail;
+      if (!showRail) {
         hideLabels();
         return;
       }

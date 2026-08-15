@@ -179,16 +179,22 @@ body {
 }
 
 .maki-toc {
-  position: fixed;
-  z-index: 20;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 280px;
+  position: static;
+  width: auto;
+  margin: 1.25rem 0 1.7rem;
+  padding: 0.8rem 0.95rem 0.9rem;
+  border: 1px solid #c9c9c2;
+  background: #ffffff;
+  box-shadow: none;
   color: var(--fg);
-  font-size: 0.9rem;
-  line-height: 1.4;
-  pointer-events: none;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+.maki-toc-markers,
+.maki-toc-labels {
+  display: none;
 }
 
 .maki-toc-marker {
@@ -270,6 +276,66 @@ body {
   visibility: visible;
   pointer-events: auto;
   transition-delay: 0s;
+}
+
+.maki-toc-panel {
+  display: block;
+}
+
+.maki-toc-summary {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.maki-toc-summary::-webkit-details-marker {
+  display: none;
+}
+
+.maki-toc-summary::after {
+  color: var(--muted);
+  content: "⌄";
+  font-size: 1.1rem;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.maki-toc-panel:not([open]) .maki-toc-summary::after {
+  transform: rotate(-90deg);
+}
+
+.maki-toc-list {
+  margin: 0.45rem 0 0;
+  max-height: min(24rem, 58vh);
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.maki-toc-list li {
+  margin: 0.2rem 0;
+  padding-left: calc(var(--maki-toc-depth, 0) * 1.1rem);
+}
+
+.maki-toc-list a {
+  display: inline-block;
+  min-height: 1.65rem;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.maki-toc-list a:hover {
+  text-decoration: underline;
+}
+
+.maki-toc-list-number {
+  color: var(--link);
 }
 
 .maki-not-found-page {
@@ -506,35 +572,35 @@ th {
   }
 
   .maki-nav nav {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: center;
+    flex-direction: row;
+    gap: 0.5rem;
   }
 
   .maki-home-link,
   .maki-meta-link {
     display: inline-flex;
+    flex: 0 0 2.75rem;
+    width: 2.75rem;
     min-height: 2.75rem;
     align-items: center;
     justify-content: center;
-    padding: 0 0.8rem;
+    padding: 0;
     border: 1px solid var(--line);
     border-radius: 6px;
     background: #ffffff;
   }
 
-  .maki-nav nav > a {
-    width: 100%;
-  }
-
   .maki-search {
-    width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
     max-width: none;
     margin-left: 0;
   }
 
   .maki-search-input {
-    min-height: 3rem;
+    min-height: 2.75rem;
     padding: 0.55rem 0.8rem;
     font-size: 1rem;
   }
@@ -553,90 +619,23 @@ th {
   }
 }
 
-@media (max-width: 959px) {
+@media (min-width: 960px) {
   .maki-toc {
-    position: static;
-    z-index: auto;
-    width: auto;
-    margin: 1.25rem 0 1.7rem;
-    padding: 0.8rem 0.95rem 0.9rem;
-    border: 1px solid #c9c9c2;
-    background: #ffffff;
-    box-shadow: none;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    pointer-events: auto;
+    width: fit-content;
+    min-width: 16rem;
+    max-width: min(100%, 34rem);
   }
 
   .maki-toc-markers,
   .maki-toc-labels {
-    display: none;
-  }
-
-  .maki-toc-panel {
     display: block;
-  }
-
-  .maki-toc-summary {
-    display: flex;
-    min-height: 2rem;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    color: var(--fg);
-    cursor: pointer;
-    font-weight: 700;
-    list-style: none;
-  }
-
-  .maki-toc-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .maki-toc-summary::after {
-    color: var(--muted);
-    content: "⌄";
-    font-size: 1.1rem;
-    line-height: 1;
-    transition: transform 120ms ease;
-  }
-
-  .maki-toc-panel:not([open]) .maki-toc-summary::after {
-    transform: rotate(-90deg);
-  }
-
-  .maki-toc-list {
-    margin: 0.45rem 0 0;
-    max-height: min(24rem, 58vh);
-    overflow-y: auto;
-    padding: 0;
-    list-style: none;
-  }
-
-  .maki-toc-list li {
-    margin: 0.2rem 0;
-    padding-left: calc(var(--maki-toc-depth, 0) * 1.1rem);
-  }
-
-  .maki-toc-list a {
-    display: inline-block;
-    min-height: 1.65rem;
-    color: var(--fg);
-    text-decoration: none;
-  }
-
-  .maki-toc-list a:hover {
-    text-decoration: underline;
-  }
-
-  .maki-toc-list-number {
-    color: var(--link);
-  }
-}
-
-@media (min-width: 960px) {
-  .maki-toc-panel {
-    display: none;
+    position: fixed;
+    z-index: 20;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 280px;
+    pointer-events: none;
   }
 }
 
