@@ -442,7 +442,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
     })?;
 
     if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_NO_SLASH {
-        let diagnostics = maki.diagnostics();
+        let diagnostics = maki.diagnostics_without_external_links();
         let html = crate::html::render_diagnostics_page(
             &diagnostics,
             maki.notes_len(),

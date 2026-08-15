@@ -1203,10 +1203,20 @@ impl Maki {
         self.diagnostics_with_external_link_checker(&check_external_link)
     }
 
+    pub(crate) fn diagnostics_without_external_links(&self) -> Vec<ProjectDiagnostic> {
+        self.collect_note_diagnostics()
+    }
+
     fn diagnostics_with_external_link_checker(
         &self,
         check_external_link: &dyn Fn(&str) -> ExternalLinkCheck,
     ) -> Vec<ProjectDiagnostic> {
+        let mut diagnostics = self.collect_note_diagnostics();
+        self.push_external_link_diagnostics(&mut diagnostics, check_external_link);
+        diagnostics
+    }
+
+    fn collect_note_diagnostics(&self) -> Vec<ProjectDiagnostic> {
         let mut diagnostics = vec![];
 
         for note in self.notes.values() {
@@ -1245,8 +1255,6 @@ impl Maki {
                 );
             }
         }
-
-        self.push_external_link_diagnostics(&mut diagnostics, check_external_link);
 
         diagnostics
     }
@@ -1746,6 +1754,30 @@ See [[container-missing]].
                     if target == "same"
             )
         }));
+    }
+
+    #[test]
+    fn diagnostics_without_external_links_skips_external_link_checks() {
+        let project = temp_project("local-diagnostics");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            "See [Down](https://down.example/path) and [[missing]].",
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let diagnostics = maki.diagnostics_without_external_links();
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target } if target == "missing"
+            )
+        }));
+        assert!(!diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.kind(),
+            ProjectDiagnosticKind::BrokenExternalLink { .. }
+        )));
     }
 
     #[test]

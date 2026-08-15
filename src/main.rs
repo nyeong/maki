@@ -126,7 +126,7 @@ fn run_directory_serve(
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
-    emit_project_diagnostic_summary(&maki.diagnostics());
+    emit_project_diagnostic_summary(&maki.diagnostics_without_external_links());
     web::serve_project(
         maki,
         project_root,
@@ -155,7 +155,7 @@ fn run_git_serve(
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
-    emit_project_diagnostic_summary(&maki.diagnostics());
+    emit_project_diagnostic_summary(&maki.diagnostics_without_external_links());
     source.record_active(&checkout)?;
 
     let initial_commit = checkout.commit().to_string();
