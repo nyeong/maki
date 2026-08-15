@@ -5,10 +5,12 @@ mod git_source;
 mod html;
 mod http;
 mod maki;
+mod metrics;
 mod parser;
 mod web;
 
 use maki::{Maki, MakiConfig, MakiConfigOverrides, ProjectDiagnostic, ProjectDiagnosticSummary};
+use metrics::Metrics;
 
 #[derive(Debug, PartialEq)]
 enum Command {
@@ -32,6 +34,7 @@ struct ServeOptions {
     host: String,
     port: u16,
     index_redirect: Option<String>,
+    metrics: Option<web::MetricsEndpoint>,
 }
 
 impl Default for ServeOptions {
@@ -40,6 +43,7 @@ impl Default for ServeOptions {
             host: "127.0.0.1".to_string(),
             port: 4000,
             index_redirect: None,
+            metrics: None,
         }
     }
 }
@@ -117,8 +121,9 @@ fn run_directory_serve(
 ) -> Result<(), RunError> {
     let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
     config_overrides.apply_to(&mut config);
+    let metrics = metrics_for_endpoint(&options.metrics);
 
-    let maki = Maki::load_with_config(&source_root, config)?;
+    let maki = Maki::load_with_config_metered(&source_root, config, &metrics)?;
     if let Some(project_title) = maki.config().project_title() {
         println!("Project: {project_title}");
     }
@@ -133,6 +138,8 @@ fn run_directory_serve(
         &options.host,
         options.port,
         config_overrides,
+        metrics,
+        options.metrics,
     )
 }
 
@@ -141,11 +148,12 @@ fn run_git_serve(
     options: ServeOptions,
 ) -> Result<(), RunError> {
     let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
+    let metrics = metrics_for_endpoint(&options.metrics);
     let source = git_source::GitSource::new(git_config);
     eprintln!("Preparing git source...");
     let checkout = source.prepare()?;
     eprintln!("Loading git checkout {}...", checkout.commit());
-    let maki = source.load_maki(&checkout, &config_overrides)?;
+    let maki = source.load_maki(&checkout, &config_overrides, &metrics)?;
 
     if let Some(project_title) = maki.config().project_title() {
         println!("Project: {project_title}");
@@ -164,14 +172,26 @@ fn run_git_serve(
     web::serve_with_runtime(
         maki,
         checkout.root().to_path_buf(),
-        &options.host,
-        options.port,
-        config_overrides,
-        web::ServeRuntime::Publish,
+        web::ServeConfig {
+            host: &options.host,
+            port: options.port,
+            config_overrides,
+            runtime: web::ServeRuntime::Publish,
+            metrics,
+            metrics_endpoint: options.metrics,
+        },
         move |state| {
             git_source::spawn_updater(updater_source, updater_overrides, state, initial_commit);
         },
     )
+}
+
+fn metrics_for_endpoint(endpoint: &Option<web::MetricsEndpoint>) -> Metrics {
+    if endpoint.is_some() {
+        Metrics::enabled()
+    } else {
+        Metrics::disabled()
+    }
 }
 
 fn run_serve(source: ServeSource, options: ServeOptions) -> Result<(), RunError> {
@@ -293,6 +313,7 @@ enum CliError {
     UnknownOption(String),
     MissingOptionValue(String),
     InvalidDuration(String),
+    InvalidMetricsEndpoint(String),
     InvalidPort(String),
     InvalidServeSource(String),
     UnexpectedArgument(String),
@@ -306,6 +327,7 @@ impl Display for CliError {
             CliError::UnknownOption(s) => write!(f, "Unknown option: {}", s),
             CliError::MissingOptionValue(s) => write!(f, "Missing value for option: {}", s),
             CliError::InvalidDuration(s) => write!(f, "Invalid duration: {}", s),
+            CliError::InvalidMetricsEndpoint(s) => write!(f, "Invalid metrics endpoint: {}", s),
             CliError::InvalidPort(s) => write!(f, "Invalid port: {}", s),
             CliError::InvalidServeSource(s) => write!(f, "Invalid serve source: {}", s),
             CliError::UnexpectedArgument(s) => write!(f, "Unexpected argument: {}", s),
@@ -319,6 +341,23 @@ fn normalize_redirect_target(target: &str) -> String {
     } else {
         format!("/{target}")
     }
+}
+
+fn parse_metrics_endpoint(raw: &str) -> Result<web::MetricsEndpoint, CliError> {
+    let (host, port) = raw
+        .rsplit_once(':')
+        .ok_or_else(|| CliError::InvalidMetricsEndpoint(raw.to_string()))?;
+    if host.is_empty() {
+        return Err(CliError::InvalidMetricsEndpoint(raw.to_string()));
+    }
+    let port = port
+        .parse()
+        .map_err(|_| CliError::InvalidMetricsEndpoint(raw.to_string()))?;
+
+    Ok(web::MetricsEndpoint {
+        host: host.to_string(),
+        port,
+    })
 }
 
 fn parse_serve_args(args: &[String]) -> Result<Command, CliError> {
@@ -385,6 +424,13 @@ fn parse_serve_args(args: &[String]) -> Result<Command, CliError> {
                     .get(index)
                     .ok_or_else(|| CliError::MissingOptionValue("--index-redirect".to_string()))?;
                 options.index_redirect = Some(normalize_redirect_target(target));
+            }
+            "--metrics" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| CliError::MissingOptionValue("--metrics".to_string()))?;
+                options.metrics = Some(parse_metrics_endpoint(raw)?);
             }
             option if option.starts_with("--") => {
                 return Err(CliError::UnknownOption(option.to_string()));
@@ -518,6 +564,7 @@ mod tests {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
                     index_redirect: Some("/docs/index".to_string()),
+                    metrics: None,
                 },
             })
         )
@@ -541,6 +588,7 @@ mod tests {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
                     index_redirect: None,
+                    metrics: None,
                 },
             })
         )
@@ -599,6 +647,8 @@ mod tests {
                 "8080",
                 "--index-redirect",
                 "index",
+                "--metrics",
+                "127.0.0.1:4041",
             ])),
             Ok(Command::Serve {
                 source: ServeSource::Git(git_source::GitServeConfig {
@@ -611,8 +661,45 @@ mod tests {
                     host: "0.0.0.0".to_string(),
                     port: 8080,
                     index_redirect: Some("/index".to_string()),
+                    metrics: Some(web::MetricsEndpoint {
+                        host: "127.0.0.1".to_string(),
+                        port: 4041,
+                    }),
                 },
             })
+        )
+    }
+
+    #[test]
+    fn test_parse_serve_metrics_endpoint() {
+        assert_eq!(
+            parse_args(&args(&[
+                "maki",
+                "serve",
+                "docs",
+                "--metrics",
+                "127.0.0.1:4041"
+            ])),
+            Ok(Command::Serve {
+                source: ServeSource::Path(PathBuf::from("docs")),
+                options: ServeOptions {
+                    host: "127.0.0.1".to_string(),
+                    port: 4000,
+                    index_redirect: None,
+                    metrics: Some(web::MetricsEndpoint {
+                        host: "127.0.0.1".to_string(),
+                        port: 4041,
+                    }),
+                },
+            })
+        )
+    }
+
+    #[test]
+    fn test_parse_serve_invalid_metrics_endpoint() {
+        assert_eq!(
+            parse_args(&args(&["maki", "serve", "--metrics", "4041"])),
+            Err(CliError::InvalidMetricsEndpoint("4041".to_string()))
         )
     }
 

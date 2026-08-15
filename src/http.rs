@@ -170,10 +170,33 @@ impl Display for StatusCode {
     }
 }
 
+impl StatusCode {
+    pub(crate) fn code(self) -> u16 {
+        match self {
+            StatusCode::Ok => 200,
+            StatusCode::MovedPermanently => 301,
+            StatusCode::Found => 302,
+            StatusCode::BadRequest => 400,
+            StatusCode::NotFound => 404,
+            StatusCode::InternalServerError => 500,
+            StatusCode::ServiceUnavailable => 503,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum Method {
     Get,
     Head,
+}
+
+impl Method {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Head => "HEAD",
+        }
+    }
 }
 
 impl std::str::FromStr for Method {

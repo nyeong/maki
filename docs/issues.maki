@@ -202,7 +202,7 @@ command는 shell string이 아니라 argv 배열로 받는다.
 
 네비게이션 헤더 추가하여 편하게 `/`로 돌아올 수 있도록
 
-현재 project-aware HTML page에는 `/` home link, `/@/` diagnostics link, title search form이 있는 navigation shell이 렌더링된다.
+현재 project-aware HTML page에는 `/` home link, `/@/` meta index link, title search form이 있는 navigation shell이 렌더링된다.
 
 --v status: todo
 --v type: feature
@@ -212,7 +212,7 @@ command는 shell string이 아니라 argv 배열로 받는다.
 - [ ] /@/sitemap
   - 사람이 읽을 수 있게
 
-주의: 현재 `/@/`은 diagnostics page다. sitemap은 별도 route로 남아 있다.
+주의: 현재 `/@/`은 meta index이고 diagnostics는 `/@/diagnostics`다. sitemap은 별도 route로 남아 있다.
 
 --v status: done
 --v type: bug

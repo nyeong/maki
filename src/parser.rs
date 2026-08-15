@@ -6,6 +6,7 @@
 //! 그러나 maki, renderer 등에서 특별한 의미를 담을 수도 있다.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 pub(crate) fn parse(source: &str) -> ParseResult<'_> {
     let lines = scan_lines(source);
@@ -41,9 +42,153 @@ pub(crate) enum ParseDiagnosticKind<'a> {
 pub(crate) enum Inline<'a> {
     NoteLink { target: &'a str },
     Link { title: &'a str, target: &'a str },
+    DateStamp(DateStamp<'a>),
+    DateRange(DateRange<'a>),
     Text(&'a str),
     SoftBreak,
     Code(&'a str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Date {
+    year: u16,
+    month: u8,
+    day: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DateStampKind {
+    Date,
+    Event,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DateStamp<'a> {
+    kind: DateStampKind,
+    date: Date,
+    body: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DateRange<'a> {
+    start: DateStamp<'a>,
+    end: DateStamp<'a>,
+}
+
+impl Date {
+    fn new(year: u16, month: u8, day: u8) -> Option<Self> {
+        if year == 0 || month == 0 || month > 12 {
+            return None;
+        }
+        if day == 0 || day > days_in_month(year, month) {
+            return None;
+        }
+
+        Some(Self { year, month, day })
+    }
+
+    fn parse_prefix(source: &str) -> Option<(Self, usize)> {
+        let bytes = source.as_bytes();
+        if bytes.len() < "yyyy-mm-dd".len() {
+            return None;
+        }
+        if bytes[4] != b'-' || bytes[7] != b'-' {
+            return None;
+        }
+        if !bytes[..4].iter().all(u8::is_ascii_digit)
+            || !bytes[5..7].iter().all(u8::is_ascii_digit)
+            || !bytes[8..10].iter().all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+
+        let year = source[..4].parse::<u16>().ok()?;
+        let month = source[5..7].parse::<u8>().ok()?;
+        let day = source[8..10].parse::<u8>().ok()?;
+
+        Self::new(year, month, day).map(|date| (date, 10))
+    }
+
+    pub(crate) fn parse(source: &str) -> Option<Self> {
+        let (date, len) = Self::parse_prefix(source)?;
+
+        (len == source.len()).then_some(date)
+    }
+
+    pub(crate) fn next_day(self) -> Option<Self> {
+        if self.day < days_in_month(self.year, self.month) {
+            return Self::new(self.year, self.month, self.day + 1);
+        }
+        if self.month < 12 {
+            return Self::new(self.year, self.month + 1, 1);
+        }
+        self.year
+            .checked_add(1)
+            .and_then(|year| Self::new(year, 1, 1))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn year(&self) -> u16 {
+        self.year
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn month(&self) -> u8 {
+        self.month
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn day(&self) -> u8 {
+        self.day
+    }
+}
+
+impl fmt::Display for Date {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+}
+
+impl<'a> DateStamp<'a> {
+    pub(crate) fn kind(&self) -> DateStampKind {
+        self.kind
+    }
+
+    pub(crate) fn date(&self) -> Date {
+        self.date
+    }
+
+    pub(crate) fn body(&self) -> &'a str {
+        self.body
+    }
+}
+
+impl<'a> DateRange<'a> {
+    pub(crate) fn kind(&self) -> DateStampKind {
+        self.start.kind()
+    }
+
+    pub(crate) fn start(&self) -> DateStamp<'a> {
+        self.start
+    }
+
+    pub(crate) fn end(&self) -> DateStamp<'a> {
+        self.end
+    }
+}
+
+fn is_leap_year(year: u16) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 struct InlineCursor<'a> {
@@ -85,6 +230,7 @@ const INLINE_CODE_BEGIN_END: &str = "`";
 const INLINE_LINK_BEGIN: &str = "[";
 const INLINE_LINK_SEPARATOR: &str = "](";
 const INLINE_LINK_END: &str = ")";
+const INLINE_DATE_RANGE_SEPARATOR: &str = "--";
 const PLAIN_URL_PREFIXES: &[&str] = &["https://", "http://"];
 
 fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
@@ -138,6 +284,53 @@ fn parse_inline_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     );
 
     Some(Inline::Link { title, target })
+}
+
+fn parse_date_stamp_at(source: &str) -> Option<(DateStamp<'_>, usize)> {
+    let (kind, open, close) = match source.chars().next()? {
+        '[' => (DateStampKind::Date, '[', ']'),
+        '<' => (DateStampKind::Event, '<', '>'),
+        _ => return None,
+    };
+    let body_start = open.len_utf8();
+    let body_source = &source[body_start..];
+    let body_end = body_source.find(close)?;
+    let body = &body_source[..body_end];
+    let (date, date_len) = Date::parse_prefix(body)?;
+    let rest = &body[date_len..];
+
+    if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+
+    Some((
+        DateStamp { kind, date, body },
+        body_start + body.len() + close.len_utf8(),
+    ))
+}
+
+fn parse_inline_date_range<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let rest = cursor.rest();
+    let (start, start_len) = parse_date_stamp_at(rest)?;
+    let rest_after_start = &rest[start_len..];
+    let rest_after_separator = rest_after_start.strip_prefix(INLINE_DATE_RANGE_SEPARATOR)?;
+    let (end, end_len) = parse_date_stamp_at(rest_after_separator)?;
+
+    if start.kind() != end.kind() || start.date() > end.date() {
+        return None;
+    }
+
+    cursor.bump(start_len + INLINE_DATE_RANGE_SEPARATOR.len() + end_len);
+
+    Some(Inline::DateRange(DateRange { start, end }))
+}
+
+fn parse_inline_date_stamp<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let (stamp, len) = parse_date_stamp_at(cursor.rest())?;
+
+    cursor.bump(len);
+
+    Some(Inline::DateStamp(stamp))
 }
 
 fn parse_plain_url<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
@@ -200,6 +393,8 @@ pub(crate) fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
         if let Some(inline) = parse_inline_code(&mut cursor)
             .or_else(|| parse_inline_note_link(&mut cursor))
             .or_else(|| parse_inline_link(&mut cursor))
+            .or_else(|| parse_inline_date_range(&mut cursor))
+            .or_else(|| parse_inline_date_stamp(&mut cursor))
             .or_else(|| parse_plain_url(&mut cursor))
         {
             if text_start < start {
@@ -395,6 +590,12 @@ impl<'a> Properties<'a> {
     fn get_one(&self, key: &str) -> Option<&'a str> {
         self.values.get(key).copied()
     }
+
+    fn iter(&self) -> impl Iterator<Item = (&str, &'a str)> {
+        self.values
+            .iter()
+            .map(|(key, value)| (key.as_str(), *value))
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -407,12 +608,22 @@ impl<'a> Document<'a> {
     pub(crate) fn title(&self) -> Option<&'a str> {
         self.props.get_one("title")
     }
+
+    pub(crate) fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
+        self.props.iter()
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Block<'a> {
     props: Properties<'a>,
     pub(crate) kind: BlockKind<'a>,
+}
+
+impl<'a> Block<'a> {
+    pub(crate) fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
+        self.props.iter()
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1209,6 +1420,41 @@ mod tests {
                 Inline::Text(", then "),
                 Inline::Code("https://example.com/code"),
                 Inline::Text(".")
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_inline_date_stamps_and_ranges() {
+        assert_eq!(
+            parse_inline("On [2026-08-15 토] and <2026-08-16> through [2026-08-17]--[2026-08-19]."),
+            vec![
+                Inline::Text("On "),
+                Inline::DateStamp(DateStamp {
+                    kind: DateStampKind::Date,
+                    date: Date::new(2026, 8, 15).unwrap(),
+                    body: "2026-08-15 토",
+                }),
+                Inline::Text(" and "),
+                Inline::DateStamp(DateStamp {
+                    kind: DateStampKind::Event,
+                    date: Date::new(2026, 8, 16).unwrap(),
+                    body: "2026-08-16",
+                }),
+                Inline::Text(" through "),
+                Inline::DateRange(DateRange {
+                    start: DateStamp {
+                        kind: DateStampKind::Date,
+                        date: Date::new(2026, 8, 17).unwrap(),
+                        body: "2026-08-17",
+                    },
+                    end: DateStamp {
+                        kind: DateStampKind::Date,
+                        date: Date::new(2026, 8, 19).unwrap(),
+                        body: "2026-08-19",
+                    },
+                }),
+                Inline::Text("."),
             ]
         );
     }

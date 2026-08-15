@@ -87,6 +87,11 @@
                       port = 8080;
                       openFirewall = true;
                     };
+                    observed = {
+                      source = "/srv/maki/observed";
+                      port = 8081;
+                      metrics.port = 4041;
+                    };
                   };
                 };
               }
@@ -96,6 +101,7 @@
           serviceExecStart =
             name: builtins.unsafeDiscardStringContext (targetService name).serviceConfig.ExecStart;
           docsExecStart = serviceExecStart "docs";
+          observedExecStart = serviceExecStart "observed";
           docsStateDirectory = builtins.unsafeDiscardStringContext (targetService "docs")
             .serviceConfig.StateDirectory;
           targetsPorts = targetsModuleEval.config.networking.firewall.allowedTCPPorts;
@@ -104,6 +110,7 @@
             builtins.all (name: builtins.elem "multi-user.target" (targetService name).wantedBy)
               [
                 "docs"
+                "observed"
               ];
         in
         {
@@ -161,6 +168,15 @@
             case "$docs_exec_start" in
               *"--index-redirect"*)
                 echo "docs target should not override maki.toml home by default"
+                exit 1
+                ;;
+            esac
+
+            observed_exec_start=${lib.escapeShellArg observedExecStart}
+            case "$observed_exec_start" in
+              *"serve /srv/maki/observed --host 127.0.0.1 --port 8081 --metrics 127.0.0.1:4041"*) ;;
+              *)
+                echo "unexpected observed ExecStart: $observed_exec_start"
                 exit 1
                 ;;
             esac

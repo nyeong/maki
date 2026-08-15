@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use percent_encoding::percent_decode_str;
 
@@ -31,11 +31,18 @@ use crate::html::AssetMode;
 use crate::http::Response;
 use crate::maki;
 use crate::maki::{HomeMode, Maki, MakiConfigOverrides, MakiRoute};
+use crate::metrics::Metrics;
+use crate::parser::Date;
 use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
-const DIAGNOSTICS_PATH: &str = "/@/";
-const DIAGNOSTICS_PATH_NO_SLASH: &str = "/@";
+const META_PATH: &str = "/@/";
+const META_PATH_NO_SLASH: &str = "/@";
+const DIAGNOSTICS_PATH: &str = "/@/diagnostics";
+const DIAGNOSTICS_PATH_WITH_SLASH: &str = "/@/diagnostics/";
+const DATES_PATH: &str = "/@/dates";
+const DATES_PATH_WITH_SLASH: &str = "/@/dates/";
+const DATES_PATH_PREFIX: &str = "/@/dates/";
 const LIVE_RELOAD_PATH: &str = "/.maki/events";
 const SEARCH_INDEX_PATH: &str = "/.maki/search-index.json";
 const SEARCH_PATH: &str = "/.maki/search";
@@ -45,11 +52,18 @@ const FILE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct MetricsEndpoint {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+}
+
 pub(crate) struct AppState {
     project_root: PathBuf,
     config_overrides: MakiConfigOverrides,
     project: RwLock<ProjectState>,
     live_reload: Option<LiveReload>,
+    metrics: Metrics,
 }
 
 struct ProjectState {
@@ -72,10 +86,11 @@ impl ProjectState {
             .and_then(|cache| cache.get(key).cloned())
     }
 
-    fn insert_response(&self, key: ResponseCacheKey, response: http::Response) {
-        if let Ok(mut cache) = self.response_cache.lock() {
+    fn insert_response(&self, key: ResponseCacheKey, response: http::Response) -> Option<usize> {
+        self.response_cache.lock().ok().map(|mut cache| {
             cache.insert(key, response);
-        }
+            cache.len()
+        })
     }
 
     #[cfg(test)]
@@ -89,9 +104,25 @@ impl ProjectState {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ResponseCacheKey {
+    MetaIndex,
     Diagnostics,
+    DatesIndex,
+    DatePage(Date),
     SearchIndex,
     NotePage(PathBuf),
+}
+
+impl ResponseCacheKey {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::MetaIndex => "meta",
+            Self::Diagnostics => "diagnostics",
+            Self::DatesIndex => "dates",
+            Self::DatePage(_) => "date",
+            Self::SearchIndex => "search_index",
+            Self::NotePage(_) => "note",
+        }
+    }
 }
 
 impl AppState {
@@ -102,6 +133,18 @@ impl AppState {
             maki,
             MakiConfigOverrides::default(),
             true,
+            Metrics::disabled(),
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_metrics(maki: Maki, metrics: Metrics) -> Self {
+        Self::new_with_overrides(
+            maki.root().to_path_buf(),
+            maki,
+            MakiConfigOverrides::default(),
+            true,
+            metrics,
         )
     }
 
@@ -110,21 +153,31 @@ impl AppState {
         maki: Maki,
         config_overrides: MakiConfigOverrides,
         live_reload: bool,
+        metrics: Metrics,
     ) -> Self {
+        metrics.set_project_notes(maki.notes_len());
+        metrics.set_response_cache_entries(0);
+
         Self {
             project_root,
             config_overrides,
             project: RwLock::new(ProjectState::new(maki)),
             live_reload: live_reload.then(|| LiveReload::new(MAX_SSE_CLIENTS)),
+            metrics,
         }
     }
 
     fn reload(&self) -> Result<(), maki::Error> {
+        let started = Instant::now();
         let mut config = maki::MakiConfig::load_project(&self.project_root)?;
         self.config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(&self.project_root);
-        let next = Maki::load_with_config(&source_root, config)?;
-        self.replace_maki(next)
+        let result = Maki::load_with_config_metered(&source_root, config, &self.metrics)
+            .and_then(|next| self.replace_maki(next));
+        let label = if result.is_ok() { "ok" } else { "error" };
+        self.metrics
+            .record_project_reload("directory", label, started.elapsed());
+        result
     }
 
     fn current_root(&self) -> Result<PathBuf, maki::Error> {
@@ -138,6 +191,7 @@ impl AppState {
 
     pub(crate) fn replace_maki(&self, next: Maki) -> Result<(), maki::Error> {
         let root = next.root().to_path_buf();
+        let notes_len = next.notes_len();
         {
             let mut project = self
                 .project
@@ -145,8 +199,11 @@ impl AppState {
                 .map_err(|_| maki::Error::ReadDirectoryFailed(root))?;
             *project = ProjectState::new(next);
         }
+        self.metrics.set_project_notes(notes_len);
+        self.metrics.set_response_cache_entries(0);
         if let Some(live_reload) = &self.live_reload {
             live_reload.broadcast_reload();
+            self.metrics.increment_live_reload_events();
         }
         Ok(())
     }
@@ -175,6 +232,10 @@ impl AppState {
             .read()
             .map(|project| project.cached_response_count())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 }
 
@@ -255,6 +316,13 @@ impl LiveReload {
         clients.retain(|client| client.id != id);
     }
 
+    fn client_count(&self) -> usize {
+        self.clients
+            .lock()
+            .map(|clients| clients.len())
+            .unwrap_or_default()
+    }
+
     fn broadcast_reload(&self) {
         let version = self.version.fetch_add(1, Ordering::SeqCst) + 1;
         let Ok(mut clients) = self.clients.lock() else {
@@ -273,11 +341,14 @@ impl LiveReload {
 struct LiveClientRegistration<'a> {
     live_reload: &'a LiveReload,
     id: u64,
+    metrics: Metrics,
 }
 
 impl Drop for LiveClientRegistration<'_> {
     fn drop(&mut self) {
         self.live_reload.unregister_client(self.id);
+        self.metrics
+            .set_live_reload_clients(self.live_reload.client_count());
     }
 }
 
@@ -425,6 +496,16 @@ fn query_param(query: Option<&str>, name: &str) -> Result<Option<String>, Error>
     Ok(None)
 }
 
+fn date_for_dates_request_path(path: &str) -> Option<Date> {
+    let date = path.strip_prefix(DATES_PATH_PREFIX)?;
+
+    if date.is_empty() || date.contains('/') {
+        return None;
+    }
+
+    Date::parse(date)
+}
+
 fn escape_json_string(input: &str) -> String {
     let mut output = String::new();
 
@@ -476,17 +557,33 @@ fn runtime_asset_response(asset: crate::html::RuntimeAsset) -> http::Response {
         .set_body(body)
 }
 
+fn has_parent_dir_component(path: &str) -> bool {
+    PathBuf::from(path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 fn cacheable_response(
     state: &AppState,
     project: &ProjectState,
     key: ResponseCacheKey,
+    observe_cache_request: bool,
 ) -> Result<http::Response, Error> {
+    let kind = key.kind();
     if let Some(response) = project.cached_response(&key) {
+        if observe_cache_request {
+            state.metrics().record_response_cache_request(kind, "hit");
+        }
         return Ok(response);
     }
 
+    if observe_cache_request {
+        state.metrics().record_response_cache_request(kind, "miss");
+    }
     let response = render_cacheable_response(state, &project.maki, &key)?;
-    project.insert_response(key, response.clone());
+    if let Some(entries) = project.insert_response(key, response.clone()) {
+        state.metrics().set_response_cache_entries(entries);
+    }
     Ok(response)
 }
 
@@ -495,12 +592,42 @@ fn render_cacheable_response(
     maki: &Maki,
     key: &ResponseCacheKey,
 ) -> Result<http::Response, Error> {
-    match key {
+    let kind = key.kind();
+    let started = Instant::now();
+    let result = match key {
+        ResponseCacheKey::MetaIndex => {
+            let html = crate::html::render_meta_index_page(AssetMode::External);
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
         ResponseCacheKey::Diagnostics => {
             let diagnostics = maki.diagnostics_without_external_links();
             let html = crate::html::render_diagnostics_page(
                 &diagnostics,
                 maki.notes_len(),
+                AssetMode::External,
+            );
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
+        ResponseCacheKey::DatesIndex => {
+            let html = crate::html::render_date_index_page(maki.date_index(), AssetMode::External);
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
+        ResponseCacheKey::DatePage(date) => {
+            let Some(backlinks) = maki.date_index().backlinks_for(date) else {
+                return Err(
+                    maki::Error::NoteNotFound(PathBuf::from(maki::date_page_path(*date))).into(),
+                );
+            };
+            let html = crate::html::render_date_page(
+                *date,
+                maki.date_index(),
+                backlinks,
                 AssetMode::External,
             );
             Ok(http::Response::new(http::StatusCode::Ok)
@@ -516,16 +643,21 @@ fn render_cacheable_response(
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
+    };
+
+    state
+        .metrics()
+        .record_render_duration(kind, started.elapsed());
+    if result.is_err() {
+        state.metrics().record_render_error(kind);
     }
+    result
 }
 
 fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Response, Error> {
     let target = parse_request_target(request.target())?;
 
-    if PathBuf::from(&target.path)
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
+    if has_parent_dir_component(&target.path) {
         return Err(Error::BadRequest);
     }
 
@@ -538,23 +670,39 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
     })?;
     let maki = &project.maki;
 
-    if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_NO_SLASH {
-        return cacheable_response(state, &project, ResponseCacheKey::Diagnostics);
+    if target.path == META_PATH || target.path == META_PATH_NO_SLASH {
+        return cacheable_response(state, &project, ResponseCacheKey::MetaIndex, true);
+    }
+
+    if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_WITH_SLASH {
+        return cacheable_response(state, &project, ResponseCacheKey::Diagnostics, true);
+    }
+
+    if target.path == DATES_PATH || target.path == DATES_PATH_WITH_SLASH {
+        return cacheable_response(state, &project, ResponseCacheKey::DatesIndex, true);
+    }
+
+    if let Some(date) = date_for_dates_request_path(&target.path) {
+        return cacheable_response(state, &project, ResponseCacheKey::DatePage(date), true);
     }
 
     if target.path == SEARCH_INDEX_PATH {
-        return cacheable_response(state, &project, ResponseCacheKey::SearchIndex);
+        return cacheable_response(state, &project, ResponseCacheKey::SearchIndex, true);
     }
 
     if target.path == SEARCH_PATH {
         let query = query_param(target.query, "q")?.unwrap_or_default();
         let results = maki.search_titles(&query, SEARCH_PAGE_RESULT_LIMIT);
+        let started = Instant::now();
         let html = crate::html::render_search_page(
             &query,
             &results,
             maki.search_entries().len(),
             AssetMode::External,
         );
+        state
+            .metrics()
+            .record_render_duration("search_page", started.elapsed());
         return Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/html; charset=utf-8")
             .set_body(state.with_live_reload(html)));
@@ -562,7 +710,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
 
     match maki.resolve_route(&target.path) {
         Ok(MakiRoute::NotePage(path)) => {
-            cacheable_response(state, &project, ResponseCacheKey::NotePage(path))
+            cacheable_response(state, &project, ResponseCacheKey::NotePage(path), true)
         }
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
@@ -593,6 +741,52 @@ fn response_for_request(
         http::Method::Get => response,
         http::Method::Head => response.without_body(),
     })
+}
+
+fn route_label_for_request(state: &AppState, request: &http::Request) -> &'static str {
+    let Ok(target) = parse_request_target(request.target()) else {
+        return "not_found";
+    };
+
+    if has_parent_dir_component(&target.path) {
+        return "not_found";
+    }
+
+    if target.path == LIVE_RELOAD_PATH {
+        return "events";
+    }
+    if crate::html::runtime_asset_for_request_path(&target.path).is_some() {
+        return "asset";
+    }
+    if target.path == META_PATH || target.path == META_PATH_NO_SLASH {
+        return "meta";
+    }
+    if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_WITH_SLASH {
+        return "diagnostics";
+    }
+    if target.path == DATES_PATH || target.path == DATES_PATH_WITH_SLASH {
+        return "dates";
+    }
+    if date_for_dates_request_path(&target.path).is_some() {
+        return "date";
+    }
+    if target.path == SEARCH_INDEX_PATH {
+        return "search_index";
+    }
+    if target.path == SEARCH_PATH {
+        return "search";
+    }
+
+    let Ok(project) = state.project.read() else {
+        return "not_found";
+    };
+
+    match project.maki.resolve_route(&target.path) {
+        Ok(MakiRoute::Home) => "home",
+        Ok(MakiRoute::NotePage(_)) => "note",
+        Ok(MakiRoute::NoteSource(_)) => "source",
+        Err(_) => "not_found",
+    }
 }
 
 fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, Error> {
@@ -652,7 +846,21 @@ fn write_sse_keepalive(stream: &mut impl Write) -> Result<(), RunError> {
         .map_err(|source| RunError::IoError { source })
 }
 
-fn handle_live_reload_connection<S>(state: &AppState, stream: &mut S) -> Result<(), RunError>
+fn write_response(
+    stream: &mut impl Write,
+    response: Response,
+) -> Result<http::StatusCode, RunError> {
+    let status = response.status();
+    stream
+        .write_all(&response.to_bytes())
+        .map_err(|source| RunError::IoError { source })?;
+    Ok(status)
+}
+
+fn handle_live_reload_connection<S>(
+    state: &AppState,
+    stream: &mut S,
+) -> Result<http::StatusCode, RunError>
 where
     S: Write,
 {
@@ -660,31 +868,29 @@ where
         let response = not_found(&Error::Maki {
             source: maki::Error::NoteNotFound(PathBuf::from(LIVE_RELOAD_PATH)),
         });
-        return stream
-            .write_all(&response.to_bytes())
-            .map_err(|source| RunError::IoError { source });
+        return write_response(stream, response);
     };
 
     let (client_id, token, receiver) = match live_reload.register_client() {
         Ok(client) => client,
         Err(LiveReloadError::TooManyClients) => {
             let response = service_unavailable("Too many live reload clients");
-            return stream
-                .write_all(&response.to_bytes())
-                .map_err(|source| RunError::IoError { source });
+            return write_response(stream, response);
         }
         Err(LiveReloadError::StatePoisoned) => {
             let response = internal_server_error(&Error::Maki {
                 source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
             });
-            return stream
-                .write_all(&response.to_bytes())
-                .map_err(|source| RunError::IoError { source });
+            return write_response(stream, response);
         }
     };
+    state
+        .metrics()
+        .set_live_reload_clients(live_reload.client_count());
     let _registration = LiveClientRegistration {
         live_reload,
         id: client_id,
+        metrics: state.metrics().clone(),
     };
 
     stream
@@ -702,7 +908,7 @@ where
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 write_sse_keepalive(stream)?;
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(http::StatusCode::Ok),
         }
     }
 }
@@ -721,18 +927,103 @@ where
         }
     };
 
+    let method = request.method().as_str();
+    let route = route_label_for_request(state, &request);
+    let started = Instant::now();
+    let _inflight = state.metrics().track_http_inflight_request();
+
     if request.method() == http::Method::Get && request.target() == LIVE_RELOAD_PATH {
-        return handle_live_reload_connection(state, stream);
+        let result = handle_live_reload_connection(state, stream);
+        let status = result
+            .as_ref()
+            .map(|status| status.code())
+            .unwrap_or(http::StatusCode::InternalServerError.code())
+            .to_string();
+        state
+            .metrics()
+            .record_http_request(method, route, status, started.elapsed(), 0);
+        return result.map(|_| ());
     }
 
     let response = match response_for_request(state, &request) {
         Ok(response) => response,
         Err(err) => err.into_response(),
     };
+    let status = response.status().code().to_string();
+    let response_bytes = response.body().len();
+
+    let result = stream
+        .write_all(&response.to_bytes())
+        .map_err(|source| RunError::IoError { source });
+    state
+        .metrics()
+        .record_http_request(method, route, status, started.elapsed(), response_bytes);
+    result
+}
+
+fn metrics_response(metrics: &Metrics) -> Response {
+    Response::new(http::StatusCode::Ok)
+        .set_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        .set_body(metrics.to_prometheus_text())
+}
+
+fn handle_metrics_connection<S>(metrics: &Metrics, stream: &mut S) -> Result<(), RunError>
+where
+    S: Write + Read,
+{
+    let request = match read_request(stream) {
+        Ok(request) => request,
+        Err(err) => {
+            let response = err.into_response();
+            return stream
+                .write_all(&response.to_bytes())
+                .map_err(|source| RunError::IoError { source });
+        }
+    };
+
+    let started = Instant::now();
+    let response = if request.method() == http::Method::Get && request.target() == "/metrics" {
+        let status = http::StatusCode::Ok.code().to_string();
+        metrics.record_metrics_request(request.method().as_str(), status, started.elapsed());
+        metrics_response(metrics)
+    } else {
+        let response = not_found(&Error::Maki {
+            source: maki::Error::NoteNotFound(PathBuf::from("/metrics")),
+        });
+        let status = response.status().code().to_string();
+        metrics.record_metrics_request(request.method().as_str(), status, started.elapsed());
+        response
+    };
 
     stream
         .write_all(&response.to_bytes())
         .map_err(|source| RunError::IoError { source })
+}
+
+fn spawn_metrics_listener(listener: TcpListener, metrics: Metrics, endpoint: MetricsEndpoint) {
+    thread::spawn(move || {
+        println!(
+            "Metrics listening on http://{}:{}/metrics",
+            endpoint.host, endpoint.port
+        );
+
+        for stream in listener.incoming() {
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(source) => {
+                    eprintln!("Failed to accept metrics connection: {}", source);
+                    continue;
+                }
+            };
+
+            let metrics = metrics.clone();
+            thread::spawn(move || {
+                if let Err(error) = handle_metrics_connection(&metrics, &mut stream) {
+                    eprintln!("Failed to handle metrics connection: {}", error);
+                }
+            });
+        }
+    });
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -888,9 +1179,16 @@ fn spawn_file_watcher(state: Arc<AppState>) {
 }
 
 fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
-    let mut keys = Vec::with_capacity(maki.notes_len() + 2);
+    let mut keys = Vec::with_capacity(maki.notes_len() + 3);
+    keys.push(ResponseCacheKey::MetaIndex);
     keys.push(ResponseCacheKey::SearchIndex);
     keys.push(ResponseCacheKey::Diagnostics);
+    keys.push(ResponseCacheKey::DatesIndex);
+    keys.extend(
+        maki.date_index()
+            .dates()
+            .map(|(date, _backlinks)| ResponseCacheKey::DatePage(*date)),
+    );
     keys.extend(
         maki.notes()
             .map(|note| ResponseCacheKey::NotePage(note.source_path().to_path_buf())),
@@ -899,6 +1197,7 @@ fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
 }
 
 fn warm_response_cache(state: &AppState) -> Result<(), Error> {
+    let started = Instant::now();
     let keys = {
         let project = state.project.read().map_err(|_| Error::Maki {
             source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
@@ -907,15 +1206,27 @@ fn warm_response_cache(state: &AppState) -> Result<(), Error> {
     };
 
     for key in keys {
+        let kind = key.kind();
         let project = state.project.read().map_err(|_| Error::Maki {
             source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
         })?;
 
-        if let Err(error) = cacheable_response(state, &project, key) {
-            eprintln!("Failed to warm response cache: {}", error);
+        match cacheable_response(state, &project, key, false) {
+            Ok(_) => state
+                .metrics()
+                .record_response_cache_warmup_item(kind, "ok"),
+            Err(error) => {
+                state
+                    .metrics()
+                    .record_response_cache_warmup_item(kind, "error");
+                eprintln!("Failed to warm response cache: {}", error);
+            }
         }
     }
 
+    state
+        .metrics()
+        .record_response_cache_warmup_duration(started.elapsed());
     Ok(())
 }
 
@@ -932,20 +1243,35 @@ pub(crate) enum ServeRuntime {
     Publish,
 }
 
+pub(crate) struct ServeConfig<'a> {
+    pub(crate) host: &'a str,
+    pub(crate) port: u16,
+    pub(crate) config_overrides: MakiConfigOverrides,
+    pub(crate) runtime: ServeRuntime,
+    pub(crate) metrics: Metrics,
+    pub(crate) metrics_endpoint: Option<MetricsEndpoint>,
+}
+
 pub(crate) fn serve_project(
     maki: Maki,
     project_root: PathBuf,
     host: &str,
     port: u16,
     config_overrides: MakiConfigOverrides,
+    metrics: Metrics,
+    metrics_endpoint: Option<MetricsEndpoint>,
 ) -> Result<(), RunError> {
     serve_with_runtime(
         maki,
         project_root,
-        host,
-        port,
-        config_overrides,
-        ServeRuntime::Development,
+        ServeConfig {
+            host,
+            port,
+            config_overrides,
+            runtime: ServeRuntime::Development,
+            metrics,
+            metrics_endpoint,
+        },
         |_| {},
     )
 }
@@ -953,24 +1279,39 @@ pub(crate) fn serve_project(
 pub(crate) fn serve_with_runtime<F>(
     maki: Maki,
     project_root: PathBuf,
-    host: &str,
-    port: u16,
-    config_overrides: MakiConfigOverrides,
-    runtime: ServeRuntime,
+    config: ServeConfig<'_>,
     setup: F,
 ) -> Result<(), RunError>
 where
     F: FnOnce(Arc<AppState>),
 {
+    let ServeConfig {
+        host,
+        port,
+        config_overrides,
+        runtime,
+        metrics,
+        metrics_endpoint,
+    } = config;
+
     let listener =
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
+    let metrics_listener = metrics_endpoint
+        .as_ref()
+        .map(|endpoint| TcpListener::bind((endpoint.host.as_str(), endpoint.port)))
+        .transpose()
+        .map_err(|source| RunError::IoError { source })?;
     let live_reload = matches!(runtime, ServeRuntime::Development);
     let state = Arc::new(AppState::new_with_overrides(
         project_root,
         maki,
         config_overrides,
         live_reload,
+        metrics.clone(),
     ));
+    if let (Some(listener), Some(endpoint)) = (metrics_listener, metrics_endpoint) {
+        spawn_metrics_listener(listener, metrics, endpoint);
+    }
     if live_reload {
         spawn_file_watcher(Arc::clone(&state));
     }
@@ -1005,6 +1346,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use crate::maki;
+    use crate::metrics::Metrics;
     use crate::web::*;
 
     #[test]
@@ -1167,9 +1510,56 @@ mod tests {
     }
 
     #[test]
+    fn test_response_cache_hit_miss_metrics_follow_requests() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let metrics = Metrics::enabled();
+        let state = AppState::new_with_metrics(maki, metrics.clone());
+        let request = http::Request::get("/index");
+
+        let first = handle_request(&state, &request).unwrap();
+        assert_eq!(first.status(), http::StatusCode::Ok);
+
+        let second = handle_request(&state, &request).unwrap();
+        assert_eq!(second.status(), http::StatusCode::Ok);
+
+        let text = metrics.to_prometheus_text();
+        assert!(text.contains("maki_response_cache_requests_total{kind=\"note\",cache=\"hit\"} 1"));
+        assert!(
+            text.contains("maki_response_cache_requests_total{kind=\"note\",cache=\"miss\"} 1")
+        );
+    }
+
+    #[test]
+    fn test_reload_updates_project_and_cache_gauges() {
+        let root = std::env::temp_dir().join(format!("maki-metrics-reload-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("home.maki"), "Home generation one").unwrap();
+
+        let metrics = Metrics::enabled();
+        let maki =
+            Maki::load_with_config_metered(&root, maki::MakiConfig::default(), &metrics).unwrap();
+        let state = AppState::new_with_metrics(maki, metrics.clone());
+
+        handle_request(&state, &http::Request::get("/home")).unwrap();
+        let before = metrics.to_prometheus_text();
+        assert!(before.contains("maki_project_notes 1"));
+        assert!(before.contains("maki_response_cache_entries 1"));
+
+        fs::write(root.join("next.maki"), "Next generation").unwrap();
+        state.reload().unwrap();
+
+        let after = metrics.to_prometheus_text();
+        fs::remove_dir_all(root).unwrap();
+        assert!(after.contains("maki_project_notes 2"));
+        assert!(after.contains("maki_response_cache_entries 0"));
+        assert!(after.contains("maki_project_reload_total{source=\"directory\",result=\"ok\"} 1"));
+    }
+
+    #[test]
     fn test_warm_response_cache_populates_cacheable_project_routes() {
         let maki = Maki::load(PathBuf::from("docs")).unwrap();
-        let expected_entries = maki.notes_len() + 2;
+        let expected_entries = response_cache_warmup_keys(&maki).len();
         let state = AppState::new(maki);
 
         assert_eq!(state.cached_response_count(), 0);
@@ -1224,6 +1614,54 @@ mod tests {
     }
 
     #[test]
+    fn test_meta_index_links_internal_indexes() {
+        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let state = AppState::new(maki);
+        let response = handle_request(&state, &http::Request::get("/@/")).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::Ok);
+        assert!(body.contains("<title>Meta</title>"));
+        assert!(body.contains("<a href=\"/@/diagnostics\">Diagnostics</a>"));
+        assert!(body.contains("<a href=\"/@/dates\">Dates</a>"));
+    }
+
+    #[test]
+    fn test_dates_pages_list_dates_and_backlinks() {
+        let root = std::env::temp_dir().join(format!("maki-dates-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("home.maki"),
+            r#"--^ title: Home
+--^ date: [2026-08-15]
+
+Plan <2026-08-16> and [2026-08-17]--[2026-08-19]."#,
+        )
+        .unwrap();
+
+        let maki = Maki::load(&root).unwrap();
+        let state = AppState::new(maki);
+
+        let index = handle_request(&state, &http::Request::get("/@/dates")).unwrap();
+        let index_body = String::from_utf8(index.body().to_vec()).unwrap();
+        assert_eq!(index.status(), http::StatusCode::Ok);
+        assert!(index_body.contains("<h1 id=\"2026\">2026</h1>"));
+        assert!(index_body.contains("<h2 id=\"2026-08\">08</h2>"));
+        assert!(index_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
+
+        let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
+        let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(detail.status(), http::StatusCode::Ok);
+        assert!(detail_body.contains("<title>2026-08-18</title>"));
+        assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
+        assert!(detail_body.contains("range"));
+        assert!(detail_body.contains("<a href=\"/home\">Home</a>"));
+    }
+
+    #[test]
     fn test_diagnostics_page_lists_project_issues() {
         let root = std::env::temp_dir().join(format!("maki-diagnostics-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -1236,7 +1674,7 @@ mod tests {
 
         let maki = Maki::load(&root).unwrap();
         let state = AppState::new(maki);
-        let request = http::Request::get("/@/");
+        let request = http::Request::get("/@/diagnostics");
 
         let response = handle_request(&state, &request).unwrap();
         let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -1263,7 +1701,7 @@ mod tests {
     fn test_head_diagnostics_page_returns_headers_without_body() {
         let maki = Maki::load(PathBuf::from("docs")).unwrap();
         let state = AppState::new(maki);
-        let request = http::Request::new(http::Method::Head, "/@");
+        let request = http::Request::new(http::Method::Head, "/@/diagnostics");
 
         let response = response_for_request(&state, &request).unwrap();
 

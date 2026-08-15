@@ -3,8 +3,8 @@
 
 = 결론
 
-현재 maki는 v0/v1의 목표였던 "부분 파싱, HTML 렌더링, 프로젝트 단위 서빙, live reload"를 넘어서 v2 polishing의 일부까지 구현된 상태다.
-특히 `NoteIndex`, case-insensitive wikilink, paragraph boundary, ordered list, project diagnostics, title search, navigation shell, runtime assets, git source serving이 이미 들어와 있다.
+현재 maki는 v0/v1의 목표였던 "부분 파싱, HTML 렌더링, 프로젝트 단위 서빙, live reload"를 넘어서 v2 polishing과 운영 기반의 일부까지 구현된 상태다.
+특히 `NoteIndex`, case-insensitive wikilink, paragraph boundary, ordered list, project diagnostics, title search, navigation shell, runtime assets, git source serving, Prometheus metrics listener가 이미 들어와 있다.
 
 이제 병목은 "NoteIndex를 세우기"가 아니라, 현재 흩어져 있는 note lookup, title loading, diagnostics, search metadata를 안정적인 project index로 정리하는 것이다.
 현재 구현은 동작하지만 note title을 여러 경로에서 다시 읽고 파싱하며, diagnostics는 link graph/source span 없이 재파싱한다.
@@ -14,12 +14,12 @@ external link check는 serve의 기본 diagnostics에서는 빠져 있지만, fu
 
 - P0: `NoteIndex`를 `ProjectIndex`에 가깝게 확장해 note title/search metadata/link diagnostics의 중복 파싱을 줄인다.
 - P0: external link diagnostics를 명시 옵션 또는 캐시/타임아웃 정책 뒤로 옮긴다.
-- P1: `/@/sitemap`과 `sitemap.xml`을 추가한다. 현재 `/@/`은 sitemap이 아니라 diagnostics page다.
+- P1: `/@/sitemap`과 `sitemap.xml`을 추가한다. 현재 `/@/`은 meta index이고 diagnostics는 `/@/diagnostics`다.
 - P1: Block span/id를 최소 도입해 line-precise link diagnostics, stable heading id, TOC 품질을 준비한다.
 - P1: `PublishPolicy`를 route/render/search/diagnostics boundary에 실제로 연결한다.
 - P2: TBD/미구현 문법 fallback의 의미를 별도 fallback block으로 보존한다.
 - P2 이후: Renderer trait, 큰 AST/CST 개편, full syntax 구현.
-- v3 이후: public publishing hardening, metrics, HTTP hardening.
+- v3 이후: public publishing hardening, HTTP hardening, metrics refinement.
 
 = 현재 구현 상태
 
@@ -29,11 +29,13 @@ external link check는 serve의 기본 diagnostics에서는 빠져 있지만, fu
 `serve`는 local path 또는 `--git` source를 받을 수 있다.
 local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없으면 입력 path를 root로 보는 fallback을 유지한다.
 `build`도 파일 기준으로 `maki.toml`을 찾아 프로젝트 컨텍스트에서 링크를 해석하고, 없으면 단일 파일 렌더링으로 떨어진다.
+`serve --metrics HOST:PORT`를 주면 별도 listener에서 Prometheus text exposition을 제공한다.
 
 근거:
 
 - `src/main.rs`: path serve, git serve, build, project diagnostics summary.
 - `src/git_source.rs`: git mirror/checkout/update runtime.
+- `src/metrics.rs`: low-cardinality Prometheus metric registry와 text exposition serialization.
 - `tests/milestone_quality.rs`: project root discovery, source directory, git serve polling, build diagnostics.
 
 평가:
@@ -130,7 +132,7 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 
 HTML 렌더러는 `Document`와 `RenderContext`를 받아 문자열을 생성한다.
 project context가 있으면 wikilink를 resolve하고, 없으면 target 그대로 링크를 만든다.
-project page에는 nav shell, search input, diagnostics link, TOC/search scripts가 들어간다.
+project page에는 nav shell, search input, meta index link, TOC/search scripts가 들어간다.
 
 근거:
 
@@ -153,20 +155,22 @@ project page에는 nav shell, search input, diagnostics link, TOC/search scripts
 웹 서버는 직접 만든 HTTP parser/response 위에 thread-per-connection으로 동작한다.
 SSE live reload와 polling file watcher를 갖고 있고, `.maki` 파일과 `maki.toml` 변경을 감지한다.
 project page에서는 runtime asset을 external route로 제공한다.
-프로젝트 snapshot마다 response cache를 갖고, `/@/`, `/.maki/search-index.json`, note page HTML을 cache miss 시 렌더한 뒤 재사용한다.
+프로젝트 snapshot마다 response cache를 갖고, `/@/`, `/@/diagnostics`, `/@/dates`, `/.maki/search-index.json`, note page HTML을 cache miss 시 렌더한 뒤 재사용한다.
 serve 시작 후에는 background warmer가 cacheable route를 순차적으로 채운다.
 local file watcher나 git updater가 새 `Maki` snapshot을 교체하면 response cache도 함께 새 세대로 바뀐다.
+metrics가 켜지면 HTTP request, response cache, render, project load/reload, git refresh, live reload 상태를 Prometheus 형식으로 누적한다.
+route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 사용하고 note path, query string, commit hash, 원문 에러, 문서 내용은 label로 내보내지 않는다.
 
 근거:
 
 - `src/web.rs`: route handling, search routes, diagnostics route, runtime asset routes, response cache warmer, live reload, watcher.
-- `tests/milestone_quality.rs`, `src/web.rs` tests: rendered pages, search index/page, diagnostics page, response cache invalidation/warmup, runtime assets, live reload.
+- `tests/milestone_quality.rs`, `src/web.rs` tests: rendered pages, search index/page, diagnostics page, response cache invalidation/warmup, runtime assets, live reload, metrics endpoint.
 
 평가:
 
 - 개인 로컬/홈서버 dogfooding에는 충분하다.
 - public publishing을 하려면 현재 HTTP stack은 보수적으로 봐야 한다.
-- `/@/`은 diagnostics page다. 사람이 보는 sitemap인 `/@/sitemap`은 아직 없다.
+- `/@/`은 meta index다. 사람이 보는 sitemap인 `/@/sitemap`은 아직 없다.
 - `sitemap.xml`도 아직 없다.
 - response cache는 프로젝트 snapshot 단위라 정확성은 단순하지만, note별 부분 무효화나 AST 재사용은 아직 없다.
 
@@ -233,11 +237,11 @@ local file watcher나 git updater가 새 `Maki` snapshot을 교체하면 respons
 
 완료:
 
-- project page에 home link, diagnostics link, title search form이 있는 nav header가 들어간다.
-- `/@/` diagnostics page가 parse warning, broken internal link, ambiguous internal link, read failure summary를 보여준다.
+- project page에 home link, meta index link, title search form이 있는 nav header가 들어간다.
+- `/@/diagnostics` page가 parse warning, broken internal link, ambiguous internal link, read failure summary를 보여준다.
 - `/.maki/search-index.json`과 `/.maki/search?q=...`가 title search를 제공한다.
 - runtime assets는 `/.maki/assets/...`로 제공된다.
-- `/@/`, `/.maki/search-index.json`, note page HTML은 프로젝트 snapshot 단위 response cache로 재사용된다.
+- `/@/`, `/@/diagnostics`, `/@/dates`, `/.maki/search-index.json`, note page HTML은 프로젝트 snapshot 단위 response cache로 재사용된다.
 
 남은 점:
 
@@ -279,7 +283,7 @@ local file watcher나 git updater가 새 `Maki` snapshot을 교체하면 respons
 == P1: Sitemap
 
 `docs/issues.maki`의 sitemap 이슈는 아직 남아 있다.
-`/@/`은 현재 diagnostics page라서 sitemap과 구분해야 한다.
+`/@/`은 현재 meta index라서 sitemap과 구분해야 한다.
 
 권장 구현:
 

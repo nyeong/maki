@@ -7,11 +7,12 @@ use std::{
     process::Command,
     sync::Arc,
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     maki::{self, Maki, MakiConfig, MakiConfigOverrides},
+    metrics::Metrics,
     web,
 };
 
@@ -237,6 +238,7 @@ impl GitSource {
         &self,
         checkout: &GitCheckout,
         config_overrides: &MakiConfigOverrides,
+        metrics: &Metrics,
     ) -> Result<Maki, Error> {
         reject_symlinks(checkout.root())?;
 
@@ -250,7 +252,11 @@ impl GitSource {
         let mut config = MakiConfig::load_project(checkout.root())?;
         config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(checkout.root());
-        Ok(Maki::load_with_config(&source_root, config)?)
+        Ok(Maki::load_with_config_metered(
+            &source_root,
+            config,
+            metrics,
+        )?)
     }
 
     pub(crate) fn record_active(&self, checkout: &GitCheckout) -> Result<(), Error> {
@@ -369,22 +375,38 @@ pub(crate) fn spawn_updater(
         loop {
             thread::sleep(source.fetch_interval());
 
+            let refresh_started = Instant::now();
             let checkout = match source.refresh() {
-                Ok(checkout) => checkout,
+                Ok(checkout) => {
+                    state
+                        .metrics()
+                        .record_git_refresh("ok", refresh_started.elapsed());
+                    checkout
+                }
                 Err(error) => {
+                    state
+                        .metrics()
+                        .record_git_refresh("error", refresh_started.elapsed());
                     eprintln!("Failed to refresh git source: {}", error);
                     let _ = source.record_failure(&error.to_string());
                     continue;
                 }
             };
 
+            let reload_started = Instant::now();
             if checkout.commit() == active_commit {
+                state
+                    .metrics()
+                    .record_project_reload("git", "unchanged", reload_started.elapsed());
                 continue;
             }
 
-            let maki = match source.load_maki(&checkout, &config_overrides) {
+            let maki = match source.load_maki(&checkout, &config_overrides, state.metrics()) {
                 Ok(maki) => maki,
                 Err(error) => {
+                    state
+                        .metrics()
+                        .record_project_reload("git", "error", reload_started.elapsed());
                     eprintln!("Failed to load git checkout: {}", error);
                     let _ = source.record_failure(&error.to_string());
                     continue;
@@ -392,12 +414,18 @@ pub(crate) fn spawn_updater(
             };
 
             if let Err(error) = state.replace_maki(maki) {
+                state
+                    .metrics()
+                    .record_project_reload("git", "error", reload_started.elapsed());
                 eprintln!("Failed to activate git checkout: {}", error);
                 let _ = source.record_failure(&error.to_string());
                 continue;
             }
 
             active_commit = checkout.commit().to_string();
+            state
+                .metrics()
+                .record_project_reload("git", "updated", reload_started.elapsed());
             if let Err(error) = source.record_active(&checkout) {
                 eprintln!("Failed to record active git checkout: {}", error);
             }

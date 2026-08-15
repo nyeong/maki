@@ -1,5 +1,5 @@
 --^ title: v5: Observability
---^ status: todo
+--^ status: done
 
 `maki serve`를 운영하면서 성능 병목을 추적할 수 있도록 Prometheus scrape endpoint를 제공한다.
 
@@ -63,6 +63,8 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 - 기본값은 disabled 또는 localhost-only가 안전하다.
 - metrics endpoint는 `GET /metrics`만 처리한다.
 - metrics endpoint 자체의 요청도 별도 메트릭으로 세되, app request latency와 섞지 않는다.
+  - app request는 `maki_http_*` family에 `route` label로 기록한다.
+  - metrics listener request는 `maki_metrics_*` family에 `method`, `status`만 기록한다.
 
 == Metric registry
 
@@ -77,10 +79,10 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 허용 label:
 
 - `method`: `GET`, `HEAD`
-- `route`: `home`, `note`, `source`, `diagnostics`, `search`, `search_index`, `asset`, `events`, `not_found`, `metrics`
+- `route`: `home`, `note`, `source`, `meta`, `diagnostics`, `dates`, `date`, `search`, `search_index`, `asset`, `events`, `not_found`
 - `status`: exact HTTP status code. 예: `200`, `302`, `404`, `500`
 - `cache`: `hit`, `miss`
-- `kind`: `note`, `diagnostics`, `search_index`, `search_page`
+- `kind`: `note`, `meta`, `diagnostics`, `dates`, `date`, `search_index`, `search_page`
 - `source`: `directory`, `git`
 - `result`: `ok`, `error`, `unchanged`, `updated`, `skipped`
 - `phase`: project load phase. `list_files`, `load_notes`, `index`, `metadata`, `render`, `write`
@@ -108,7 +110,17 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 : maki_http_request_duration_seconds_sum{method,route,status}
 : maki_http_request_duration_seconds_count{method,route,status}
 : maki_http_response_bytes_bucket{route,status,le}
+: maki_http_response_bytes_sum{route,status}
+: maki_http_response_bytes_count{route,status}
 : maki_http_inflight_requests
+
+== Metrics endpoint
+
+--v lang: text
+: maki_metrics_requests_total{method,status}
+: maki_metrics_request_duration_seconds_bucket{method,status,le}
+: maki_metrics_request_duration_seconds_sum{method,status}
+: maki_metrics_request_duration_seconds_count{method,status}
 
 == Response cache
 
@@ -159,14 +171,14 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 
 = 성공기준
 
-- [serve] `--metrics 127.0.0.1:PORT`로 별도 metrics listener를 켤 수 있다.
-- [serve] `GET /metrics`가 Prometheus text exposition 형태로 응답한다.
-- [serve] metrics disabled 상태에서는 기존 serve 동작과 출력이 바뀌지 않는다.
-- [serve] HTTP request duration, request total, response cache hit/miss, render duration, project reload total을 확인할 수 있다.
-- [serve] note path, query string, 문서 내용이 metric label/value로 노출되지 않는다.
-- [test] metrics endpoint smoke test가 있다.
-- [test] cache hit/miss counter가 요청에 따라 증가하는 테스트가 있다.
-- [test] reload 후 project gauge/cache gauge가 새 snapshot 기준으로 갱신되는 테스트가 있다.
+- [x] [serve] `--metrics 127.0.0.1:PORT`로 별도 metrics listener를 켤 수 있다.
+- [x] [serve] `GET /metrics`가 Prometheus text exposition 형태로 응답한다.
+- [x] [serve] metrics disabled 상태에서는 기존 serve 동작과 출력이 바뀌지 않는다.
+- [x] [serve] HTTP request duration, request total, response cache hit/miss, render duration, project reload total을 확인할 수 있다.
+- [x] [serve] note path, query string, 문서 내용이 metric label/value로 노출되지 않는다.
+- [x] [test] metrics endpoint smoke test가 있다.
+- [x] [test] cache hit/miss counter가 요청에 따라 증가하는 테스트가 있다.
+- [x] [test] reload 후 project gauge/cache gauge가 새 snapshot 기준으로 갱신되는 테스트가 있다.
 
 = 다음 최적화 질문
 

@@ -15,12 +15,13 @@ pub(crate) const PROJECT_FILE_NAME: &str = "maki.toml";
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
     html::{self, AssetMode, NoteInfo, RenderContext},
-    parser::{self, BlockKind, Inline},
+    metrics::Metrics,
+    parser::{self, BlockKind, Date, DateRange, DateStamp, DateStampKind, Inline},
 };
 
 #[derive(Debug)]
@@ -105,6 +106,8 @@ pub(crate) struct Maki {
     root: PathBuf,                  // canonical absolute path
     notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     index: NoteIndex,
+    #[allow(dead_code)]
+    date_index: DateIndex,
     external_links: Vec<ExternalLinkRef>,
     search_entries: Vec<SearchEntry>,
     config: MakiConfig,
@@ -130,6 +133,183 @@ pub(crate) struct SearchEntry {
 struct ExternalLinkRef {
     source_path: PathBuf,
     target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct DateIndex {
+    by_date: BTreeMap<Date, Vec<DateBacklink>>,
+    occurrences: BTreeMap<String, DateOccurrence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DateOccurrence {
+    id: String,
+    source_path: PathBuf,
+    note_ref: NoteRef,
+    note_title: String,
+    origin: DateOrigin,
+    marker: DateMarker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DateOrigin {
+    Inline,
+    Property { key: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DateMarker {
+    Single {
+        kind: DateStampKind,
+        date: Date,
+        raw: String,
+    },
+    Range {
+        kind: DateStampKind,
+        start: Date,
+        end: Date,
+        raw: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DateBacklink {
+    occurrence_id: String,
+    relation: DateRelation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DateRelation {
+    Single,
+    Range,
+    RangeStart,
+    RangeMiddle,
+    RangeEnd,
+}
+
+#[allow(dead_code)]
+impl DateIndex {
+    fn insert_occurrence(&mut self, occurrence: DateOccurrence) {
+        let id = occurrence.id.clone();
+
+        match &occurrence.marker {
+            DateMarker::Single { date, .. } => {
+                self.push_backlink(*date, &id, DateRelation::Single);
+            }
+            DateMarker::Range { start, end, .. } => {
+                let mut date = *start;
+                loop {
+                    let relation = if start == end {
+                        DateRelation::Range
+                    } else if date == *start {
+                        DateRelation::RangeStart
+                    } else if date == *end {
+                        DateRelation::RangeEnd
+                    } else {
+                        DateRelation::RangeMiddle
+                    };
+                    self.push_backlink(date, &id, relation);
+
+                    if date == *end {
+                        break;
+                    }
+                    let Some(next) = date.next_day() else {
+                        break;
+                    };
+                    date = next;
+                }
+            }
+        }
+
+        self.occurrences.insert(id, occurrence);
+    }
+
+    fn push_backlink(&mut self, date: Date, occurrence_id: &str, relation: DateRelation) {
+        self.by_date.entry(date).or_default().push(DateBacklink {
+            occurrence_id: occurrence_id.to_string(),
+            relation,
+        });
+    }
+
+    pub(crate) fn dates(&self) -> impl Iterator<Item = (&Date, &[DateBacklink])> {
+        self.by_date
+            .iter()
+            .map(|(date, backlinks)| (date, backlinks.as_slice()))
+    }
+
+    pub(crate) fn backlinks_for(&self, date: &Date) -> Option<&[DateBacklink]> {
+        self.by_date.get(date).map(Vec::as_slice)
+    }
+
+    pub(crate) fn occurrence(&self, id: &str) -> Option<&DateOccurrence> {
+        self.occurrences.get(id)
+    }
+}
+
+#[allow(dead_code)]
+impl DateOccurrence {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn source_path(&self) -> &Path {
+        &self.source_path
+    }
+
+    pub(crate) fn note_ref(&self) -> &NoteRef {
+        &self.note_ref
+    }
+
+    pub(crate) fn note_title(&self) -> &str {
+        &self.note_title
+    }
+
+    pub(crate) fn origin(&self) -> &DateOrigin {
+        &self.origin
+    }
+
+    pub(crate) fn marker(&self) -> &DateMarker {
+        &self.marker
+    }
+}
+
+#[allow(dead_code)]
+impl DateMarker {
+    pub(crate) fn kind(&self) -> DateStampKind {
+        match self {
+            Self::Single { kind, .. } | Self::Range { kind, .. } => *kind,
+        }
+    }
+
+    pub(crate) fn raw(&self) -> &str {
+        match self {
+            Self::Single { raw, .. } | Self::Range { raw, .. } => raw,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl DateBacklink {
+    pub(crate) fn occurrence_id(&self) -> &str {
+        &self.occurrence_id
+    }
+
+    pub(crate) fn relation(&self) -> DateRelation {
+        self.relation
+    }
+}
+
+#[allow(dead_code)]
+impl DateRelation {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Range => "range",
+            Self::RangeStart => "range start",
+            Self::RangeMiddle => "range",
+            Self::RangeEnd => "range end",
+        }
+    }
 }
 
 impl SearchEntry {
@@ -776,6 +956,10 @@ pub(crate) fn note_link_target_for_href(target: &str) -> Option<String> {
     }
 
     let path_part = target.strip_prefix('/').unwrap_or(target);
+    if path_part == "@" || path_part.starts_with("@/") || path_part.starts_with(".maki/") {
+        return None;
+    }
+
     let extension = Path::new(path_part)
         .extension()
         .and_then(|ext| ext.to_str());
@@ -784,6 +968,43 @@ pub(crate) fn note_link_target_for_href(target: &str) -> Option<String> {
         Some("maki") | None => Some(normalize_note_link_target(path_part)),
         Some(_) => None,
     }
+}
+
+pub(crate) fn date_page_path(date: Date) -> String {
+    format!("/@/dates/{date}")
+}
+
+pub(crate) fn inline_date_occurrence_id(source_path: &Path, ordinal: usize) -> String {
+    date_occurrence_id("inline", source_path, ordinal)
+}
+
+fn property_date_occurrence_id(source_path: &Path, ordinal: usize) -> String {
+    date_occurrence_id("property", source_path, ordinal)
+}
+
+pub(crate) fn date_occurrence_href(date: Date, occurrence_id: &str) -> String {
+    format!("{}#{occurrence_id}", date_page_path(date))
+}
+
+fn date_occurrence_id(kind: &str, source_path: &Path, ordinal: usize) -> String {
+    format!(
+        "date-{kind}-{}-{ordinal}",
+        stable_ascii_path_slug(source_path)
+    )
+}
+
+fn stable_ascii_path_slug(path: &Path) -> String {
+    let mut slug = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'a'..=b'z' | b'0'..=b'9' => slug.push(*byte as char),
+            b'A'..=b'Z' => slug.push(byte.to_ascii_lowercase() as char),
+            b'/' | b'.' | b'-' | b'_' => slug.push('-'),
+            _ => slug.push_str(&format!("x{byte:02x}")),
+        }
+    }
+
+    slug.trim_matches('-').to_string()
 }
 
 fn search_match_rank(title: &str, query: &str) -> Option<(usize, usize, usize)> {
@@ -961,6 +1182,8 @@ fn collect_inline_external_links(
             }
             Inline::NoteLink { .. }
             | Inline::Link { .. }
+            | Inline::DateStamp(_)
+            | Inline::DateRange(_)
             | Inline::Text(_)
             | Inline::SoftBreak
             | Inline::Code(_) => {}
@@ -1029,6 +1252,213 @@ fn collect_external_links(notes: &BTreeMap<NoteRef, Note>) -> Vec<ExternalLinkRe
     external_links.into_iter().collect()
 }
 
+struct DateIndexCollector<'a> {
+    index: &'a mut DateIndex,
+    source_path: &'a Path,
+    note_ref: NoteRef,
+    note_title: String,
+    inline_ordinal: usize,
+    property_ordinal: usize,
+}
+
+impl<'a> DateIndexCollector<'a> {
+    fn new(
+        index: &'a mut DateIndex,
+        source_path: &'a Path,
+        note_ref: NoteRef,
+        note_title: String,
+    ) -> Self {
+        Self {
+            index,
+            source_path,
+            note_ref,
+            note_title,
+            inline_ordinal: 0,
+            property_ordinal: 0,
+        }
+    }
+
+    fn push_occurrence(&mut self, id: String, origin: DateOrigin, marker: DateMarker) {
+        self.index.insert_occurrence(DateOccurrence {
+            id,
+            source_path: self.source_path.to_path_buf(),
+            note_ref: self.note_ref.clone(),
+            note_title: self.note_title.clone(),
+            origin,
+            marker,
+        });
+    }
+
+    fn push_inline_stamp(&mut self, stamp: DateStamp<'_>) {
+        self.inline_ordinal += 1;
+        self.push_occurrence(
+            inline_date_occurrence_id(self.source_path, self.inline_ordinal),
+            DateOrigin::Inline,
+            date_stamp_marker(stamp),
+        );
+    }
+
+    fn push_inline_range(&mut self, range: DateRange<'_>) {
+        self.inline_ordinal += 1;
+        self.push_occurrence(
+            inline_date_occurrence_id(self.source_path, self.inline_ordinal),
+            DateOrigin::Inline,
+            date_range_marker(range),
+        );
+    }
+
+    fn push_property_stamp(&mut self, key: &str, stamp: DateStamp<'_>) {
+        self.property_ordinal += 1;
+        self.push_occurrence(
+            property_date_occurrence_id(self.source_path, self.property_ordinal),
+            DateOrigin::Property {
+                key: key.to_string(),
+            },
+            date_stamp_marker(stamp),
+        );
+    }
+
+    fn push_property_range(&mut self, key: &str, range: DateRange<'_>) {
+        self.property_ordinal += 1;
+        self.push_occurrence(
+            property_date_occurrence_id(self.source_path, self.property_ordinal),
+            DateOrigin::Property {
+                key: key.to_string(),
+            },
+            date_range_marker(range),
+        );
+    }
+}
+
+fn date_stamp_marker(stamp: DateStamp<'_>) -> DateMarker {
+    DateMarker::Single {
+        kind: stamp.kind(),
+        date: stamp.date(),
+        raw: date_stamp_raw(stamp),
+    }
+}
+
+fn date_range_marker(range: DateRange<'_>) -> DateMarker {
+    DateMarker::Range {
+        kind: range.kind(),
+        start: range.start().date(),
+        end: range.end().date(),
+        raw: date_range_raw(range),
+    }
+}
+
+fn date_stamp_raw(stamp: DateStamp<'_>) -> String {
+    let (open, close) = match stamp.kind() {
+        DateStampKind::Date => ('[', ']'),
+        DateStampKind::Event => ('<', '>'),
+    };
+
+    format!("{open}{}{close}", stamp.body())
+}
+
+fn date_range_raw(range: DateRange<'_>) -> String {
+    format!(
+        "{}--{}",
+        date_stamp_raw(range.start()),
+        date_stamp_raw(range.end())
+    )
+}
+
+fn collect_inline_dates(collector: &mut DateIndexCollector<'_>, inlines: &[Inline<'_>]) {
+    for inline in inlines {
+        match inline {
+            Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp),
+            Inline::DateRange(range) => collector.push_inline_range(*range),
+            Inline::NoteLink { .. }
+            | Inline::Link { .. }
+            | Inline::Text(_)
+            | Inline::SoftBreak
+            | Inline::Code(_) => {}
+        }
+    }
+}
+
+fn collect_property_dates<'a>(
+    collector: &mut DateIndexCollector<'_>,
+    properties: impl Iterator<Item = (&'a str, &'a str)>,
+) {
+    for (key, value) in properties {
+        let inlines = parser::parse_inline(value);
+        for inline in &inlines {
+            match inline {
+                Inline::DateStamp(stamp) => collector.push_property_stamp(key, *stamp),
+                Inline::DateRange(range) => collector.push_property_range(key, *range),
+                Inline::NoteLink { .. }
+                | Inline::Link { .. }
+                | Inline::Text(_)
+                | Inline::SoftBreak
+                | Inline::Code(_) => {}
+            }
+        }
+    }
+}
+
+fn collect_block_dates(collector: &mut DateIndexCollector<'_>, block: &parser::Block<'_>) {
+    collect_property_dates(collector, block.properties());
+
+    match &block.kind {
+        BlockKind::Paragraph { body } => collect_inline_dates(collector, body),
+        BlockKind::Heading { body, .. } => {
+            let inlines = parser::parse_inline(body);
+            collect_inline_dates(collector, &inlines);
+        }
+        BlockKind::List { items } => {
+            for item in items {
+                collect_inline_dates(collector, &item.body);
+                for child in &item.children {
+                    collect_block_dates(collector, child);
+                }
+            }
+        }
+        BlockKind::Quote { lines } => collect_maki_lines_dates(collector, lines),
+        BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
+            collect_maki_lines_dates(collector, lines)
+        }
+        BlockKind::Code { .. } | BlockKind::Container { .. } => {}
+    }
+}
+
+fn collect_maki_lines_dates(collector: &mut DateIndexCollector<'_>, lines: &[&str]) {
+    let source = lines.join("\n");
+    let parsed = parser::parse(&source);
+
+    collect_property_dates(collector, parsed.document.properties());
+    for block in &parsed.document.blocks {
+        collect_block_dates(collector, block);
+    }
+}
+
+fn collect_date_index(notes: &BTreeMap<NoteRef, Note>) -> DateIndex {
+    let mut date_index = DateIndex::default();
+
+    for note in notes.values() {
+        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+            continue;
+        };
+        let parsed = parser::parse(&source);
+        let note_ref = note.note_ref();
+        let note_title = parsed
+            .document
+            .title()
+            .unwrap_or(note.file_stem())
+            .to_string();
+        let mut collector =
+            DateIndexCollector::new(&mut date_index, note.source_path(), note_ref, note_title);
+
+        collect_property_dates(&mut collector, parsed.document.properties());
+        for block in &parsed.document.blocks {
+            collect_block_dates(&mut collector, block);
+        }
+    }
+
+    date_index
+}
+
 fn collect_inline_link_diagnostics(
     diagnostics: &mut Vec<ProjectDiagnostic>,
     maki: &Maki,
@@ -1054,7 +1484,11 @@ fn collect_inline_link_diagnostics(
                     );
                 }
             }
-            Inline::Text(_) | Inline::SoftBreak | Inline::Code(_) => {}
+            Inline::DateStamp(_)
+            | Inline::DateRange(_)
+            | Inline::Text(_)
+            | Inline::SoftBreak
+            | Inline::Code(_) => {}
         }
     }
 }
@@ -1315,6 +1749,11 @@ impl Maki {
         &self.search_entries
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn date_index(&self) -> &DateIndex {
+        &self.date_index
+    }
+
     pub(crate) fn search_titles(&self, query: &str, limit: usize) -> Vec<SearchEntry> {
         let query = normalize_key(query.trim());
 
@@ -1343,6 +1782,14 @@ impl Maki {
     }
 
     pub(crate) fn load_with_config(root: &Path, config: MakiConfig) -> Result<Self, Error> {
+        Self::load_with_config_metered(root, config, &Metrics::disabled())
+    }
+
+    pub(crate) fn load_with_config_metered(
+        root: &Path,
+        config: MakiConfig,
+        metrics: &Metrics,
+    ) -> Result<Self, Error> {
         if !root.exists() {
             return Err(Error::RootNotFound(root.to_path_buf()));
         }
@@ -1353,22 +1800,34 @@ impl Maki {
         let root =
             std::fs::canonicalize(root).map_err(|_source| Error::RootNotFound(root.to_owned()))?;
 
+        let started = Instant::now();
         let files = list_maki_files(&root)?;
+        metrics.record_project_load_phase("list_files", started.elapsed());
 
+        let started = Instant::now();
         let mut notes = BTreeMap::new();
 
         for file in &files {
             let note = Note::load(&root, file)?;
             notes.insert(note.note_ref(), note);
         }
+        metrics.record_project_load_phase("load_notes", started.elapsed());
+
+        let started = Instant::now();
         let index = NoteIndex::build(notes.keys());
+        metrics.record_project_load_phase("index", started.elapsed());
+
+        let started = Instant::now();
+        let date_index = collect_date_index(&notes);
         let external_links = collect_external_links(&notes);
         let search_entries = notes.values().map(Note::search_entry).collect();
+        metrics.record_project_load_phase("metadata", started.elapsed());
 
         Ok(Self {
             root,
             notes,
             index,
+            date_index,
             external_links,
             search_entries,
             config,
@@ -1403,7 +1862,9 @@ impl Maki {
 
         Ok(html::render_document_with_context(
             &parsed.document,
-            RenderContext::project(&resolve_note_link, &get_note_info).with_asset_mode(asset_mode),
+            RenderContext::project(&resolve_note_link, &get_note_info)
+                .with_asset_mode(asset_mode)
+                .with_date_source_path(path),
         ))
     }
 
@@ -1829,6 +2290,54 @@ See https://down.example/path.
                         || target == "https://code.example"
             )
         }));
+    }
+
+    #[test]
+    fn date_index_collects_inline_property_and_range_dates() {
+        let project = temp_project("date-index");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"--^ title: Start
+--^ date: [2026-08-15]
+
+Meet <2026-08-16 토>.
+
+Track [2026-08-17]--[2026-08-19]."#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let property_date = Date::parse("2026-08-15").unwrap();
+        let middle_date = Date::parse("2026-08-18").unwrap();
+
+        let property_backlinks = maki.date_index().backlinks_for(&property_date).unwrap();
+        assert_eq!(property_backlinks.len(), 1);
+        let property_occurrence = maki
+            .date_index()
+            .occurrence(property_backlinks[0].occurrence_id())
+            .unwrap();
+        assert!(matches!(
+            property_occurrence.origin(),
+            DateOrigin::Property { key } if key == "date"
+        ));
+        assert_eq!(property_occurrence.marker().raw(), "[2026-08-15]");
+
+        let middle_backlinks = maki.date_index().backlinks_for(&middle_date).unwrap();
+        assert_eq!(middle_backlinks.len(), 1);
+        assert_eq!(middle_backlinks[0].relation(), DateRelation::RangeMiddle);
+        let middle_occurrence = maki
+            .date_index()
+            .occurrence(middle_backlinks[0].occurrence_id())
+            .unwrap();
+        assert_eq!(
+            middle_occurrence.marker().raw(),
+            "[2026-08-17]--[2026-08-19]"
+        );
+
+        let html = maki.render_html(Path::new("start.maki")).unwrap();
+        assert!(html.contains("href=\"/@/dates/2026-08-16#date-inline-start-maki-1\""));
+        assert!(html.contains("href=\"/@/dates/2026-08-17#date-inline-start-maki-2\""));
+        assert!(html.contains("href=\"/@/dates/2026-08-19#date-inline-start-maki-2\""));
     }
 
     #[test]

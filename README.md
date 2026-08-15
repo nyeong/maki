@@ -9,10 +9,11 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 - `[[note]]`, `[title](note)`, `[title](https://...)`, plain HTTP/HTTPS URL을 링크로 렌더링한다.
 - wikilink는 exact path를 우선하고, 그 다음 case-insensitive path/stem lookup을 사용한다.
 - paragraph, heading, property, quote, code, unordered/ordered list, hyphen-fenced container를 파싱한다.
-- project page에는 home, diagnostics, title search가 있는 navigation shell이 붙는다.
-- `/@/`에서 diagnostics를 보고, `/.maki/search`와 `/.maki/search-index.json`에서 title search를 쓸 수 있다.
+- project page에는 home, meta, title search가 있는 navigation shell이 붙는다.
+- `/@/diagnostics`에서 diagnostics를 보고, `/@/dates`에서 date index를 보며, `/.maki/search`와 `/.maki/search-index.json`에서 title search를 쓸 수 있다.
 - local serve는 live reload를 지원한다.
 - `serve --git`는 git repository를 mirror/checkout하고 주기적으로 branch를 poll한다.
+- `serve --metrics HOST:PORT`는 별도 listener에서 Prometheus `/metrics` endpoint를 제공한다.
 
 ## Goals
 
@@ -42,6 +43,7 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 maki serve docs
 maki build docs/index.maki
 maki serve --git https://example.invalid/maki.git --branch main --state-dir /var/lib/maki/docs --fetch-interval 60s
+maki serve docs --metrics 127.0.0.1:4041
 ```
 
 `maki serve <path>`는 `<path>` 또는 상위 디렉터리에서 `maki.toml`을 찾는다.
@@ -67,10 +69,21 @@ home = "index"
 - `/`: configured home으로 redirect
 - `/<note>`: rendered note page
 - `/<note>.maki`: source text
-- `/@/`: diagnostics page
+- `/@/`: meta index
+- `/@/diagnostics`: diagnostics page
+- `/@/dates`: date index
+- `/@/dates/<date>`: date backlinks
 - `/.maki/search`: title search page
 - `/.maki/search-index.json`: title search index
 - `/.maki/assets/...`: runtime CSS/JS assets
+
+## Metrics
+
+`maki serve --metrics 127.0.0.1:4041` enables a separate Prometheus text
+exposition listener. Only `GET /metrics` is served on that listener. Metrics
+use low-cardinality labels such as `route`, `kind`, `status`, `cache`,
+`source`, and `result`; note paths, query strings, git commit hashes, raw
+errors, and document content are not exported as labels.
 
 ## NixOS
 
@@ -95,6 +108,7 @@ or a git repository.
               targets.docs = {
                 git.url = "https://example.invalid/maki.git";
                 port = 4000;
+                metrics.port = 4041;
                 openFirewall = true;
               };
             };
@@ -108,7 +122,8 @@ or a git repository.
 Git targets default to `branch = "main"`, `fetchInterval = "60s"`, and
 `stateDir = "/var/lib/maki/<target-name>"`. Put `maki.toml` at the repository
 root and use `source = "docs"` when the served Maki project lives in a
-subdirectory.
+subdirectory. Metrics listeners default to `host = "127.0.0.1"` when
+`metrics.port` is set.
 
 For a local source target, set `source` instead of `git`:
 

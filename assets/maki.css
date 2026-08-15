@@ -155,7 +155,8 @@ body {
 
 .maki-search-summary,
 .maki-search-empty,
-.maki-not-found-summary {
+.maki-not-found-summary,
+.maki-date-empty {
   color: var(--muted);
 }
 
@@ -176,6 +177,86 @@ body {
   flex-shrink: 0;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.maki-date-stamp {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.maki-date-stamp-reference {
+  color: #0b6b5f;
+}
+
+.maki-date-stamp-event {
+  color: #8a3d00;
+}
+
+.maki-date-list,
+.maki-date-backlinks {
+  padding-left: 0;
+  list-style: none;
+}
+
+.maki-date-list li {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.maki-date-list span {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.maki-date-backlink {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.maki-date-backlink-main {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.maki-date-backlink-source {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.maki-date-backlink-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.3rem;
+}
+
+.maki-date-badge {
+  display: inline-flex;
+  min-height: 1.35rem;
+  align-items: center;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.maki-date-backlink-range,
+.maki-date-backlink-range-start,
+.maki-date-backlink-range-middle,
+.maki-date-backlink-range-end {
+  border-left: 3px solid #8a7a2e;
+  padding-left: 0.7rem;
 }
 
 .maki-toc {

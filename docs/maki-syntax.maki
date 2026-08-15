@@ -333,9 +333,13 @@ inline prefix는 두 종료가 있음
 - [link text](link target)
 - [[Note link]]
 - [^footnote]
-- date/datetime
-  - scheduled date/datetime: <2026-06-06>, <2026-06-06 20:00>
-  - formatted date/datetime: [2026-06-06], [2026-06-06 20:00]
+- date
+  - date marker: [2026-06-06], [2026-06-06 Sat]
+  - event marker: <2026-06-06>, <2026-06-06 Sat>
+  - range marker: [2026-06-06]--[2026-06-08], <2026-06-06>--<2026-06-08>
+  - marker body에서 첫 `yyyy-mm-dd`가 index key이며, 뒤의 요일/시간 텍스트는 표시용으로 보존한다.
+  - visible inline과 property value의 date marker는 `/@/dates`에서 날짜별 backlink로 볼 수 있다.
+  - range marker는 시작일, 종료일, 중간 날짜의 backlink에 모두 나타나며 관계 label로 구분한다.
 
 --v milestone: later
 == Inline Container

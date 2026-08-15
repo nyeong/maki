@@ -81,6 +81,38 @@ let
         '';
       };
 
+      metrics = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.submodule {
+            options = {
+              host = lib.mkOption {
+                type = lib.types.str;
+                default = "127.0.0.1";
+                example = "127.0.0.1";
+                description = "Host address for the Prometheus metrics listener.";
+              };
+
+              port = lib.mkOption {
+                type = lib.types.port;
+                example = 4041;
+                description = "TCP port for the Prometheus metrics listener.";
+              };
+            };
+          }
+        );
+        default = null;
+        example = lib.literalExpression ''
+          {
+            host = "127.0.0.1";
+            port = 4041;
+          }
+        '';
+        description = ''
+          Optional Prometheus metrics listener. When enabled, maki serves
+          Prometheus text exposition at /metrics on this separate listener.
+        '';
+      };
+
       openFirewall = lib.mkOption {
         type = lib.types.bool;
         default = false;
@@ -106,6 +138,13 @@ let
     lib.optionals (value != null) [
       option
       value
+    ];
+
+  metricsArgs =
+    target:
+    lib.optionals (target.metrics != null) [
+      "--metrics"
+      "${target.metrics.host}:${toString target.metrics.port}"
     ];
 
   sourceArgs =
@@ -137,7 +176,8 @@ let
       "--port"
       (toString target.port)
     ]
-    ++ optionalArg "--index-redirect" target.indexRedirect;
+    ++ optionalArg "--index-redirect" target.indexRedirect
+    ++ metricsArgs target;
 
   serviceFor =
     instance:
@@ -206,9 +246,18 @@ let
     ]
   ) instances;
 
-  bindAddresses = map (
+  appBindAddresses = map (
     instance: "${instance.target.host}:${toString instance.target.port}"
   ) instances;
+
+  metricsBindAddresses = lib.concatMap (
+    instance:
+    lib.optionals (instance.target.metrics != null) [
+      "${instance.target.metrics.host}:${toString instance.target.metrics.port}"
+    ]
+  ) instances;
+
+  bindAddresses = appBindAddresses ++ metricsBindAddresses;
 in
 {
   options.services.maki = {
