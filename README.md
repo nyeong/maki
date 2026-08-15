@@ -23,6 +23,49 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 
 - 문법: [maki-syntax](docs/maki-syntax.maki)
 
+## NixOS
+
+Maki can run multiple named targets from the NixOS module. Each target becomes
+its own `maki-<name>.service`.
+
+```nix
+{
+  inputs.maki.url = "git+https://git.eska.nyeong.me/nyeong/maki";
+
+  outputs =
+    { maki, nixpkgs, ... }:
+    {
+      nixosConfigurations.nixbox = nixpkgs.lib.nixosSystem {
+        modules = [
+          maki.nixosModules.default
+          {
+            services.maki = {
+              enable = true;
+
+              targets.hanassig = {
+                git.url = "https://git.eska.nyeong.me/nyeong/hanassig";
+                port = 4000;
+                openFirewall = true;
+              };
+
+              targets.docs = {
+                git.url = "https://git.eska.nyeong.me/nyeong/maki";
+                port = 4001;
+                openFirewall = true;
+              };
+            };
+          }
+        ];
+      };
+    };
+}
+```
+
+Git targets default to `branch = "main"`, `fetchInterval = "60s"`, and
+`stateDir = "/var/lib/maki/<target-name>"`. Put `maki.toml` at the repository
+root and use `source = "docs"` when the served Maki project lives in a
+subdirectory.
+
 ## Development
 
 ```

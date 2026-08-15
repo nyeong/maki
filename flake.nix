@@ -73,7 +73,7 @@
           moduleEvalSystem = if lib.hasSuffix "-linux" system then system else "x86_64-linux";
           moduleEvalPkgs = nixpkgs.legacyPackages.${moduleEvalSystem};
           fakeMaki = moduleEvalPkgs.writeShellScriptBin "maki" "exit 0";
-          moduleEval = lib.nixosSystem {
+          targetsModuleEval = lib.nixosSystem {
             system = moduleEvalSystem;
             modules = [
               self.nixosModules.maki
@@ -81,18 +81,50 @@
                 services.maki = {
                   enable = true;
                   package = fakeMaki;
-                  source = "/srv/hanassig";
-                  host = "0.0.0.0";
-                  port = 8080;
-                  indexRedirect = "index";
-                  openFirewall = true;
+                  targets = {
+                    hanassig = {
+                      git.url = "https://git.eska.nyeong.me/nyeong/hanassig";
+                      host = "0.0.0.0";
+                      port = 8080;
+                      openFirewall = true;
+                    };
+                    docs = {
+                      git.url = "https://git.eska.nyeong.me/nyeong/maki";
+                      git.fetchInterval = "5m";
+                      port = 8081;
+                      openFirewall = true;
+                    };
+                    local = {
+                      source = "/srv/local-maki";
+                      port = 8082;
+                      indexRedirect = "index";
+                    };
+                  };
                 };
               }
             ];
           };
-          execStart = builtins.unsafeDiscardStringContext moduleEval.config.systemd.services.maki.serviceConfig.ExecStart;
-          portIsOpen = builtins.elem 8080 moduleEval.config.networking.firewall.allowedTCPPorts;
-          wantedByMultiUser = builtins.elem "multi-user.target" moduleEval.config.systemd.services.maki.wantedBy;
+          targetService = name: targetsModuleEval.config.systemd.services."maki-${name}";
+          serviceExecStart =
+            name: builtins.unsafeDiscardStringContext (targetService name).serviceConfig.ExecStart;
+          hanassigExecStart = serviceExecStart "hanassig";
+          docsExecStart = serviceExecStart "docs";
+          localExecStart = serviceExecStart "local";
+          hanassigStateDirectory = builtins.unsafeDiscardStringContext (targetService "hanassig")
+            .serviceConfig.StateDirectory;
+          targetsPorts = targetsModuleEval.config.networking.firewall.allowedTCPPorts;
+          targetsPortsAreOpen = builtins.all (port: builtins.elem port targetsPorts) [
+            8080
+            8081
+          ];
+          localPortIsClosed = !(builtins.elem 8082 targetsPorts);
+          wantedByMultiUser =
+            builtins.all (name: builtins.elem "multi-user.target" (targetService name).wantedBy)
+              [
+                "hanassig"
+                "docs"
+                "local"
+              ];
         in
         {
           pre-commit-check = inputs.git-hooks.lib.${system}.run {
@@ -138,18 +170,50 @@
               '';
 
           nixos-module-eval = pkgs.runCommand "maki-nixos-module-eval" { } ''
-            exec_start=${lib.escapeShellArg execStart}
-            case "$exec_start" in
-              *"serve /srv/hanassig --host 0.0.0.0 --port 8080 --index-redirect index"*) ;;
+            hanassig_exec_start=${lib.escapeShellArg hanassigExecStart}
+            case "$hanassig_exec_start" in
+              *"serve --git https://git.eska.nyeong.me/nyeong/hanassig --branch main --state-dir /var/lib/maki/hanassig --fetch-interval 60s --host 0.0.0.0 --port 8080"*) ;;
               *)
-                echo "unexpected ExecStart: $exec_start"
+                echo "unexpected hanassig ExecStart: $hanassig_exec_start"
+                exit 1
+                ;;
+            esac
+            case "$hanassig_exec_start" in
+              *"--index-redirect"*)
+                echo "hanassig target should not override maki.toml home by default"
                 exit 1
                 ;;
             esac
 
-            firewall_open=${lib.escapeShellArg (if portIsOpen then "yes" else "no")}
+            docs_exec_start=${lib.escapeShellArg docsExecStart}
+            case "$docs_exec_start" in
+              *"serve --git https://git.eska.nyeong.me/nyeong/maki --branch main --state-dir /var/lib/maki/docs --fetch-interval 5m --host 127.0.0.1 --port 8081"*) ;;
+              *)
+                echo "unexpected docs ExecStart: $docs_exec_start"
+                exit 1
+                ;;
+            esac
+
+            local_exec_start=${lib.escapeShellArg localExecStart}
+            case "$local_exec_start" in
+              *"serve /srv/local-maki --host 127.0.0.1 --port 8082 --index-redirect index"*) ;;
+              *)
+                echo "unexpected local ExecStart: $local_exec_start"
+                exit 1
+                ;;
+            esac
+
+            state_directory=${lib.escapeShellArg hanassigStateDirectory}
+            if [ "$state_directory" != maki/hanassig ]; then
+              echo "expected StateDirectory=maki/hanassig, got $state_directory"
+              exit 1
+            fi
+
+            firewall_open=${
+              lib.escapeShellArg (if targetsPortsAreOpen && localPortIsClosed then "yes" else "no")
+            }
             if [ "$firewall_open" != yes ]; then
-              echo "expected firewall port 8080 to be open"
+              echo "expected firewall ports 8080 and 8081 to be open, and 8082 to stay closed"
               exit 1
             fi
 
