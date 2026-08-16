@@ -1756,6 +1756,14 @@ fn table_date_context(header: &parser::TableRow<'_>, rows: &[parser::TableRow<'_
     truncate_date_context(context)
 }
 
+fn table_body_row_date_context(header_context: &str, row: &parser::TableRow<'_>) -> String {
+    let mut context = table_row_date_context(row);
+    context.push('\n');
+    context.push_str(header_context);
+
+    truncate_date_context(context)
+}
+
 fn block_date_context(block: &parser::Block<'_>) -> String {
     let context = match &block.kind {
         BlockKind::Paragraph { body } => inline_date_context(body),
@@ -1895,9 +1903,13 @@ fn collect_block_dates(
         }
         BlockKind::Quote { lines } => collect_maki_lines_dates(collector, lines, context),
         BlockKind::Table { header, rows, .. } => {
-            collect_table_row_dates(collector, header, &block_context);
+            let table_header_context = table_row_date_context(header);
+            let header_context = context.contextualize(&table_header_context);
+            collect_table_row_dates(collector, header, &header_context);
             for row in rows {
-                collect_table_row_dates(collector, row, &block_context);
+                let row_context =
+                    context.contextualize(&table_body_row_date_context(&table_header_context, row));
+                collect_table_row_dates(collector, row, &row_context);
             }
         }
         BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
@@ -2945,6 +2957,38 @@ Target [2026-08-18]."#,
             heading_occurrence.context(),
             "= Roadmap\n== Sprint [2026-08-16]"
         );
+    }
+
+    #[test]
+    fn date_index_context_for_table_dates_includes_heading_row_and_table_header() {
+        let project = temp_project("date-index-table-context");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"--^ title: Start
+
+= Releases
+
+| Date | Summary | Owner |
+|---+---+---|
+| [2026-08-15] | Ship alpha | Nyeong |
+| [2026-08-16] | Follow up | Codex |"#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let date = Date::parse("2026-08-15").unwrap();
+
+        let backlinks = maki.date_index().backlinks_for(&date).unwrap();
+        let occurrence = maki
+            .date_index()
+            .occurrence(backlinks[0].occurrence_id())
+            .unwrap();
+
+        assert_eq!(
+            occurrence.context(),
+            "= Releases\n| [2026-08-15] | Ship alpha | Nyeong |\n| Date | Summary | Owner |"
+        );
+        assert!(!occurrence.context().contains("Follow up"));
     }
 
     #[test]
