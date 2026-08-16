@@ -79,10 +79,10 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 허용 label:
 
 - `method`: `GET`, `HEAD`
-- `route`: `home`, `note`, `source`, `meta`, `diagnostics`, `dates`, `date`, `search`, `search_index`, `asset`, `events`, `not_found`
+- `route`: `home`, `note`, `source`, `meta`, `recents`, `diagnostics`, `dates`, `date`, `search`, `search_index`, `asset`, `events`, `not_found`
 - `status`: exact HTTP status code. 예: `200`, `302`, `404`, `500`
 - `cache`: `hit`, `miss`
-- `kind`: `note`, `meta`, `diagnostics`, `dates`, `date`, `search_index`, `search_page`
+- `kind`: `note`, `meta`, `recents`, `diagnostics`, `dates`, `date`, `search_index`, `search_page`
 - `source`: `directory`, `git`
 - `result`: `ok`, `error`, `unchanged`, `updated`, `skipped`
 - `phase`: project load phase. `list_files`, `load_notes`, `index`, `metadata`, `render`, `write`

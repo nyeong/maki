@@ -15,7 +15,7 @@ pub(crate) const PROJECT_FILE_NAME: &str = "maki.toml";
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
@@ -110,6 +110,7 @@ pub(crate) struct Maki {
     date_index: DateIndex,
     external_links: Vec<ExternalLinkRef>,
     search_entries: Vec<SearchEntry>,
+    recent_entries: Vec<RecentEntry>,
     config: MakiConfig,
 }
 
@@ -120,6 +121,8 @@ pub(crate) struct Note {
 
     /// 프로젝트 root 기준 상대경로
     project_path: PathBuf,
+
+    modified: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +130,22 @@ pub(crate) struct SearchEntry {
     title: String,
     path: String,
     source_path: String,
+}
+
+#[derive(Clone)]
+struct NoteMetadataEntry {
+    title: String,
+    path: String,
+    source_path: String,
+    modified: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecentEntry {
+    title: String,
+    path: String,
+    source_path: String,
+    modified: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -354,6 +373,24 @@ impl SearchEntry {
 
     pub(crate) fn source_path(&self) -> &str {
         &self.source_path
+    }
+}
+
+impl RecentEntry {
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) fn source_path(&self) -> &str {
+        &self.source_path
+    }
+
+    pub(crate) fn modified(&self) -> Option<SystemTime> {
+        self.modified
     }
 }
 
@@ -743,11 +780,12 @@ impl Note {
             .to_string()
     }
 
-    fn search_entry(&self) -> SearchEntry {
-        SearchEntry {
+    fn metadata_entry(&self) -> NoteMetadataEntry {
+        NoteMetadataEntry {
             title: self.title(),
             path: self.note_ref().web_path(),
             source_path: self.source_path().display().to_string(),
+            modified: self.modified,
         }
     }
 
@@ -774,7 +812,10 @@ impl Note {
         let root = root.as_ref();
         let project_path = project_path.as_ref();
         let absolute_path = root.join(project_path);
-        if !absolute_path.exists() || !absolute_path.is_file() {
+        let metadata = absolute_path
+            .metadata()
+            .map_err(|_source| Error::NoteNotFound(absolute_path.to_path_buf()))?;
+        if !metadata.is_file() {
             return Err(Error::NoteNotFound(absolute_path.to_path_buf()));
         }
 
@@ -784,7 +825,27 @@ impl Note {
         Ok(Self {
             absolute_path,
             project_path: project_path.to_path_buf(),
+            modified: metadata.modified().ok(),
         })
+    }
+}
+
+impl NoteMetadataEntry {
+    fn into_search_entry(self) -> SearchEntry {
+        SearchEntry {
+            title: self.title,
+            path: self.path,
+            source_path: self.source_path,
+        }
+    }
+
+    fn into_recent_entry(self) -> RecentEntry {
+        RecentEntry {
+            title: self.title,
+            path: self.path,
+            source_path: self.source_path,
+            modified: self.modified,
+        }
     }
 }
 
@@ -1416,6 +1477,19 @@ fn collect_external_links(notes: &BTreeMap<NoteRef, Note>) -> Vec<ExternalLinkRe
     }
 
     external_links.into_iter().collect()
+}
+
+fn collect_recent_entries(mut entries: Vec<NoteMetadataEntry>) -> Vec<RecentEntry> {
+    entries.sort_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| left.source_path.cmp(&right.source_path))
+    });
+    entries
+        .into_iter()
+        .map(NoteMetadataEntry::into_recent_entry)
+        .collect()
 }
 
 struct DateIndexCollector<'a> {
@@ -2284,6 +2358,10 @@ impl Maki {
         &self.search_entries
     }
 
+    pub(crate) fn recent_entries(&self) -> &[RecentEntry] {
+        &self.recent_entries
+    }
+
     #[allow(dead_code)]
     pub(crate) fn date_index(&self) -> &DateIndex {
         &self.date_index
@@ -2355,7 +2433,13 @@ impl Maki {
         let started = Instant::now();
         let date_index = collect_date_index(&notes);
         let external_links = collect_external_links(&notes);
-        let search_entries = notes.values().map(Note::search_entry).collect();
+        let note_metadata_entries = notes.values().map(Note::metadata_entry).collect::<Vec<_>>();
+        let search_entries = note_metadata_entries
+            .iter()
+            .cloned()
+            .map(NoteMetadataEntry::into_search_entry)
+            .collect();
+        let recent_entries = collect_recent_entries(note_metadata_entries);
         metrics.record_project_load_phase("metadata", started.elapsed());
 
         Ok(Self {
@@ -2365,6 +2449,7 @@ impl Maki {
             date_index,
             external_links,
             search_entries,
+            recent_entries,
             config,
         })
     }
@@ -2458,7 +2543,7 @@ mod tests {
     use std::{
         cell::RefCell,
         fs,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     struct TestProject {
@@ -3009,6 +3094,43 @@ Target [2026-08-18]."#,
                 && entry.path() == "/beta-note"
                 && entry.source_path() == "beta-note.maki"
         }));
+    }
+
+    #[test]
+    fn recent_entries_sort_by_modified_descending_then_source_path() {
+        let base = UNIX_EPOCH + Duration::from_secs(1_000);
+        let entries = collect_recent_entries(vec![
+            NoteMetadataEntry {
+                title: "Older".to_string(),
+                path: "/older".to_string(),
+                source_path: "older.maki".to_string(),
+                modified: Some(base),
+            },
+            NoteMetadataEntry {
+                title: "Tie B".to_string(),
+                path: "/tie-b".to_string(),
+                source_path: "b.maki".to_string(),
+                modified: Some(base + Duration::from_secs(10)),
+            },
+            NoteMetadataEntry {
+                title: "Tie A".to_string(),
+                path: "/tie-a".to_string(),
+                source_path: "a.maki".to_string(),
+                modified: Some(base + Duration::from_secs(10)),
+            },
+            NoteMetadataEntry {
+                title: "Unknown".to_string(),
+                path: "/unknown".to_string(),
+                source_path: "unknown.maki".to_string(),
+                modified: None,
+            },
+        ]);
+
+        let titles = entries
+            .iter()
+            .map(|entry| entry.title())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, vec!["Tie A", "Tie B", "Older", "Unknown"]);
     }
 
     #[test]

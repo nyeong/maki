@@ -3,12 +3,14 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     maki::{
         self, DateIndex, DateOccurrence, DateOrigin, DatePeriod, DateRelation, NoteLinkResolution,
-        NoteRef, ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary, SearchEntry,
+        NoteRef, ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary, RecentEntry,
+        SearchEntry,
     },
     parser::{
         self, BlockKind, Date, DateRange, DateStamp, DateStampKind, Document, Inline, ListItem,
@@ -20,6 +22,7 @@ const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
 const SEARCH_SCRIPT: &str = include_str!("../assets/maki-search.js");
 const TOC_SCRIPT: &str = include_str!("../assets/maki-toc.js");
 const META_TEMPLATE: &str = include_str!("../templates/meta.maki");
+const RECENTS_TEMPLATE: &str = include_str!("../templates/recents.maki");
 const DATES_INDEX_TEMPLATE: &str = include_str!("../templates/dates-index.maki");
 const DATE_PERIOD_TEMPLATE: &str = include_str!("../templates/date-period.maki");
 const DIAGNOSTICS_TEMPLATE: &str = include_str!("../templates/diagnostics.maki");
@@ -800,6 +803,13 @@ pub(crate) fn render_meta_index_page(asset_mode: AssetMode) -> String {
     render_project_maki_source(META_TEMPLATE, asset_mode)
 }
 
+pub(crate) fn render_recents_page(entries: &[RecentEntry], asset_mode: AssetMode) -> String {
+    let body = recents_page_body_source(entries);
+    let source = render_maki_template(RECENTS_TEMPLATE, &[("{{body}}", &body)]);
+
+    render_project_maki_source(&source, asset_mode)
+}
+
 pub(crate) fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
     let body = date_index_page_body_source(date_index);
     let source = render_maki_template(DATES_INDEX_TEMPLATE, &[("{{body}}", &body)]);
@@ -834,6 +844,72 @@ fn render_project_maki_source(source: &str, asset_mode: AssetMode) -> String {
             .with_asset_mode(asset_mode)
             .with_project_navigation(),
     )
+}
+
+fn recents_page_body_source(entries: &[RecentEntry]) -> String {
+    let mut source = String::new();
+
+    if entries.is_empty() {
+        source.push_str("No notes.\n");
+        return source;
+    }
+
+    for entry in entries {
+        source.push_str("- ");
+        push_maki_closed_link(&mut source, entry.title(), entry.path());
+        source.push(' ');
+        let modified = modified_time_label(entry.modified());
+        push_maki_inline_code(&mut source, &modified);
+        source.push_str(" (");
+        push_maki_single_line(&mut source, entry.source_path());
+        source.push_str(")\n");
+    }
+
+    source
+}
+
+fn modified_time_label(modified: Option<SystemTime>) -> String {
+    let Some(modified) = modified else {
+        return "unknown".to_string();
+    };
+    let Ok(duration) = modified.duration_since(UNIX_EPOCH) else {
+        return "before 1970".to_string();
+    };
+
+    format_unix_seconds_utc(duration.as_secs())
+}
+
+fn format_unix_seconds_utc(seconds: u64) -> String {
+    const SECONDS_PER_DAY: u64 = 86_400;
+
+    let days = (seconds / SECONDS_PER_DAY) as i64;
+    let seconds_of_day = seconds % SECONDS_PER_DAY;
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let (year, month, day) = civil_from_unix_days(days);
+
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+}
+
+fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
+    // Howard Hinnant's civil-from-days algorithm for proleptic Gregorian UTC dates.
+    let shifted_days = days + 719_468;
+    let era = if shifted_days >= 0 {
+        shifted_days
+    } else {
+        shifted_days - 146_096
+    } / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+
+    (year as i32, month as u32, day as u32)
 }
 
 fn date_index_page_body_source(date_index: &DateIndex) -> String {
@@ -1325,6 +1401,16 @@ hello <maki> & friends
         assert!(!html.contains("<style>:root"));
         assert!(!html.contains(SEARCH_SCRIPT));
         assert!(!html.contains(TOC_SCRIPT));
+    }
+
+    #[test]
+    fn format_unix_seconds_utc_formats_known_instants() {
+        assert_eq!(format_unix_seconds_utc(0), "1970-01-01 00:00 UTC");
+        assert_eq!(format_unix_seconds_utc(951_782_400), "2000-02-29 00:00 UTC");
+        assert_eq!(
+            format_unix_seconds_utc(1_704_067_199),
+            "2023-12-31 23:59 UTC"
+        );
     }
 
     #[test]

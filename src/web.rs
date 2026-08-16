@@ -37,6 +37,8 @@ use crate::{RunError, http};
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
 const META_PATH: &str = "/@/";
 const META_PATH_NO_SLASH: &str = "/@";
+const RECENTS_PATH: &str = "/@/recents";
+const RECENTS_PATH_WITH_SLASH: &str = "/@/recents/";
 const DIAGNOSTICS_PATH: &str = "/@/diagnostics";
 const DIAGNOSTICS_PATH_WITH_SLASH: &str = "/@/diagnostics/";
 const DATES_PATH: &str = "/@/dates";
@@ -104,6 +106,7 @@ impl ProjectState {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ResponseCacheKey {
     MetaIndex,
+    Recents,
     Diagnostics,
     DatesIndex,
     DatePeriodPage(DatePeriod),
@@ -115,6 +118,7 @@ impl ResponseCacheKey {
     fn kind(&self) -> &'static str {
         match self {
             Self::MetaIndex => "meta",
+            Self::Recents => "recents",
             Self::Diagnostics => "diagnostics",
             Self::DatesIndex => "dates",
             Self::DatePeriodPage(_) => "date",
@@ -600,6 +604,12 @@ fn render_cacheable_response(
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
+        ResponseCacheKey::Recents => {
+            let html = crate::html::render_recents_page(maki.recent_entries(), AssetMode::External);
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
         ResponseCacheKey::Diagnostics => {
             let diagnostics = maki.diagnostics_without_external_links();
             let html = crate::html::render_diagnostics_page(
@@ -665,6 +675,10 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
 
     if target.path == META_PATH || target.path == META_PATH_NO_SLASH {
         return cacheable_response(state, &project, ResponseCacheKey::MetaIndex, true);
+    }
+
+    if target.path == RECENTS_PATH || target.path == RECENTS_PATH_WITH_SLASH {
+        return cacheable_response(state, &project, ResponseCacheKey::Recents, true);
     }
 
     if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_WITH_SLASH {
@@ -758,6 +772,9 @@ fn route_label_for_request(state: &AppState, request: &http::Request) -> &'stati
     }
     if target.path == META_PATH || target.path == META_PATH_NO_SLASH {
         return "meta";
+    }
+    if target.path == RECENTS_PATH || target.path == RECENTS_PATH_WITH_SLASH {
+        return "recents";
     }
     if target.path == DIAGNOSTICS_PATH || target.path == DIAGNOSTICS_PATH_WITH_SLASH {
         return "diagnostics";
@@ -1177,8 +1194,9 @@ fn spawn_file_watcher(state: Arc<AppState>) {
 }
 
 fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
-    let mut keys = Vec::with_capacity(maki.notes_len() + 3);
+    let mut keys = Vec::with_capacity(maki.notes_len() + 4);
     keys.push(ResponseCacheKey::MetaIndex);
+    keys.push(ResponseCacheKey::Recents);
     keys.push(ResponseCacheKey::SearchIndex);
     keys.push(ResponseCacheKey::Diagnostics);
     keys.push(ResponseCacheKey::DatesIndex);
@@ -1629,8 +1647,33 @@ mod tests {
 
         assert_eq!(response.status(), http::StatusCode::Ok);
         assert!(body.contains("<title>Meta</title>"));
+        assert!(body.contains("<a href=\"/@/recents\">Recents</a>"));
         assert!(body.contains("<a href=\"/@/diagnostics\">Diagnostics</a>"));
         assert!(body.contains("<a href=\"/@/dates\">Dates</a>"));
+    }
+
+    #[test]
+    fn test_recents_page_lists_recent_notes() {
+        let root = std::env::temp_dir().join(format!("maki-recents-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("alpha.maki"), "--^ title: Alpha\n").unwrap();
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/beta.maki"), "--^ title: Beta\n").unwrap();
+
+        let maki = Maki::load(&root).unwrap();
+        let state = AppState::new(maki);
+        let response = handle_request(&state, &http::Request::get("/@/recents")).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::Ok);
+        assert!(body.contains("<title>Recents</title>"));
+        assert!(body.contains("<a href=\"/alpha\">Alpha</a>"));
+        assert!(body.contains("alpha.maki"));
+        assert!(body.contains("<a href=\"/notes/beta\">Beta</a>"));
+        assert!(body.contains("notes/beta.maki"));
+        assert!(body.contains("UTC</code>"));
     }
 
     #[test]
