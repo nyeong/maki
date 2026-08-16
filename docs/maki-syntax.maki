@@ -402,8 +402,10 @@ Property는 문법적으로는 자유 key-value이지만, 일부 key는 project 
   - `[date]`는 자료가 가진 날짜다. 공고 시작일, 기사 발행일, 문서상 기준일처럼 reference로 다룬다.
   - `{date}`는 개인 timeline에서 의미 있는 사실 발생 시점이다. 자격증 취득일, 입사일, 이사일, 프로젝트 시작일처럼 기록의 기준점으로 쓴다.
   - `<date>`는 내가 행동해야 하거나 다시 확인해야 하는 예약 일정이다. agenda, reminder, ICS export 후보가 된다.
-  - visible inline과 property value의 date marker는 `/@/dates`에서 날짜별 backlink로 볼 수 있다.
-  - range marker는 `/@/dates` 목록에는 시작일과 종료일만 노출하고, `/@/dates/<date>`에는 중간 날짜 backlink도 낮은 우선순위로 보여준다.
+  - visible inline과 property value의 date marker는 날짜 계층 page에서 볼 수 있고, 실제 backlink 목록은 `/@/dates/yyyy-mm-dd`에 있다.
+  - `/@/dates`는 연도 목록, `/@/dates/yyyy`는 월 목록, `/@/dates/yyyy-mm`은 일 목록, `/@/dates/yyyy-mm-dd`는 일별 backlink를 보여준다.
+  - 년/월/일 page에는 각각 이전/다음 년/월/일 link와 상위 page link가 있다. 상위는 일 -> 월, 월 -> 년, 년 -> `/@/dates` 순서다.
+  - range marker는 년/월/일 목록에는 시작일과 종료일만 노출하고, `/@/dates/yyyy-mm-dd`에는 중간 날짜 backlink도 낮은 우선순위로 보여준다.
   - 날짜별 backlink는 발생 위치의 맥락 excerpt와 함께, 있는 경우 상위 heading과 최상위 list item을 보여준다.
   - backlink를 클릭하면 원 note의 실제 발생 위치로 이동한다. visible inline date는 해당 date marker로, property value date는 해당 property가 붙은 block 또는 document 위치로 이동한다.
   - 현재 구현은 `[date]`, `<date>`, 두 종류의 range만 지원한다.

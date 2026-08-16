@@ -127,6 +127,19 @@ impl Date {
             .and_then(|year| Self::new(year, 1, 1))
     }
 
+    pub(crate) fn previous_day(self) -> Option<Self> {
+        if self.day > 1 {
+            return Self::new(self.year, self.month, self.day - 1);
+        }
+        if self.month > 1 {
+            let month = self.month - 1;
+            return Self::new(self.year, month, days_in_month(self.year, month));
+        }
+        self.year
+            .checked_sub(1)
+            .and_then(|year| Self::new(year, 12, 31))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn year(&self) -> u16 {
         self.year

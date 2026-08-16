@@ -7,9 +7,8 @@ use std::{
 
 use crate::{
     maki::{
-        self, DateBacklink, DateIndex, DateOccurrence, DateOrigin, DateRelation,
-        NoteLinkResolution, NoteRef, ProjectDiagnostic, ProjectDiagnosticKind,
-        ProjectDiagnosticSummary, SearchEntry,
+        self, DateIndex, DateOccurrence, DateOrigin, DatePeriod, DateRelation, NoteLinkResolution,
+        NoteRef, ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary, SearchEntry,
     },
     parser::{
         self, BlockKind, Date, DateRange, DateStamp, DateStampKind, Document, Inline, ListItem,
@@ -796,6 +795,26 @@ pub(crate) fn render_search_page(
 pub(crate) fn render_meta_index_page(asset_mode: AssetMode) -> String {
     let source = "--^ title: Meta\n\n- [Diagnostics](/@/diagnostics)\n- [Dates](/@/dates)\n";
 
+    render_project_maki_source(source, asset_mode)
+}
+
+pub(crate) fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
+    let source = date_index_page_source(date_index);
+
+    render_project_maki_source(&source, asset_mode)
+}
+
+pub(crate) fn render_date_period_page(
+    period: DatePeriod,
+    date_index: &DateIndex,
+    asset_mode: AssetMode,
+) -> String {
+    let source = date_period_page_source(period, date_index);
+
+    render_project_maki_source(&source, asset_mode)
+}
+
+fn render_project_maki_source(source: &str, asset_mode: AssetMode) -> String {
     render_maki_source_with_context(
         source,
         RenderContext::default()
@@ -804,155 +823,231 @@ pub(crate) fn render_meta_index_page(asset_mode: AssetMode) -> String {
     )
 }
 
-pub(crate) fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
-    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
-    renderer.begin_html(Some("Dates"));
-    renderer.render_navigation();
-    renderer.html.push_str("<main class=\"maki-dates-index\">");
-
-    let mut has_dates = false;
-    let mut current_year = None;
-    let mut current_month = None;
-    let mut list_open = false;
-
-    for (date, backlinks) in date_index.dates().rev() {
-        has_dates = true;
-
-        if current_year != Some(date.year()) {
-            if list_open {
-                renderer.html.push_str("</ul>");
-                list_open = false;
-            }
-            current_year = Some(date.year());
-            current_month = None;
-            renderer.html.push_str("<h1 id=\"");
-            renderer.escape_html_attr_into(&date.year().to_string());
-            renderer.html.push_str("\">");
-            renderer.escape_html_into(&date.year().to_string());
-            renderer.html.push_str("</h1>");
-        }
-
-        if current_month != Some(date.month()) {
-            if list_open {
-                renderer.html.push_str("</ul>");
-            }
-            current_month = Some(date.month());
-            let month = format!("{:02}", date.month());
-            renderer.html.push_str("<h2 id=\"");
-            renderer.escape_html_attr_into(&format!("{}-{month}", date.year()));
-            renderer.html.push_str("\">");
-            renderer.escape_html_into(&month);
-            renderer.html.push_str("</h2><ul class=\"maki-date-list\">");
-            list_open = true;
-        }
-
-        renderer.html.push_str("<li><a href=\"");
-        renderer.escape_html_attr_into(&maki::date_page_path(*date));
-        renderer.html.push_str("\">");
-        renderer.escape_html_into(&date.to_string());
-        renderer.html.push_str("</a><span>");
-        renderer.escape_html_into(&backlinks.len().to_string());
-        renderer.html.push_str("</span></li>");
+fn date_index_page_source(date_index: &DateIndex) -> String {
+    let mut source = String::from("--^ title: Dates\n\n");
+    let mut year_counts = BTreeMap::new();
+    for (date, _backlinks) in date_index.dates() {
+        *year_counts.entry(date.year()).or_insert(0) += 1;
     }
 
-    if list_open {
-        renderer.html.push_str("</ul>");
-    }
-    if !has_dates {
-        renderer.render_heading(1, "Dates");
-        renderer
-            .html
-            .push_str("<p class=\"maki-date-empty\">No date markers.</p>");
+    if year_counts.is_empty() {
+        source.push_str("No date markers.\n");
+        return source;
     }
 
-    renderer.html.push_str("</main></body></html>");
-    renderer.html
+    source.push_str("== Years\n\n");
+    for (year, count) in year_counts.iter().rev() {
+        push_maki_link_item_with_count(
+            &mut source,
+            &format!("{year:04}"),
+            &maki::date_year_page_path(*year),
+            *count,
+        );
+    }
+
+    source
 }
 
-pub(crate) fn render_date_page(
-    date: Date,
-    date_index: &DateIndex,
-    backlinks: &[DateBacklink],
-    asset_mode: AssetMode,
-) -> String {
-    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
-    let title = date.to_string();
-    renderer.begin_project_page(&title);
-    renderer
-        .html
-        .push_str("<main class=\"maki-date-page\"><ul class=\"maki-date-backlinks\">");
+fn date_period_page_source(period: DatePeriod, date_index: &DateIndex) -> String {
+    let mut source = format!("--^ title: {}\n\n", period.title());
 
+    push_date_period_navigation(&mut source, period);
+    match period {
+        DatePeriod::Year(year) => push_date_year_source(&mut source, date_index, year),
+        DatePeriod::Month { year, month } => {
+            push_date_month_source(&mut source, date_index, year, month)
+        }
+        DatePeriod::Day(date) => push_date_day_source(&mut source, date_index, date),
+    }
+
+    source
+}
+
+fn push_date_period_navigation(source: &mut String, period: DatePeriod) {
+    source.push_str("== Navigation\n\n");
+
+    if let Some(previous) = period.previous() {
+        push_maki_link_item(source, previous_period_label(period), &previous.path());
+    }
+    if let Some(next) = period.next() {
+        push_maki_link_item(source, next_period_label(period), &next.path());
+    }
+    push_maki_link_item(source, parent_period_label(period), &period.parent_path());
+    source.push('\n');
+}
+
+fn previous_period_label(period: DatePeriod) -> &'static str {
+    match period {
+        DatePeriod::Year(_) => "Previous year",
+        DatePeriod::Month { .. } => "Previous month",
+        DatePeriod::Day(_) => "Previous day",
+    }
+}
+
+fn next_period_label(period: DatePeriod) -> &'static str {
+    match period {
+        DatePeriod::Year(_) => "Next year",
+        DatePeriod::Month { .. } => "Next month",
+        DatePeriod::Day(_) => "Next day",
+    }
+}
+
+fn parent_period_label(period: DatePeriod) -> &'static str {
+    match period {
+        DatePeriod::Year(_) => "Dates",
+        DatePeriod::Month { .. } => "Year",
+        DatePeriod::Day(_) => "Month",
+    }
+}
+
+fn push_date_year_source(source: &mut String, date_index: &DateIndex, year: u16) {
+    let mut month_counts = BTreeMap::new();
+    for (date, _backlinks) in date_index.dates() {
+        if date.year() == year {
+            *month_counts.entry(date.month()).or_insert(0) += 1;
+        }
+    }
+
+    source.push_str("== Months\n\n");
+    if month_counts.is_empty() {
+        source.push_str("No date markers.\n");
+        return;
+    }
+
+    for (month, count) in month_counts.iter().rev() {
+        let period = DatePeriod::Month {
+            year,
+            month: *month,
+        };
+        push_maki_link_item_with_count(source, &period.title(), &period.path(), *count);
+    }
+}
+
+fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16, month: u8) {
+    let dates = date_index
+        .dates()
+        .filter(|(date, _backlinks)| date.year() == year && date.month() == month)
+        .map(|(date, backlinks)| (*date, backlinks.len()))
+        .collect::<Vec<_>>();
+
+    source.push_str("== Days\n\n");
+    if dates.is_empty() {
+        source.push_str("No date markers.\n");
+        return;
+    }
+
+    for (date, backlink_count) in dates.iter().rev() {
+        push_maki_link_item_with_count(
+            source,
+            &date.to_string(),
+            &maki::date_page_path(*date),
+            *backlink_count,
+        );
+    }
+}
+
+fn push_date_day_source(source: &mut String, date_index: &DateIndex, date: Date) {
+    source.push_str("== Backlinks\n\n");
+
+    let Some(backlinks) = date_index.backlinks_for(&date) else {
+        source.push_str("No date markers.\n");
+        return;
+    };
+
+    let mut has_backlinks = false;
     for backlink in backlinks {
         let Some(occurrence) = date_index.occurrence(backlink.occurrence_id()) else {
             continue;
         };
-        render_date_backlink(&mut renderer, occurrence, backlink.relation());
+        has_backlinks = true;
+        push_date_backlink_source(source, occurrence, backlink.relation());
     }
 
-    renderer.html.push_str("</ul></main></body></html>");
-    renderer.html
+    if !has_backlinks {
+        source.push_str("No date markers.\n");
+    }
 }
 
-fn render_date_backlink(
-    renderer: &mut Renderer<'_>,
+fn push_date_backlink_source(
+    source: &mut String,
     occurrence: &DateOccurrence,
     relation: DateRelation,
 ) {
     let target_href = format!("{}#{}", occurrence.note_ref().web_path(), occurrence.id());
 
-    renderer.html.push_str("<li id=\"");
-    renderer.escape_html_attr_into(occurrence.id());
-    renderer.html.push_str("\" class=\"maki-date-backlink ");
-    renderer.html.push_str(date_relation_class(relation));
-    renderer
-        .html
-        .push_str("\"><div class=\"maki-date-backlink-main\"><a href=\"");
-    renderer.escape_html_attr_into(&target_href);
-    renderer.html.push_str("\">");
-    renderer.escape_html_into(occurrence.note_title());
-    renderer
-        .html
-        .push_str("</a><span class=\"maki-date-backlink-source\">");
-    renderer.escape_html_into(&occurrence.source_path().display().to_string());
-    renderer
-        .html
-        .push_str("</span></div><div class=\"maki-date-backlink-meta\"><code>");
-    renderer.escape_html_into(occurrence.marker().raw());
-    renderer.html.push_str("</code>");
-    render_date_badge(renderer, date_marker_kind_label(occurrence.marker().kind()));
-    render_date_badge(renderer, relation.label());
+    source.push_str("- ");
+    push_maki_link(source, occurrence.note_title(), &target_href);
+    source.push_str(") (");
+    push_maki_single_line(source, &occurrence.source_path().display().to_string());
+    source.push_str(") ");
+    push_maki_inline_code(source, occurrence.marker().raw());
+    source.push(' ');
+    push_date_labels(source, occurrence, relation);
+    source.push('\n');
+
+    if !occurrence.context().trim().is_empty() {
+        push_maki_text_container(source, occurrence.context());
+    }
+}
+
+fn push_date_labels(source: &mut String, occurrence: &DateOccurrence, relation: DateRelation) {
+    push_maki_single_line(source, date_marker_kind_label(occurrence.marker().kind()));
+    source.push_str(", ");
+    push_maki_single_line(source, relation.label());
+    source.push_str(", ");
     match occurrence.origin() {
-        DateOrigin::Inline => render_date_badge(renderer, "inline"),
+        DateOrigin::Inline => source.push_str("inline"),
         DateOrigin::Property { key } => {
-            let label = format!("property:{key}");
-            render_date_badge(renderer, &label);
+            source.push_str("property:");
+            push_maki_single_line(source, key);
         }
     }
-    renderer.html.push_str("</div>");
-    if !occurrence.context().trim().is_empty() {
-        renderer
-            .html
-            .push_str("<pre class=\"maki-date-backlink-context\">");
-        renderer.escape_html_into(occurrence.context());
-        renderer.html.push_str("</pre>");
-    }
-    renderer.html.push_str("</li>");
 }
 
-fn render_date_badge(renderer: &mut Renderer<'_>, label: &str) {
-    renderer.html.push_str("<span class=\"maki-date-badge\">");
-    renderer.escape_html_into(label);
-    renderer.html.push_str("</span>");
+fn push_maki_link_item(source: &mut String, title: &str, href: &str) {
+    source.push_str("- ");
+    push_maki_link(source, title, href);
+    source.push_str(")\n");
 }
 
-fn date_relation_class(relation: DateRelation) -> &'static str {
-    match relation {
-        DateRelation::Single => "maki-date-backlink-single",
-        DateRelation::Range => "maki-date-backlink-range",
-        DateRelation::RangeStart => "maki-date-backlink-range-start",
-        DateRelation::RangeMiddle => "maki-date-backlink-range-middle",
-        DateRelation::RangeEnd => "maki-date-backlink-range-end",
+fn push_maki_link_item_with_count(source: &mut String, title: &str, href: &str, count: usize) {
+    source.push_str("- ");
+    push_maki_link(source, title, href);
+    source.push_str(") ");
+    push_maki_inline_code(source, &count.to_string());
+    source.push('\n');
+}
+
+fn push_maki_link(source: &mut String, title: &str, href: &str) {
+    source.push('[');
+    push_maki_single_line(source, title);
+    source.push_str("](");
+    push_maki_single_line(source, href);
+}
+
+fn push_maki_inline_code(source: &mut String, input: &str) {
+    source.push('`');
+    for ch in input.chars() {
+        match ch {
+            '\r' | '\n' => source.push(' '),
+            '`' => source.push('\''),
+            _ => source.push(ch),
+        }
     }
+    source.push('`');
+}
+
+fn push_maki_text_container(source: &mut String, input: &str) {
+    source.push_str("\n--- text\n");
+    for line in input.lines() {
+        if line == "---" {
+            source.push_str("--- ");
+        } else {
+            source.push_str(line);
+        }
+        source.push('\n');
+    }
+    source.push_str("---\n\n");
 }
 
 pub(crate) fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String {
@@ -978,12 +1073,7 @@ pub(crate) fn render_diagnostics_page(
 ) -> String {
     let source = diagnostics_page_source(diagnostics, total_notes);
 
-    render_maki_source_with_context(
-        &source,
-        RenderContext::default()
-            .with_asset_mode(asset_mode)
-            .with_project_navigation(),
-    )
+    render_project_maki_source(&source, asset_mode)
 }
 
 fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {

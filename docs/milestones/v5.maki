@@ -96,6 +96,8 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 - 에러 메시지 원문
 - 사용자/문서 내용에서 파생된 문자열
 
+`date` route/kind는 `/@/dates/yyyy`, `/@/dates/yyyy-mm`, `/@/dates/yyyy-mm-dd` 날짜 계층 page 전체를 대표한다.
+
 = 최소 메트릭
 
 초기 구현은 request 전체, cache, render, reload 중심의 coarse metric을 우선한다.

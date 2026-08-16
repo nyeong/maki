@@ -15,7 +15,7 @@
 //! io::Error   ─┘
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -30,9 +30,8 @@ use percent_encoding::percent_decode_str;
 use crate::html::AssetMode;
 use crate::http::Response;
 use crate::maki;
-use crate::maki::{HomeMode, Maki, MakiConfigOverrides, MakiRoute};
+use crate::maki::{DatePeriod, HomeMode, Maki, MakiConfigOverrides, MakiRoute};
 use crate::metrics::Metrics;
-use crate::parser::Date;
 use crate::{RunError, http};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
@@ -107,7 +106,7 @@ enum ResponseCacheKey {
     MetaIndex,
     Diagnostics,
     DatesIndex,
-    DatePage(Date),
+    DatePeriodPage(DatePeriod),
     SearchIndex,
     NotePage(PathBuf),
 }
@@ -118,7 +117,7 @@ impl ResponseCacheKey {
             Self::MetaIndex => "meta",
             Self::Diagnostics => "diagnostics",
             Self::DatesIndex => "dates",
-            Self::DatePage(_) => "date",
+            Self::DatePeriodPage(_) => "date",
             Self::SearchIndex => "search_index",
             Self::NotePage(_) => "note",
         }
@@ -496,14 +495,14 @@ fn query_param(query: Option<&str>, name: &str) -> Result<Option<String>, Error>
     Ok(None)
 }
 
-fn date_for_dates_request_path(path: &str) -> Option<Date> {
-    let date = path.strip_prefix(DATES_PATH_PREFIX)?;
+fn date_period_for_dates_request_path(path: &str) -> Option<DatePeriod> {
+    let raw = path.strip_prefix(DATES_PATH_PREFIX)?;
 
-    if date.is_empty() || date.contains('/') {
+    if raw.is_empty() || raw.contains('/') {
         return None;
     }
 
-    Date::parse(date)
+    DatePeriod::parse_path_segment(raw)
 }
 
 fn escape_json_string(input: &str) -> String {
@@ -618,16 +617,10 @@ fn render_cacheable_response(
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
-        ResponseCacheKey::DatePage(date) => {
-            let Some(backlinks) = maki.date_index().backlinks_for(date) else {
-                return Err(
-                    maki::Error::NoteNotFound(PathBuf::from(maki::date_page_path(*date))).into(),
-                );
-            };
-            let html = crate::html::render_date_page(
-                *date,
+        ResponseCacheKey::DatePeriodPage(period) => {
+            let html = crate::html::render_date_period_page(
+                *period,
                 maki.date_index(),
-                backlinks,
                 AssetMode::External,
             );
             Ok(http::Response::new(http::StatusCode::Ok)
@@ -682,8 +675,13 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         return cacheable_response(state, &project, ResponseCacheKey::DatesIndex, true);
     }
 
-    if let Some(date) = date_for_dates_request_path(&target.path) {
-        return cacheable_response(state, &project, ResponseCacheKey::DatePage(date), true);
+    if let Some(period) = date_period_for_dates_request_path(&target.path) {
+        return cacheable_response(
+            state,
+            &project,
+            ResponseCacheKey::DatePeriodPage(period),
+            true,
+        );
     }
 
     if target.path == SEARCH_INDEX_PATH {
@@ -767,7 +765,7 @@ fn route_label_for_request(state: &AppState, request: &http::Request) -> &'stati
     if target.path == DATES_PATH || target.path == DATES_PATH_WITH_SLASH {
         return "dates";
     }
-    if date_for_dates_request_path(&target.path).is_some() {
+    if date_period_for_dates_request_path(&target.path).is_some() {
         return "date";
     }
     if target.path == SEARCH_INDEX_PATH {
@@ -1184,10 +1182,19 @@ fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
     keys.push(ResponseCacheKey::SearchIndex);
     keys.push(ResponseCacheKey::Diagnostics);
     keys.push(ResponseCacheKey::DatesIndex);
+    let mut date_periods = BTreeSet::new();
+    for (date, _backlinks) in maki.date_index().dates() {
+        date_periods.insert(DatePeriod::Year(date.year()));
+        date_periods.insert(DatePeriod::Month {
+            year: date.year(),
+            month: date.month(),
+        });
+        date_periods.insert(DatePeriod::Day(*date));
+    }
     keys.extend(
-        maki.date_index()
-            .dates()
-            .map(|(date, _backlinks)| ResponseCacheKey::DatePage(*date)),
+        date_periods
+            .into_iter()
+            .map(ResponseCacheKey::DatePeriodPage),
     );
     keys.extend(
         maki.notes()
@@ -1648,14 +1655,32 @@ Task with property date.
 
         let index = handle_request(&state, &http::Request::get("/@/dates")).unwrap();
         let index_body = String::from_utf8(index.body().to_vec()).unwrap();
+        let year = handle_request(&state, &http::Request::get("/@/dates/2026")).unwrap();
+        let year_body = String::from_utf8(year.body().to_vec()).unwrap();
+        let month = handle_request(&state, &http::Request::get("/@/dates/2026-08")).unwrap();
+        let month_body = String::from_utf8(month.body().to_vec()).unwrap();
         assert_eq!(index.status(), http::StatusCode::Ok);
-        assert!(index_body.contains("<h1 id=\"2026\">2026</h1>"));
-        assert!(index_body.contains("<h2 id=\"2026-08\">08</h2>"));
-        assert!(index_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17</a>"));
-        assert!(!index_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
-        assert!(index_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19</a>"));
+        assert!(index_body.contains("<title>Dates</title>"));
+        assert!(index_body.contains("<a href=\"/@/dates/2026\">2026</a>"));
+        assert!(!index_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+
+        assert_eq!(year.status(), http::StatusCode::Ok);
+        assert!(year_body.contains("<title>2026</title>"));
+        assert!(year_body.contains("<a href=\"/@/dates/2025\">Previous year</a>"));
+        assert!(year_body.contains("<a href=\"/@/dates/2027\">Next year</a>"));
+        assert!(year_body.contains("<a href=\"/@/dates\">Dates</a>"));
+        assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+
+        assert_eq!(month.status(), http::StatusCode::Ok);
+        assert!(month_body.contains("<title>2026-08</title>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-07\">Previous month</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-09\">Next month</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026\">Year</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17</a>"));
+        assert!(!month_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19</a>"));
         let date_link_position = |date: &str| {
-            index_body
+            month_body
                 .find(&format!("href=\"/@/dates/{date}\""))
                 .unwrap()
         };
@@ -1664,6 +1689,9 @@ Task with property date.
 
         let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
         let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
+        let empty_detail =
+            handle_request(&state, &http::Request::get("/@/dates/2026-08-21")).unwrap();
+        let empty_detail_body = String::from_utf8(empty_detail.body().to_vec()).unwrap();
         let property_detail =
             handle_request(&state, &http::Request::get("/@/dates/2026-08-20")).unwrap();
         let property_detail_body = String::from_utf8(property_detail.body().to_vec()).unwrap();
@@ -1673,10 +1701,17 @@ Task with property date.
 
         assert_eq!(detail.status(), http::StatusCode::Ok);
         assert!(detail_body.contains("<title>2026-08-18</title>"));
+        assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">Previous day</a>"));
+        assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">Next day</a>"));
+        assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">Month</a>"));
         assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
         assert!(detail_body.contains("range"));
         assert!(detail_body.contains("<a href=\"/home#date-inline-home-maki-2\">Home</a>"));
         assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
+
+        assert_eq!(empty_detail.status(), http::StatusCode::Ok);
+        assert!(empty_detail_body.contains("<title>2026-08-21</title>"));
+        assert!(empty_detail_body.contains("No date markers."));
 
         assert_eq!(property_detail.status(), http::StatusCode::Ok);
         assert!(
