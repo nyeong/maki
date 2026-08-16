@@ -864,7 +864,7 @@ fn date_index_page_body_source(date_index: &DateIndex) -> String {
 fn date_period_page_source(period: DatePeriod, date_index: &DateIndex) -> String {
     let navigation = date_period_navigation_source(period);
     let body = date_period_page_body_source(period, date_index);
-    let title = period.title();
+    let title = date_period_title(period);
     render_maki_template(
         DATE_PERIOD_TEMPLATE,
         &[
@@ -892,42 +892,27 @@ fn date_period_navigation_source(period: DatePeriod) -> String {
     let mut source = String::new();
 
     if let Some(previous) = period.previous() {
-        push_maki_link_item(&mut source, previous_period_label(period), &previous.path());
+        push_maki_closed_link(&mut source, "←", &previous.path());
+        source.push(' ');
     }
+    push_maki_closed_link(&mut source, "↑", &period.parent_path());
     if let Some(next) = period.next() {
-        push_maki_link_item(&mut source, next_period_label(period), &next.path());
+        source.push(' ');
+        push_maki_closed_link(&mut source, "→", &next.path());
     }
-    push_maki_link_item(
-        &mut source,
-        parent_period_label(period),
-        &period.parent_path(),
-    );
 
-    source.trim_end().to_string()
+    source
 }
 
-fn previous_period_label(period: DatePeriod) -> &'static str {
+fn date_period_title(period: DatePeriod) -> String {
     match period {
-        DatePeriod::Year(_) => "Previous year",
-        DatePeriod::Month { .. } => "Previous month",
-        DatePeriod::Day(_) => "Previous day",
+        DatePeriod::Year(_) | DatePeriod::Month { .. } => period.title(),
+        DatePeriod::Day(date) => date_label(date),
     }
 }
 
-fn next_period_label(period: DatePeriod) -> &'static str {
-    match period {
-        DatePeriod::Year(_) => "Next year",
-        DatePeriod::Month { .. } => "Next month",
-        DatePeriod::Day(_) => "Next day",
-    }
-}
-
-fn parent_period_label(period: DatePeriod) -> &'static str {
-    match period {
-        DatePeriod::Year(_) => "Dates",
-        DatePeriod::Month { .. } => "Year",
-        DatePeriod::Day(_) => "Month",
-    }
+fn date_label(date: Date) -> String {
+    format!("{date} {}", date.weekday_abbrev())
 }
 
 fn push_date_year_source(source: &mut String, date_index: &DateIndex, year: u16) {
@@ -969,7 +954,7 @@ fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16
     for (date, backlink_count) in dates.iter().rev() {
         push_maki_link_item_with_count(
             source,
-            &date.to_string(),
+            &date_label(*date),
             &maki::date_page_path(*date),
             *backlink_count,
         );
@@ -1034,18 +1019,17 @@ fn push_date_labels(source: &mut String, occurrence: &DateOccurrence, relation: 
     }
 }
 
-fn push_maki_link_item(source: &mut String, title: &str, href: &str) {
-    source.push_str("- ");
-    push_maki_link(source, title, href);
-    source.push_str(")\n");
-}
-
 fn push_maki_link_item_with_count(source: &mut String, title: &str, href: &str, count: usize) {
     source.push_str("- ");
-    push_maki_link(source, title, href);
-    source.push_str(") ");
+    push_maki_closed_link(source, title, href);
+    source.push(' ');
     push_maki_inline_code(source, &count.to_string());
     source.push('\n');
+}
+
+fn push_maki_closed_link(source: &mut String, title: &str, href: &str) {
+    push_maki_link(source, title, href);
+    source.push(')');
 }
 
 fn push_maki_link(source: &mut String, title: &str, href: &str) {

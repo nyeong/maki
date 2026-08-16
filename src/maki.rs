@@ -1757,9 +1757,9 @@ fn table_date_context(header: &parser::TableRow<'_>, rows: &[parser::TableRow<'_
 }
 
 fn table_body_row_date_context(header_context: &str, row: &parser::TableRow<'_>) -> String {
-    let mut context = table_row_date_context(row);
+    let mut context = header_context.to_string();
     context.push('\n');
-    context.push_str(header_context);
+    context.push_str(&table_row_date_context(row));
 
     truncate_date_context(context)
 }
@@ -2986,7 +2986,7 @@ Target [2026-08-18]."#,
 
         assert_eq!(
             occurrence.context(),
-            "= Releases\n| [2026-08-15] | Ship alpha | Nyeong |\n| Date | Summary | Owner |"
+            "= Releases\n| Date | Summary | Owner |\n| [2026-08-15] | Ship alpha | Nyeong |"
         );
         assert!(!occurrence.context().contains("Follow up"));
     }

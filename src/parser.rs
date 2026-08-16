@@ -154,6 +154,25 @@ impl Date {
     pub(crate) fn day(&self) -> u8 {
         self.day
     }
+
+    pub(crate) fn weekday_abbrev(&self) -> &'static str {
+        const MONTH_OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+        // Sakamoto's algorithm, with 0 representing Sunday.
+        let month = i32::from(self.month);
+        let mut year = i32::from(self.year);
+        if month < 3 {
+            year -= 1;
+        }
+        let index = (year + year / 4 - year / 100
+            + year / 400
+            + MONTH_OFFSETS[(month - 1) as usize]
+            + i32::from(self.day))
+        .rem_euclid(7);
+
+        WEEKDAYS[index as usize]
+    }
 }
 
 impl fmt::Display for Date {

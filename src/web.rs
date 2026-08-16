@@ -1666,19 +1666,19 @@ Task with property date.
 
         assert_eq!(year.status(), http::StatusCode::Ok);
         assert!(year_body.contains("<title>2026</title>"));
-        assert!(year_body.contains("<a href=\"/@/dates/2025\">Previous year</a>"));
-        assert!(year_body.contains("<a href=\"/@/dates/2027\">Next year</a>"));
-        assert!(year_body.contains("<a href=\"/@/dates\">Dates</a>"));
+        assert!(year_body.contains("<a href=\"/@/dates/2025\">←</a>"));
+        assert!(year_body.contains("<a href=\"/@/dates/2027\">→</a>"));
+        assert!(year_body.contains("<a href=\"/@/dates\">↑</a>"));
         assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
 
         assert_eq!(month.status(), http::StatusCode::Ok);
         assert!(month_body.contains("<title>2026-08</title>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026-07\">Previous month</a>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026-09\">Next month</a>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026\">Year</a>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-07\">←</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-09\">→</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026\">↑</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a>"));
         assert!(!month_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19</a>"));
+        assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a>"));
         let date_link_position = |date: &str| {
             month_body
                 .find(&format!("href=\"/@/dates/{date}\""))
@@ -1700,17 +1700,17 @@ Task with property date.
         fs::remove_dir_all(root).unwrap();
 
         assert_eq!(detail.status(), http::StatusCode::Ok);
-        assert!(detail_body.contains("<title>2026-08-18</title>"));
-        assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">Previous day</a>"));
-        assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">Next day</a>"));
-        assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">Month</a>"));
+        assert!(detail_body.contains("<title>2026-08-18 Tue</title>"));
+        assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">←</a>"));
+        assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">→</a>"));
+        assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">↑</a>"));
         assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
         assert!(detail_body.contains("range"));
         assert!(detail_body.contains("<a href=\"/home#date-inline-home-maki-2\">Home</a>"));
         assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
 
         assert_eq!(empty_detail.status(), http::StatusCode::Ok);
-        assert!(empty_detail_body.contains("<title>2026-08-21</title>"));
+        assert!(empty_detail_body.contains("<title>2026-08-21 Fri</title>"));
         assert!(empty_detail_body.contains("No date markers."));
 
         assert_eq!(property_detail.status(), http::StatusCode::Ok);
