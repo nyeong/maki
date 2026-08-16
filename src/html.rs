@@ -19,6 +19,10 @@ use crate::{
 const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
 const SEARCH_SCRIPT: &str = include_str!("../assets/maki-search.js");
 const TOC_SCRIPT: &str = include_str!("../assets/maki-toc.js");
+const META_TEMPLATE: &str = include_str!("../templates/meta.maki");
+const DATES_INDEX_TEMPLATE: &str = include_str!("../templates/dates-index.maki");
+const DATE_PERIOD_TEMPLATE: &str = include_str!("../templates/date-period.maki");
+const DIAGNOSTICS_TEMPLATE: &str = include_str!("../templates/diagnostics.maki");
 pub(crate) const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
 pub(crate) const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
 pub(crate) const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
@@ -793,13 +797,12 @@ pub(crate) fn render_search_page(
 }
 
 pub(crate) fn render_meta_index_page(asset_mode: AssetMode) -> String {
-    let source = "--^ title: Meta\n\n- [Diagnostics](/@/diagnostics)\n- [Dates](/@/dates)\n";
-
-    render_project_maki_source(source, asset_mode)
+    render_project_maki_source(META_TEMPLATE, asset_mode)
 }
 
 pub(crate) fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
-    let source = date_index_page_source(date_index);
+    let body = date_index_page_body_source(date_index);
+    let source = render_maki_template(DATES_INDEX_TEMPLATE, &[("{{body}}", &body)]);
 
     render_project_maki_source(&source, asset_mode)
 }
@@ -814,6 +817,16 @@ pub(crate) fn render_date_period_page(
     render_project_maki_source(&source, asset_mode)
 }
 
+fn render_maki_template(template: &str, replacements: &[(&str, &str)]) -> String {
+    let mut source = template.to_string();
+
+    for (placeholder, value) in replacements {
+        source = source.replace(placeholder, value);
+    }
+
+    source
+}
+
 fn render_project_maki_source(source: &str, asset_mode: AssetMode) -> String {
     render_maki_source_with_context(
         source,
@@ -823,8 +836,8 @@ fn render_project_maki_source(source: &str, asset_mode: AssetMode) -> String {
     )
 }
 
-fn date_index_page_source(date_index: &DateIndex) -> String {
-    let mut source = String::from("--^ title: Dates\n\n");
+fn date_index_page_body_source(date_index: &DateIndex) -> String {
+    let mut source = String::new();
     let mut year_counts = BTreeMap::new();
     for (date, _backlinks) in date_index.dates() {
         *year_counts.entry(date.year()).or_insert(0) += 1;
@@ -849,9 +862,21 @@ fn date_index_page_source(date_index: &DateIndex) -> String {
 }
 
 fn date_period_page_source(period: DatePeriod, date_index: &DateIndex) -> String {
-    let mut source = format!("--^ title: {}\n\n", period.title());
+    let navigation = date_period_navigation_source(period);
+    let body = date_period_page_body_source(period, date_index);
+    let title = period.title();
+    render_maki_template(
+        DATE_PERIOD_TEMPLATE,
+        &[
+            ("{{title}}", &title),
+            ("{{navigation}}", &navigation),
+            ("{{body}}", &body),
+        ],
+    )
+}
 
-    push_date_period_navigation(&mut source, period);
+fn date_period_page_body_source(period: DatePeriod, date_index: &DateIndex) -> String {
+    let mut source = String::new();
     match period {
         DatePeriod::Year(year) => push_date_year_source(&mut source, date_index, year),
         DatePeriod::Month { year, month } => {
@@ -863,17 +888,22 @@ fn date_period_page_source(period: DatePeriod, date_index: &DateIndex) -> String
     source
 }
 
-fn push_date_period_navigation(source: &mut String, period: DatePeriod) {
-    source.push_str("== Navigation\n\n");
+fn date_period_navigation_source(period: DatePeriod) -> String {
+    let mut source = String::new();
 
     if let Some(previous) = period.previous() {
-        push_maki_link_item(source, previous_period_label(period), &previous.path());
+        push_maki_link_item(&mut source, previous_period_label(period), &previous.path());
     }
     if let Some(next) = period.next() {
-        push_maki_link_item(source, next_period_label(period), &next.path());
+        push_maki_link_item(&mut source, next_period_label(period), &next.path());
     }
-    push_maki_link_item(source, parent_period_label(period), &period.parent_path());
-    source.push('\n');
+    push_maki_link_item(
+        &mut source,
+        parent_period_label(period),
+        &period.parent_path(),
+    );
+
+    source.trim_end().to_string()
 }
 
 fn previous_period_label(period: DatePeriod) -> &'static str {
@@ -1078,9 +1108,7 @@ pub(crate) fn render_diagnostics_page(
 
 fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {
     let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
-    let mut source = String::from("--^ title: Diagnostics\n\n");
-
-    source.push_str(&format!(
+    let summary = format!(
         "{} issue(s) across {total_notes} note(s): {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s).",
         summary.total(),
         summary.broken_links(),
@@ -1088,39 +1116,43 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
         summary.broken_external_links(),
         summary.parse_warnings(),
         summary.read_failures()
-    ));
-    source.push_str("\n\n");
+    );
 
-    if diagnostics.is_empty() {
-        source.push_str("No diagnostics.\n");
-        return source;
-    }
-
-    let mut by_source: BTreeMap<PathBuf, Vec<&ProjectDiagnostic>> = BTreeMap::new();
-    for diagnostic in diagnostics {
-        by_source
-            .entry(diagnostic.source_path().to_path_buf())
-            .or_default()
-            .push(diagnostic);
-    }
-
-    for (source_path, diagnostics) in by_source {
-        let source_href = format!("/{}", source_path.with_extension("").display());
-        source.push_str("== [");
-        push_maki_single_line(&mut source, &source_path.display().to_string());
-        source.push_str("](");
-        push_maki_single_line(&mut source, &source_href);
-        source.push_str(")\n\n");
-
+    let body = if diagnostics.is_empty() {
+        "No diagnostics.".to_string()
+    } else {
+        let mut body = String::new();
+        let mut by_source: BTreeMap<PathBuf, Vec<&ProjectDiagnostic>> = BTreeMap::new();
         for diagnostic in diagnostics {
-            source.push_str("- ");
-            push_diagnostic_item(&mut source, diagnostic);
-            source.push('\n');
+            by_source
+                .entry(diagnostic.source_path().to_path_buf())
+                .or_default()
+                .push(diagnostic);
         }
-        source.push('\n');
-    }
 
-    source
+        for (source_path, diagnostics) in by_source {
+            let source_href = format!("/{}", source_path.with_extension("").display());
+            body.push_str("== [");
+            push_maki_single_line(&mut body, &source_path.display().to_string());
+            body.push_str("](");
+            push_maki_single_line(&mut body, &source_href);
+            body.push_str(")\n\n");
+
+            for diagnostic in diagnostics {
+                body.push_str("- ");
+                push_diagnostic_item(&mut body, diagnostic);
+                body.push('\n');
+            }
+            body.push('\n');
+        }
+
+        body.trim_end().to_string()
+    };
+
+    render_maki_template(
+        DIAGNOSTICS_TEMPLATE,
+        &[("{{summary}}", &summary), ("{{body}}", &body)],
+    )
 }
 
 fn push_diagnostic_item(source: &mut String, diagnostic: &ProjectDiagnostic) {

@@ -135,13 +135,15 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 HTML 렌더러는 `Document`와 `RenderContext`를 받아 문자열을 생성한다.
 project context가 있으면 wikilink를 resolve하고, 없으면 target 그대로 링크를 만든다.
 project page에는 nav shell, search input, meta index link, TOC/search scripts가 들어간다.
-`/@/` 아래의 사람이 읽는 meta page는 가능한 한 가상 maki source를 만든 뒤 같은 maki -> HTML renderer를 통과시킨다.
+`/@/` 아래의 사람이 읽는 meta page는 `include_str!`로 embed한 `templates/*.maki`를 기반으로 가상 maki source를 만든 뒤 같은 maki -> HTML renderer를 통과시킨다.
+날짜 navigation/list/backlink와 diagnostics summary/item처럼 데이터에 따라 달라지는 조각은 Rust helper가 maki snippet으로 생성하고 template placeholder에 삽입한다.
 충분히 넓은 화면에서는 ToC가 왼쪽 overlay로 고정되고, 현재 화면의 섹션만 강조된다.
 
 근거:
 
 - `src/html.rs`: project navigation, runtime assets, link rendering, built-in containers, search/diagnostics/not-found pages.
 - `assets/maki.css`, `assets/maki-search.js`, `assets/maki-toc.js`.
+- `templates/*.maki`: compile-time embed되는 사람이 읽는 meta page의 maki template.
 
 평가:
 
