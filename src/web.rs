@@ -1720,18 +1720,21 @@ Task with property date.
         assert!(month_body.contains("<a href=\"/@/dates/2026-07\">← 2026-07</a>"));
         assert!(month_body.contains("<a href=\"/@/dates/2026-09\">2026-09 →</a>"));
         assert!(month_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a>"));
-        assert!(!month_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18</a>"));
-        assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a>"));
-        assert!(month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
-        assert!(month_body.contains("<a href=\"/home\">Home</a>"));
-        let date_link_position = |date: &str| {
-            month_body
-                .find(&format!("href=\"/@/dates/{date}\""))
-                .unwrap()
-        };
-        assert!(date_link_position("2026-08-20") < date_link_position("2026-08-19"));
-        assert!(date_link_position("2026-08-19") < date_link_position("2026-08-17"));
+        assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
+        assert!(month_body.contains("<h4 id=\"2026-08-17 Mon\">2026-08-17 Mon</h4>"));
+        assert!(!month_body.contains("<h4 id=\"2026-08-18 Tue\">2026-08-18 Tue</h4>"));
+        assert!(month_body.contains("<h4 id=\"2026-08-19 Wed\">2026-08-19 Wed</h4>"));
+        assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
+        assert!(month_body.contains(
+            "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
+        ));
+        assert!(month_body.contains(
+            "<li><a href=\"/home#date-property-home-maki-2\">Home</a> event, single, property:scheduled<pre><code>scheduled: &lt;2026-08-20 15:00&gt;\nTask with property date.</code></pre></li>"
+        ));
+        let date_heading_position =
+            |date: &str| month_body.find(&format!("<h4 id=\"{date}")).unwrap();
+        assert!(date_heading_position("2026-08-20") < date_heading_position("2026-08-19"));
+        assert!(date_heading_position("2026-08-19") < date_heading_position("2026-08-17"));
 
         let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
         let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
@@ -1753,7 +1756,7 @@ Task with property date.
         assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
         assert!(detail_body.contains("range"));
         assert!(detail_body.contains(
-            "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range, inline</li>"
+            "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
         ));
         assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
 

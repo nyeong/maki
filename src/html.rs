@@ -1042,7 +1042,7 @@ fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16
     let dates = date_index
         .dates()
         .filter(|(date, _backlinks)| date.year() == year && date.month() == month)
-        .map(|(date, backlinks)| (*date, backlinks.len()))
+        .map(|(date, _backlinks)| *date)
         .collect::<Vec<_>>();
 
     source.push_str("== Days\n\n");
@@ -1051,42 +1051,13 @@ fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16
         return;
     }
 
-    for (date, backlink_count) in dates.iter().rev() {
-        push_maki_link_item_with_count(
-            source,
-            &date_label(*date),
-            &maki::date_page_path(*date),
-            *backlink_count,
-        );
-    }
-
-    push_date_month_pages_source(source, date_index, year, month);
-}
-
-fn push_date_month_pages_source(source: &mut String, date_index: &DateIndex, year: u16, month: u8) {
-    let mut pages = BTreeMap::new();
-    for (_date, backlinks) in date_index
-        .dates()
-        .filter(|(date, _backlinks)| date.year() == year && date.month() == month)
-    {
-        for backlink in backlinks {
-            let Some(occurrence) = date_index.occurrence(backlink.occurrence_id()) else {
-                continue;
-            };
-            pages
-                .entry(occurrence.note_ref().web_path())
-                .or_insert_with(|| occurrence.note_title().to_string());
+    for date in dates.iter().rev() {
+        source.push_str("=== ");
+        push_maki_single_line(source, &date_label(*date));
+        source.push_str("\n\n");
+        if !push_date_backlinks_for_date(source, date_index, *date) {
+            source.push_str("No date markers.\n");
         }
-    }
-
-    if pages.is_empty() {
-        return;
-    }
-
-    source.push_str("\n== Pages\n\n");
-    for (path, title) in pages {
-        source.push_str("- ");
-        push_maki_closed_link(source, &title, &path);
         source.push('\n');
     }
 }
@@ -1094,9 +1065,14 @@ fn push_date_month_pages_source(source: &mut String, date_index: &DateIndex, yea
 fn push_date_day_source(source: &mut String, date_index: &DateIndex, date: Date) {
     source.push_str("== Backlinks\n\n");
 
-    let Some(backlinks) = date_index.backlinks_for(&date) else {
+    if !push_date_backlinks_for_date(source, date_index, date) {
         source.push_str("No date markers.\n");
-        return;
+    }
+}
+
+fn push_date_backlinks_for_date(source: &mut String, date_index: &DateIndex, date: Date) -> bool {
+    let Some(backlinks) = date_index.backlinks_for(&date) else {
+        return false;
     };
 
     let mut has_backlinks = false;
@@ -1108,9 +1084,7 @@ fn push_date_day_source(source: &mut String, date_index: &DateIndex, date: Date)
         push_date_backlink_source(source, occurrence, backlink.relation());
     }
 
-    if !has_backlinks {
-        source.push_str("No date markers.\n");
-    }
+    has_backlinks
 }
 
 fn push_date_backlink_source(
@@ -1127,7 +1101,7 @@ fn push_date_backlink_source(
     source.push('\n');
 
     if !occurrence.context().trim().is_empty() {
-        push_maki_text_container(source, occurrence.context());
+        push_indented_maki_code_block(source, occurrence.context(), "  ");
     }
 }
 
@@ -1177,17 +1151,16 @@ fn push_maki_inline_code(source: &mut String, input: &str) {
     source.push('`');
 }
 
-fn push_maki_text_container(source: &mut String, input: &str) {
-    source.push_str("\n--- text\n");
+fn push_indented_maki_code_block(source: &mut String, input: &str, indent: &str) {
     for line in input.lines() {
-        if line == "---" {
-            source.push_str("--- ");
-        } else {
+        source.push_str(indent);
+        source.push(':');
+        if !line.is_empty() {
+            source.push(' ');
             source.push_str(line);
         }
         source.push('\n');
     }
-    source.push_str("---\n\n");
 }
 
 pub(crate) fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String {
@@ -1539,5 +1512,24 @@ quote body
         let html = render_document(&parsed.document);
 
         assert!(html.contains("<ol><li>블록에 property를 붙일 수 있음</li><li>쿼리를 통해 검색할 수 있음</li><li>컴파일, 서빙을 통해 다른 포맷이나 서비스에 붙일 수 있음</li></ol>"));
+    }
+
+    #[test]
+    fn list_items_render_indented_code_children_inside_list() {
+        let parsed = parser::parse(
+            r#"- unordered
+  : quoted <text>
+  : second line
+
+1. ordered
+   : ordered text"#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains(
+            "<ul><li>unordered<pre><code>quoted &lt;text&gt;\nsecond line</code></pre></li></ul>"
+        ));
+        assert!(html.contains("<ol><li>ordered<pre><code>ordered text</code></pre></li></ol>"));
     }
 }
