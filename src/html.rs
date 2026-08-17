@@ -1053,7 +1053,7 @@ fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16
 
     for date in dates.iter().rev() {
         source.push_str("=== ");
-        push_maki_single_line(source, &date_label(*date));
+        push_maki_closed_link(source, &date_label(*date), &maki::date_page_path(*date));
         source.push_str("\n\n");
         if !push_date_backlinks_for_date(source, date_index, *date) {
             source.push_str("No date markers.\n");
