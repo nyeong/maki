@@ -404,9 +404,11 @@ Property는 문법적으로는 자유 key-value이지만, 일부 key는 project 
   - `<date>`는 내가 행동해야 하거나 다시 확인해야 하는 예약 일정이다. agenda, reminder, ICS export 후보가 된다.
   - visible inline과 property value의 date marker는 날짜 계층 page에서 볼 수 있고, 실제 backlink 목록은 `/@/dates/yyyy-mm-dd`에 있다.
   - `/@/dates`는 연도 목록, `/@/dates/yyyy`는 월 목록, `/@/dates/yyyy-mm`은 일 목록, `/@/dates/yyyy-mm-dd`는 일별 backlink를 보여준다.
-  - 년/월/일 page에는 본문 앞에 heading 없는 별도 navigation line으로 이전/상위/다음 link가 `← ↑ →` 형식으로 있다. 상위는 일 -> 월, 월 -> 년, 년 -> `/@/dates` 순서다.
-  - 일 단위 page title과 월 page의 일 목록 label은 `yyyy-mm-dd 영문 요일 약어` 형식으로 보여준다.
+  - 년/월/일 page에는 본문 앞에 heading 없는 별도 navigation line으로 이전/상위/다음 link가 `← target`, `↑ target`, `target →` 형식으로 있다. 상위는 일 -> 월, 월 -> 년, 년 -> `/@/dates` 순서다.
+  - 일 단위 page title, 월 page의 일 목록 label, 일 단위 이전/다음 navigation target은 `yyyy-mm-dd 영문 요일 약어` 형식으로 보여준다.
+  - 월 page는 `Days` 단락 뒤에 `Pages` 단락을 두고, 해당 월에 date marker가 있는 note page를 중복 없이 링크한다.
   - range marker는 년/월/일 목록에는 시작일과 종료일만 노출하고, `/@/dates/yyyy-mm-dd`에는 중간 날짜 backlink도 낮은 우선순위로 보여준다.
+  - 날짜별 backlink 목록 item은 note link와 marker 속성만 보여준다. 파일 주소와 raw date marker는 item에 직접 노출하지 않는다.
   - 날짜별 backlink는 발생 위치의 맥락 excerpt와 함께, 있는 경우 상위 heading과 최상위 list item을 보여준다.
   - table cell의 date marker는 상위 heading, table header, 해당 row를 맥락 excerpt로 보여주고, 다른 body row는 포함하지 않는다.
   - backlink를 클릭하면 원 note의 실제 발생 위치로 이동한다. visible inline date는 해당 date marker로, property value date는 해당 property가 붙은 block 또는 document 위치로 이동한다.

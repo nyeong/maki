@@ -144,7 +144,6 @@ struct NoteMetadataEntry {
 pub(crate) struct RecentEntry {
     title: String,
     path: String,
-    source_path: String,
     modified: Option<SystemTime>,
 }
 
@@ -383,10 +382,6 @@ impl RecentEntry {
 
     pub(crate) fn path(&self) -> &str {
         &self.path
-    }
-
-    pub(crate) fn source_path(&self) -> &str {
-        &self.source_path
     }
 
     pub(crate) fn modified(&self) -> Option<SystemTime> {
@@ -843,7 +838,6 @@ impl NoteMetadataEntry {
         RecentEntry {
             title: self.title,
             path: self.path,
-            source_path: self.source_path,
             modified: self.modified,
         }
     }

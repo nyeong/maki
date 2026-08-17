@@ -856,19 +856,17 @@ fn recents_page_body_source(entries: &[RecentEntry]) -> String {
 
     for entry in entries {
         source.push_str("- ");
-        push_maki_closed_link(&mut source, entry.title(), entry.path());
+        let modified = modified_time_kst_label(entry.modified());
+        push_maki_single_line(&mut source, &modified);
         source.push(' ');
-        let modified = modified_time_label(entry.modified());
-        push_maki_inline_code(&mut source, &modified);
-        source.push_str(" (");
-        push_maki_single_line(&mut source, entry.source_path());
-        source.push_str(")\n");
+        push_maki_closed_link(&mut source, entry.title(), entry.path());
+        source.push('\n');
     }
 
     source
 }
 
-fn modified_time_label(modified: Option<SystemTime>) -> String {
+fn modified_time_kst_label(modified: Option<SystemTime>) -> String {
     let Some(modified) = modified else {
         return "unknown".to_string();
     };
@@ -876,19 +874,20 @@ fn modified_time_label(modified: Option<SystemTime>) -> String {
         return "before 1970".to_string();
     };
 
-    format_unix_seconds_utc(duration.as_secs())
+    format_unix_seconds_with_offset(duration.as_secs(), 9 * 60 * 60, "KST")
 }
 
-fn format_unix_seconds_utc(seconds: u64) -> String {
+fn format_unix_seconds_with_offset(seconds: u64, offset_seconds: u64, timezone: &str) -> String {
     const SECONDS_PER_DAY: u64 = 86_400;
 
-    let days = (seconds / SECONDS_PER_DAY) as i64;
-    let seconds_of_day = seconds % SECONDS_PER_DAY;
+    let local_seconds = seconds.saturating_add(offset_seconds);
+    let days = (local_seconds / SECONDS_PER_DAY) as i64;
+    let seconds_of_day = local_seconds % SECONDS_PER_DAY;
     let hour = seconds_of_day / 3_600;
     let minute = (seconds_of_day % 3_600) / 60;
     let (year, month, day) = civil_from_unix_days(days);
 
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} {timezone}")
 }
 
 fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
@@ -968,13 +967,25 @@ fn date_period_navigation_source(period: DatePeriod) -> String {
     let mut source = String::new();
 
     if let Some(previous) = period.previous() {
-        push_maki_closed_link(&mut source, "←", &previous.path());
+        push_maki_closed_link(
+            &mut source,
+            &format!("← {}", date_period_navigation_label(previous)),
+            &previous.path(),
+        );
         source.push(' ');
     }
-    push_maki_closed_link(&mut source, "↑", &period.parent_path());
+    push_maki_closed_link(
+        &mut source,
+        &format!("↑ {}", date_period_parent_label(period)),
+        &period.parent_path(),
+    );
     if let Some(next) = period.next() {
         source.push(' ');
-        push_maki_closed_link(&mut source, "→", &next.path());
+        push_maki_closed_link(
+            &mut source,
+            &format!("{} →", date_period_navigation_label(next)),
+            &next.path(),
+        );
     }
 
     source
@@ -984,6 +995,21 @@ fn date_period_title(period: DatePeriod) -> String {
     match period {
         DatePeriod::Year(_) | DatePeriod::Month { .. } => period.title(),
         DatePeriod::Day(date) => date_label(date),
+    }
+}
+
+fn date_period_navigation_label(period: DatePeriod) -> String {
+    match period {
+        DatePeriod::Year(_) | DatePeriod::Month { .. } => period.title(),
+        DatePeriod::Day(date) => date_label(date),
+    }
+}
+
+fn date_period_parent_label(period: DatePeriod) -> String {
+    match period {
+        DatePeriod::Year(_) => "Dates".to_string(),
+        DatePeriod::Month { year, .. } => format!("{year:04}"),
+        DatePeriod::Day(date) => format!("{:04}-{:02}", date.year(), date.month()),
     }
 }
 
@@ -1035,6 +1061,36 @@ fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16
             *backlink_count,
         );
     }
+
+    push_date_month_pages_source(source, date_index, year, month);
+}
+
+fn push_date_month_pages_source(source: &mut String, date_index: &DateIndex, year: u16, month: u8) {
+    let mut pages = BTreeMap::new();
+    for (_date, backlinks) in date_index
+        .dates()
+        .filter(|(date, _backlinks)| date.year() == year && date.month() == month)
+    {
+        for backlink in backlinks {
+            let Some(occurrence) = date_index.occurrence(backlink.occurrence_id()) else {
+                continue;
+            };
+            pages
+                .entry(occurrence.note_ref().web_path())
+                .or_insert_with(|| occurrence.note_title().to_string());
+        }
+    }
+
+    if pages.is_empty() {
+        return;
+    }
+
+    source.push_str("\n== Pages\n\n");
+    for (path, title) in pages {
+        source.push_str("- ");
+        push_maki_closed_link(source, &title, &path);
+        source.push('\n');
+    }
 }
 
 fn push_date_day_source(source: &mut String, date_index: &DateIndex, date: Date) {
@@ -1067,11 +1123,7 @@ fn push_date_backlink_source(
     let target_href = format!("{}#{}", occurrence.note_ref().web_path(), occurrence.id());
 
     source.push_str("- ");
-    push_maki_link(source, occurrence.note_title(), &target_href);
-    source.push_str(") (");
-    push_maki_single_line(source, &occurrence.source_path().display().to_string());
-    source.push_str(") ");
-    push_maki_inline_code(source, occurrence.marker().raw());
+    push_maki_closed_link(source, occurrence.note_title(), &target_href);
     source.push(' ');
     push_date_labels(source, occurrence, relation);
     source.push('\n');
@@ -1404,12 +1456,18 @@ hello <maki> & friends
     }
 
     #[test]
-    fn format_unix_seconds_utc_formats_known_instants() {
-        assert_eq!(format_unix_seconds_utc(0), "1970-01-01 00:00 UTC");
-        assert_eq!(format_unix_seconds_utc(951_782_400), "2000-02-29 00:00 UTC");
+    fn format_unix_seconds_with_offset_formats_known_instants() {
         assert_eq!(
-            format_unix_seconds_utc(1_704_067_199),
-            "2023-12-31 23:59 UTC"
+            format_unix_seconds_with_offset(0, 9 * 60 * 60, "KST"),
+            "1970-01-01 09:00 KST"
+        );
+        assert_eq!(
+            format_unix_seconds_with_offset(951_782_400, 9 * 60 * 60, "KST"),
+            "2000-02-29 09:00 KST"
+        );
+        assert_eq!(
+            format_unix_seconds_with_offset(1_704_067_199, 9 * 60 * 60, "KST"),
+            "2024-01-01 08:59 KST"
         );
     }
 
