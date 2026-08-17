@@ -26,6 +26,7 @@ const RECENTS_TEMPLATE: &str = include_str!("../templates/recents.maki");
 const DATES_INDEX_TEMPLATE: &str = include_str!("../templates/dates-index.maki");
 const DATE_PERIOD_TEMPLATE: &str = include_str!("../templates/date-period.maki");
 const DIAGNOSTICS_TEMPLATE: &str = include_str!("../templates/diagnostics.maki");
+const KST_OFFSET_SECONDS: u64 = 9 * 60 * 60;
 pub(crate) const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
 pub(crate) const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
 pub(crate) const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
@@ -874,20 +875,20 @@ fn modified_time_kst_label(modified: Option<SystemTime>) -> String {
         return "before 1970".to_string();
     };
 
-    format_unix_seconds_with_offset(duration.as_secs(), 9 * 60 * 60, "KST")
+    format_unix_seconds_kst(duration.as_secs())
 }
 
-fn format_unix_seconds_with_offset(seconds: u64, offset_seconds: u64, timezone: &str) -> String {
+fn format_unix_seconds_kst(seconds: u64) -> String {
     const SECONDS_PER_DAY: u64 = 86_400;
 
-    let local_seconds = seconds.saturating_add(offset_seconds);
+    let local_seconds = seconds.saturating_add(KST_OFFSET_SECONDS);
     let days = (local_seconds / SECONDS_PER_DAY) as i64;
     let seconds_of_day = local_seconds % SECONDS_PER_DAY;
     let hour = seconds_of_day / 3_600;
     let minute = (seconds_of_day % 3_600) / 60;
     let (year, month, day) = civil_from_unix_days(days);
 
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} {timezone}")
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} KST")
 }
 
 fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
@@ -992,10 +993,7 @@ fn date_period_navigation_source(period: DatePeriod) -> String {
 }
 
 fn date_period_title(period: DatePeriod) -> String {
-    match period {
-        DatePeriod::Year(_) | DatePeriod::Month { .. } => period.title(),
-        DatePeriod::Day(date) => date_label(date),
-    }
+    date_period_navigation_label(period)
 }
 
 fn date_period_navigation_label(period: DatePeriod) -> String {
@@ -1456,17 +1454,11 @@ hello <maki> & friends
     }
 
     #[test]
-    fn format_unix_seconds_with_offset_formats_known_instants() {
+    fn format_unix_seconds_kst_formats_known_instants() {
+        assert_eq!(format_unix_seconds_kst(0), "1970-01-01 09:00 KST");
+        assert_eq!(format_unix_seconds_kst(951_782_400), "2000-02-29 09:00 KST");
         assert_eq!(
-            format_unix_seconds_with_offset(0, 9 * 60 * 60, "KST"),
-            "1970-01-01 09:00 KST"
-        );
-        assert_eq!(
-            format_unix_seconds_with_offset(951_782_400, 9 * 60 * 60, "KST"),
-            "2000-02-29 09:00 KST"
-        );
-        assert_eq!(
-            format_unix_seconds_with_offset(1_704_067_199, 9 * 60 * 60, "KST"),
+            format_unix_seconds_kst(1_704_067_199),
             "2024-01-01 08:59 KST"
         );
     }

@@ -1669,7 +1669,7 @@ mod tests {
 
         assert_eq!(response.status(), http::StatusCode::Ok);
         assert!(body.contains("<title>Recents</title>"));
-        assert!(body.contains("KST <a href=\"/alpha\">Alpha</a>"));
+        assert!(body.contains("KST <a href=\"/alpha\">Alpha</a></li>"));
         assert!(body.contains("<a href=\"/alpha\">Alpha</a>"));
         assert!(body.contains("<a href=\"/notes/beta\">Beta</a>"));
         assert!(!body.contains("alpha.maki"));
