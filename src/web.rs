@@ -1781,6 +1781,7 @@ Task with property date.
 
         assert_eq!(note.status(), http::StatusCode::Ok);
         assert!(note_body.contains("id=\"date-inline-home-maki-2\""));
+        assert!(note_body.contains("<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-17#date-inline-home-maki-2\">[2026-08-17]</a>&ndash;<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-19#date-inline-home-maki-2\">[2026-08-19]</a>"));
         assert!(note_body.contains("id=\"date-property-home-maki-2\""));
     }
 

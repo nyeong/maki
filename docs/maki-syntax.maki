@@ -397,6 +397,7 @@ Property는 문법적으로는 자유 key-value이지만, 일부 key는 project 
   - timestamp marker: {2026-06-06}, {2026-06-06 Sat}
   - scheduled marker: <2026-06-06>, <2026-06-06 Sat>
   - range marker: [2026-06-06]--[2026-06-08], {2026-06-06}--{2026-06-08}, <2026-06-06>--<2026-06-08>
+  - HTML 렌더링에서는 range marker 중간의 `--`를 en dash로 표시한다.
   - marker body에서 첫 `yyyy-mm-dd`가 index key이며, 뒤의 요일/시간 텍스트는 표시용으로 보존한다.
   - range 양 끝의 marker kind는 같아야 한다.
   - `[date]`는 자료가 가진 날짜다. 공고 시작일, 기사 발행일, 문서상 기준일처럼 reference로 다룬다.

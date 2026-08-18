@@ -26,6 +26,7 @@ const RECENTS_TEMPLATE: &str = include_str!("../templates/recents.maki");
 const DATES_INDEX_TEMPLATE: &str = include_str!("../templates/dates-index.maki");
 const DATE_PERIOD_TEMPLATE: &str = include_str!("../templates/date-period.maki");
 const DIAGNOSTICS_TEMPLATE: &str = include_str!("../templates/diagnostics.maki");
+const DATE_RANGE_SEPARATOR_HTML: &str = "&ndash;";
 const KST_OFFSET_SECONDS: u64 = 9 * 60 * 60;
 pub(crate) const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
 pub(crate) const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
@@ -358,11 +359,11 @@ impl<'a> Renderer<'a> {
         if let Some(occurrence_id) = self.next_inline_date_occurrence_id() {
             self.render_date_location(&occurrence_id);
             self.render_date_stamp_link(range.start(), &occurrence_id);
-            self.html.push_str("--");
+            self.html.push_str(DATE_RANGE_SEPARATOR_HTML);
             self.render_date_stamp_link(range.end(), &occurrence_id);
         } else {
             self.render_date_stamp_text(range.start());
-            self.html.push_str("--");
+            self.html.push_str(DATE_RANGE_SEPARATOR_HTML);
             self.render_date_stamp_text(range.end());
         }
     }
@@ -1382,6 +1383,19 @@ hello <maki> & friends
             "<tr class=\"maki-table-separator\" aria-hidden=\"true\"><td colspan=\"2\"></td></tr>"
         ));
         assert!(html.contains("2026-04-04 Sat"));
+    }
+
+    #[test]
+    fn date_ranges_render_separator_as_en_dash() {
+        let parsed = parser::parse(
+            r#"References [2026-08-17]--[2026-08-19].
+Events <2026-08-20>--<2026-08-22>."#,
+        );
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains("[2026-08-17]&ndash;[2026-08-19]"));
+        assert!(html.contains("<2026-08-20>&ndash;<2026-08-22>"));
     }
 
     #[test]
