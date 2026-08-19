@@ -329,19 +329,24 @@ impl<'a> Renderer<'a> {
     ) {
         for (_key, value) in properties {
             let inlines = parser::parse_inline(value);
-            for inline in &inlines {
-                match inline {
-                    Inline::DateStamp(_) | Inline::DateRange(_) => {
-                        if let Some(occurrence_id) = self.next_property_date_occurrence_id() {
-                            self.render_date_location(&occurrence_id);
-                        }
+            self.render_property_inline_date_locations(&inlines);
+        }
+    }
+
+    fn render_property_inline_date_locations(&mut self, inlines: &[Inline<'_>]) {
+        for inline in inlines {
+            match inline {
+                Inline::DateStamp(_) | Inline::DateRange(_) => {
+                    if let Some(occurrence_id) = self.next_property_date_occurrence_id() {
+                        self.render_date_location(&occurrence_id);
                     }
-                    Inline::NoteLink { .. }
-                    | Inline::Link { .. }
-                    | Inline::Text(_)
-                    | Inline::SoftBreak
-                    | Inline::Code(_) => {}
                 }
+                Inline::Strong(body) => self.render_property_inline_date_locations(body),
+                Inline::NoteLink { .. }
+                | Inline::Link { .. }
+                | Inline::Text(_)
+                | Inline::SoftBreak
+                | Inline::Code(_) => {}
             }
         }
     }
@@ -376,6 +381,11 @@ impl<'a> Renderer<'a> {
             Inline::DateRange(range) => self.render_date_range(*range),
             Inline::SoftBreak => self.html.push(' '),
             Inline::Text(text) => self.escape_html_into(text),
+            Inline::Strong(body) => {
+                self.html.push_str("<strong>");
+                self.render_inlines(body);
+                self.html.push_str("</strong>");
+            }
             Inline::Code(text) => {
                 self.html.push_str("<code>");
                 self.escape_html_into(text);
@@ -1334,6 +1344,15 @@ hello <maki> & friends
         assert!(
             html.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>")
         );
+    }
+
+    #[test]
+    fn render_star_delimited_strong_text() {
+        let parsed = parser::parse("This is *bold & `code`*.");
+
+        let html = render_document(&parsed.document);
+
+        assert!(html.contains("<p>This is <strong>bold &amp; <code>code</code></strong>.</p>"));
     }
 
     #[test]

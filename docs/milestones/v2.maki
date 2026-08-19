@@ -67,7 +67,7 @@ v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
 
 - [ ] [[maki-syntax#Inline]]
   - [ ] Extend Inline
-  - [ ] Bold
+  - [x] Bold
   - [ ] Italic
   - [ ] Underline
   - [ ] Strike

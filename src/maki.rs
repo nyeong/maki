@@ -1381,6 +1381,9 @@ fn collect_inline_external_links(
                     target: target.trim().to_string(),
                 });
             }
+            Inline::Strong(body) => {
+                collect_inline_external_links(external_links, source_path, body)
+            }
             Inline::NoteLink { .. }
             | Inline::Link { .. }
             | Inline::DateStamp(_)
@@ -1724,9 +1727,7 @@ fn date_context_with_scope(
     truncate_date_context(context)
 }
 
-fn inline_date_context(inlines: &[Inline<'_>]) -> String {
-    let mut context = String::new();
-
+fn push_inline_date_context(context: &mut String, inlines: &[Inline<'_>]) {
     for inline in inlines {
         match inline {
             Inline::NoteLink { target } => {
@@ -1750,8 +1751,18 @@ fn inline_date_context(inlines: &[Inline<'_>]) -> String {
                 context.push_str(text);
                 context.push('`');
             }
+            Inline::Strong(body) => {
+                context.push('*');
+                push_inline_date_context(context, body);
+                context.push('*');
+            }
         }
     }
+}
+
+fn inline_date_context(inlines: &[Inline<'_>]) -> String {
+    let mut context = String::new();
+    push_inline_date_context(&mut context, inlines);
 
     truncate_date_context(context)
 }
@@ -1885,6 +1896,27 @@ fn collect_inline_dates(
         match inline {
             Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp, context),
             Inline::DateRange(range) => collector.push_inline_range(*range, context),
+            Inline::Strong(body) => collect_inline_dates(collector, body, context),
+            Inline::NoteLink { .. }
+            | Inline::Link { .. }
+            | Inline::Text(_)
+            | Inline::SoftBreak
+            | Inline::Code(_) => {}
+        }
+    }
+}
+
+fn collect_property_inline_dates(
+    collector: &mut DateIndexCollector<'_>,
+    key: &str,
+    inlines: &[Inline<'_>],
+    context: &str,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::DateStamp(stamp) => collector.push_property_stamp(key, *stamp, context),
+            Inline::DateRange(range) => collector.push_property_range(key, *range, context),
+            Inline::Strong(body) => collect_property_inline_dates(collector, key, body, context),
             Inline::NoteLink { .. }
             | Inline::Link { .. }
             | Inline::Text(_)
@@ -1902,17 +1934,7 @@ fn collect_property_dates<'a>(
     for (key, value) in properties {
         let context = property_date_context(key, value, owner_context);
         let inlines = parser::parse_inline(value);
-        for inline in &inlines {
-            match inline {
-                Inline::DateStamp(stamp) => collector.push_property_stamp(key, *stamp, &context),
-                Inline::DateRange(range) => collector.push_property_range(key, *range, &context),
-                Inline::NoteLink { .. }
-                | Inline::Link { .. }
-                | Inline::Text(_)
-                | Inline::SoftBreak
-                | Inline::Code(_) => {}
-            }
-        }
+        collect_property_inline_dates(collector, key, &inlines, &context);
     }
 }
 
@@ -2064,6 +2086,9 @@ fn collect_inline_link_diagnostics(
                         &note_target,
                     );
                 }
+            }
+            Inline::Strong(body) => {
+                collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body)
             }
             Inline::DateStamp(_)
             | Inline::DateRange(_)
@@ -2907,6 +2932,49 @@ See https://down.example/path.
     }
 
     #[test]
+    fn diagnostics_collect_links_inside_strong_inline() {
+        let project = temp_project("strong-link-diagnostics");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"See *[[missing]] and [Missing](/missing-note) and [Down](https://down.example/path)*."#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let checked = RefCell::new(vec![]);
+        let diagnostics = maki.diagnostics_with_external_link_checker(&|target| {
+            checked.borrow_mut().push(target.to_string());
+            ExternalLinkCheck::Broken {
+                reason: "HTTP 404".to_string(),
+            }
+        });
+
+        assert_eq!(
+            checked.into_inner(),
+            vec!["https://down.example/path".to_string()]
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target } if target == "missing"
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenLink { target } if target == "missing-note"
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenExternalLink { target, reason }
+                    if target == "https://down.example/path" && reason == "HTTP 404"
+            )
+        }));
+    }
+
+    #[test]
     fn date_index_collects_inline_property_and_range_dates() {
         let project = temp_project("date-index");
         write_note_with_content(
@@ -2964,6 +3032,60 @@ Track [2026-08-17]--[2026-08-19]."#,
         assert!(html.contains("href=\"/@/dates/2026-08-16#date-inline-start-maki-1\""));
         assert!(html.contains("href=\"/@/dates/2026-08-17#date-inline-start-maki-2\""));
         assert!(html.contains("href=\"/@/dates/2026-08-19#date-inline-start-maki-2\""));
+    }
+
+    #[test]
+    fn date_index_collects_dates_inside_strong_inline() {
+        let project = temp_project("strong-date-index");
+        write_note_with_content(
+            &project,
+            "start.maki",
+            r#"--^ title: Start
+--^ due: *[2026-08-20]*
+
+Plan *<2026-08-21> and [2026-08-22]--[2026-08-23]*."#,
+        );
+
+        let maki = Maki::load(&project.root).unwrap();
+        let property_date = Date::parse("2026-08-20").unwrap();
+        let inline_date = Date::parse("2026-08-21").unwrap();
+        let range_start_date = Date::parse("2026-08-22").unwrap();
+        let range_end_date = Date::parse("2026-08-23").unwrap();
+
+        let property_backlinks = maki.date_index().backlinks_for(&property_date).unwrap();
+        assert_eq!(property_backlinks.len(), 1);
+        let property_occurrence = maki
+            .date_index()
+            .occurrence(property_backlinks[0].occurrence_id())
+            .unwrap();
+        assert!(matches!(
+            property_occurrence.origin(),
+            DateOrigin::Property { key } if key == "due"
+        ));
+        assert_eq!(property_occurrence.marker().raw(), "[2026-08-20]");
+
+        let inline_backlinks = maki.date_index().backlinks_for(&inline_date).unwrap();
+        assert_eq!(inline_backlinks.len(), 1);
+        let inline_occurrence = maki
+            .date_index()
+            .occurrence(inline_backlinks[0].occurrence_id())
+            .unwrap();
+        assert_eq!(
+            inline_occurrence.context(),
+            "Plan *<2026-08-21> and [2026-08-22]--[2026-08-23]*."
+        );
+
+        let range_start_backlinks = maki.date_index().backlinks_for(&range_start_date).unwrap();
+        let range_end_backlinks = maki.date_index().backlinks_for(&range_end_date).unwrap();
+        assert_eq!(range_start_backlinks.len(), 1);
+        assert_eq!(range_end_backlinks.len(), 1);
+
+        let html = maki.render_html(Path::new("start.maki")).unwrap();
+        assert!(html.contains("<strong>"));
+        assert!(html.contains("id=\"date-inline-start-maki-1\""));
+        assert!(html.contains("href=\"/@/dates/2026-08-21#date-inline-start-maki-1\""));
+        assert!(html.contains("href=\"/@/dates/2026-08-22#date-inline-start-maki-2\""));
+        assert!(html.contains("href=\"/@/dates/2026-08-23#date-inline-start-maki-2\""));
     }
 
     #[test]

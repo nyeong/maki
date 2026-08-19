@@ -42,6 +42,7 @@ pub(crate) enum ParseDiagnosticKind<'a> {
 pub(crate) enum Inline<'a> {
     NoteLink { target: &'a str },
     Link { title: &'a str, target: &'a str },
+    Strong(Vec<Inline<'a>>),
     DateStamp(DateStamp<'a>),
     DateRange(DateRange<'a>),
     Text(&'a str),
@@ -245,6 +246,10 @@ impl<'a> InlineCursor<'a> {
         &self.source[self.pos..]
     }
 
+    fn previous_char(&self) -> Option<char> {
+        self.source[..self.pos].chars().next_back()
+    }
+
     fn bump(&mut self, n: usize) {
         self.pos += n;
     }
@@ -259,6 +264,7 @@ impl<'a> InlineCursor<'a> {
 const INLINE_NOTE_LINK_BEGIN: &str = "[[";
 const INLINE_NOTE_LINK_END: &str = "]]";
 const INLINE_CODE_BEGIN_END: &str = "`";
+const INLINE_STRONG_BEGIN_END: &str = "*";
 const INLINE_LINK_BEGIN: &str = "[";
 const INLINE_LINK_SEPARATOR: &str = "](";
 const INLINE_LINK_END: &str = ")";
@@ -275,6 +281,37 @@ fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     cursor.bump(INLINE_CODE_BEGIN_END.len() + contents.len() + INLINE_CODE_BEGIN_END.len());
 
     Some(Inline::Code(contents))
+}
+
+fn parse_inline_strong<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    if cursor.previous_char() == Some('*') {
+        return None;
+    }
+
+    let rest = cursor.rest();
+    let body = rest.strip_prefix(INLINE_STRONG_BEGIN_END)?;
+    let first = body.chars().next()?;
+
+    if first.is_whitespace() || first == '*' {
+        return None;
+    }
+
+    let end = body.char_indices().find_map(|(index, ch)| {
+        if ch != '*' {
+            return None;
+        }
+
+        let contents = &body[..index];
+        let before = contents.chars().next_back()?;
+        let after = body[index + ch.len_utf8()..].chars().next();
+
+        (!before.is_whitespace() && before != '*' && after != Some('*')).then_some(index)
+    })?;
+    let contents = &body[..end];
+
+    cursor.bump(INLINE_STRONG_BEGIN_END.len() + contents.len() + INLINE_STRONG_BEGIN_END.len());
+
+    Some(Inline::Strong(parse_inline(contents)))
 }
 
 fn parse_inline_note_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
@@ -423,6 +460,7 @@ pub(crate) fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
         let start = cursor.pos();
 
         if let Some(inline) = parse_inline_code(&mut cursor)
+            .or_else(|| parse_inline_strong(&mut cursor))
             .or_else(|| parse_inline_note_link(&mut cursor))
             .or_else(|| parse_inline_link(&mut cursor))
             .or_else(|| parse_inline_date_range(&mut cursor))
@@ -1625,6 +1663,34 @@ mod tests {
                 Inline::NoteLink { target: "Maki" },
                 Inline::Text(".")
             ]
+        );
+    }
+
+    #[test]
+    fn parse_inline_supports_star_delimited_strong_text() {
+        assert_eq!(
+            parse_inline("Use *bold `code` and [link](/target)* now."),
+            vec![
+                Inline::Text("Use "),
+                Inline::Strong(vec![
+                    Inline::Text("bold "),
+                    Inline::Code("code"),
+                    Inline::Text(" and "),
+                    Inline::Link {
+                        title: "link",
+                        target: "/target"
+                    }
+                ]),
+                Inline::Text(" now.")
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_inline_keeps_loose_stars_as_text() {
+        assert_eq!(
+            parse_inline("Do not parse * loose * or **double**."),
+            vec![Inline::Text("Do not parse * loose * or **double**.")]
         );
     }
 
