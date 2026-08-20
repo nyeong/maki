@@ -1,5 +1,13 @@
 --^ title: Architecture
 
+= 코드 구조
+
+Maki는 workspace 안의 세 층으로 나뉜다.
+
+- root `maki` binary: CLI parsing, command 실행, stderr 출력 포맷.
+- `maki-core`: parser, HTML renderer, project domain, note/link/date/diagnostics/search metadata.
+- `maki-serve`: HTTP parser/response, web route handling, live reload, watcher, response cache, git source runtime, Prometheus metrics.
+
 = 파싱
 
 이 순서대로

@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub(crate) fn parse(source: &str) -> ParseResult<'_> {
+pub fn parse(source: &str) -> ParseResult<'_> {
     let lines = scan_lines(source);
     let mut diagnostics = vec![];
     let drafts = build_drafts(&lines, &mut diagnostics);
@@ -21,25 +21,25 @@ pub(crate) fn parse(source: &str) -> ParseResult<'_> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct ParseResult<'a> {
-    pub(crate) document: Document<'a>,
-    pub(crate) diagnostics: Vec<ParseDiagnostic<'a>>,
+pub struct ParseResult<'a> {
+    pub document: Document<'a>,
+    pub diagnostics: Vec<ParseDiagnostic<'a>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct ParseDiagnostic<'a> {
-    pub(crate) line: usize,
-    pub(crate) kind: ParseDiagnosticKind<'a>,
+pub struct ParseDiagnostic<'a> {
+    pub line: usize,
+    pub kind: ParseDiagnosticKind<'a>,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum ParseDiagnosticKind<'a> {
+pub enum ParseDiagnosticKind<'a> {
     InvalidProperty { raw_line: &'a str },
     UnclosedContainer { raw_line: &'a str },
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Inline<'a> {
+pub enum Inline<'a> {
     NoteLink { target: &'a str },
     Link { title: &'a str, target: &'a str },
     Strong(Vec<Inline<'a>>),
@@ -51,27 +51,27 @@ pub(crate) enum Inline<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct Date {
+pub struct Date {
     year: u16,
     month: u8,
     day: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DateStampKind {
+pub enum DateStampKind {
     Date,
     Event,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DateStamp<'a> {
+pub struct DateStamp<'a> {
     kind: DateStampKind,
     date: Date,
     body: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DateRange<'a> {
+pub struct DateRange<'a> {
     start: DateStamp<'a>,
     end: DateStamp<'a>,
 }
@@ -110,13 +110,13 @@ impl Date {
         Self::new(year, month, day).map(|date| (date, 10))
     }
 
-    pub(crate) fn parse(source: &str) -> Option<Self> {
+    pub fn parse(source: &str) -> Option<Self> {
         let (date, len) = Self::parse_prefix(source)?;
 
         (len == source.len()).then_some(date)
     }
 
-    pub(crate) fn next_day(self) -> Option<Self> {
+    pub fn next_day(self) -> Option<Self> {
         if self.day < days_in_month(self.year, self.month) {
             return Self::new(self.year, self.month, self.day + 1);
         }
@@ -128,7 +128,7 @@ impl Date {
             .and_then(|year| Self::new(year, 1, 1))
     }
 
-    pub(crate) fn previous_day(self) -> Option<Self> {
+    pub fn previous_day(self) -> Option<Self> {
         if self.day > 1 {
             return Self::new(self.year, self.month, self.day - 1);
         }
@@ -142,21 +142,21 @@ impl Date {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn year(&self) -> u16 {
+    pub fn year(&self) -> u16 {
         self.year
     }
 
     #[allow(dead_code)]
-    pub(crate) fn month(&self) -> u8 {
+    pub fn month(&self) -> u8 {
         self.month
     }
 
     #[allow(dead_code)]
-    pub(crate) fn day(&self) -> u8 {
+    pub fn day(&self) -> u8 {
         self.day
     }
 
-    pub(crate) fn weekday_abbrev(&self) -> &'static str {
+    pub fn weekday_abbrev(&self) -> &'static str {
         const MONTH_OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
         const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -183,29 +183,29 @@ impl fmt::Display for Date {
 }
 
 impl<'a> DateStamp<'a> {
-    pub(crate) fn kind(&self) -> DateStampKind {
+    pub fn kind(&self) -> DateStampKind {
         self.kind
     }
 
-    pub(crate) fn date(&self) -> Date {
+    pub fn date(&self) -> Date {
         self.date
     }
 
-    pub(crate) fn body(&self) -> &'a str {
+    pub fn body(&self) -> &'a str {
         self.body
     }
 }
 
 impl<'a> DateRange<'a> {
-    pub(crate) fn kind(&self) -> DateStampKind {
+    pub fn kind(&self) -> DateStampKind {
         self.start.kind()
     }
 
-    pub(crate) fn start(&self) -> DateStamp<'a> {
+    pub fn start(&self) -> DateStamp<'a> {
         self.start
     }
 
-    pub(crate) fn end(&self) -> DateStamp<'a> {
+    pub fn end(&self) -> DateStamp<'a> {
         self.end
     }
 }
@@ -451,7 +451,7 @@ fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
 }
 
 /// Parses a given line into Vec<Inline>
-pub(crate) fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
+pub fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     let mut cursor = InlineCursor::new(source);
     let mut inlines = vec![];
     let mut text_start = 0;
@@ -485,7 +485,7 @@ pub(crate) fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     inlines
 }
 
-pub(crate) fn format_parse_diagnostic_kind(kind: &ParseDiagnosticKind<'_>) -> String {
+pub fn format_parse_diagnostic_kind(kind: &ParseDiagnosticKind<'_>) -> String {
     match kind {
         ParseDiagnosticKind::InvalidProperty { raw_line } => {
             format!("invalid property: {raw_line}")
@@ -732,35 +732,35 @@ impl<'a> Properties<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Document<'a> {
+pub struct Document<'a> {
     props: Properties<'a>,
-    pub(crate) blocks: Vec<Block<'a>>,
+    pub blocks: Vec<Block<'a>>,
 }
 
 impl<'a> Document<'a> {
-    pub(crate) fn title(&self) -> Option<&'a str> {
+    pub fn title(&self) -> Option<&'a str> {
         self.props.get_one("title")
     }
 
-    pub(crate) fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
+    pub fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
         self.props.iter()
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Block<'a> {
+pub struct Block<'a> {
     props: Properties<'a>,
-    pub(crate) kind: BlockKind<'a>,
+    pub kind: BlockKind<'a>,
 }
 
 impl<'a> Block<'a> {
-    pub(crate) fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
+    pub fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
         self.props.iter()
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum BlockKind<'a> {
+pub enum BlockKind<'a> {
     Paragraph {
         body: Vec<Inline<'a>>,
     },
@@ -791,39 +791,39 @@ pub(crate) enum BlockKind<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct TableRow<'a> {
-    pub(crate) kind: TableRowKind,
-    pub(crate) cells: Vec<TableCell<'a>>,
+pub struct TableRow<'a> {
+    pub kind: TableRowKind,
+    pub cells: Vec<TableCell<'a>>,
 }
 
 impl TableRow<'_> {
-    pub(crate) fn is_separator(&self) -> bool {
+    pub fn is_separator(&self) -> bool {
         self.kind == TableRowKind::Separator
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct TableCell<'a> {
-    pub(crate) body: Vec<Inline<'a>>,
+pub struct TableCell<'a> {
+    pub body: Vec<Inline<'a>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum TableColumnAlignment {
+pub enum TableColumnAlignment {
     Text,
     Number,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum TableRowKind {
+pub enum TableRowKind {
     Data,
     Separator,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct ListItem<'a> {
-    pub(crate) body: Vec<Inline<'a>>,
-    pub(crate) kind: ListKind,
-    pub(crate) children: Vec<Block<'a>>, // List를 포함하기 위함
+pub struct ListItem<'a> {
+    pub body: Vec<Inline<'a>>,
+    pub kind: ListKind,
+    pub children: Vec<Block<'a>>, // List를 포함하기 위함
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -948,7 +948,7 @@ fn scan_lines(source: &str) -> Vec<LineToken<'_>> {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum ListKind {
+pub enum ListKind {
     Unordered,
     Ordered,
 }

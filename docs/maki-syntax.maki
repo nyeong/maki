@@ -376,7 +376,7 @@ Property는 문법적으로는 자유 key-value이지만, 일부 key는 project 
 --v milestone: v0
 ==== Unordered List
 
---v milestone: later
+--v milestone: v0
 ==== Ordered List
 
 

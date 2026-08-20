@@ -6,7 +6,12 @@ edition = "2024"
 description = "File based markdown wiki"
 readme = "README.md"
 
+[workspace]
+members = [
+    "crates/maki-core",
+    "crates/maki-serve",
+]
 
 [dependencies]
-percent-encoding = "2.3.2"
-ureq = { version = "2.12.1", default-features = false, features = ["tls"] }
+maki-core = { path = "crates/maki-core" }
+maki-serve = { path = "crates/maki-serve" }

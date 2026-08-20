@@ -187,8 +187,23 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "maki"
 version = "0.1.0"
 dependencies = [
- "percent-encoding",
+ "maki-core",
+ "maki-serve",
+]
+
+[[package]]
+name = "maki-core"
+version = "0.1.0"
+dependencies = [
  "ureq",
+]
+
+[[package]]
+name = "maki-serve"
+version = "0.1.0"
+dependencies = [
+ "maki-core",
+ "percent-encoding",
 ]
 
 [[package]]

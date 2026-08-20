@@ -18,19 +18,19 @@ use crate::{
     },
 };
 
-const DEFAULT_CSS: &str = include_str!("../assets/maki.css");
-const SEARCH_SCRIPT: &str = include_str!("../assets/maki-search.js");
-const TOC_SCRIPT: &str = include_str!("../assets/maki-toc.js");
-const META_TEMPLATE: &str = include_str!("../templates/meta.maki");
-const RECENTS_TEMPLATE: &str = include_str!("../templates/recents.maki");
-const DATES_INDEX_TEMPLATE: &str = include_str!("../templates/dates-index.maki");
-const DATE_PERIOD_TEMPLATE: &str = include_str!("../templates/date-period.maki");
-const DIAGNOSTICS_TEMPLATE: &str = include_str!("../templates/diagnostics.maki");
+const DEFAULT_CSS: &str = include_str!("../../../assets/maki.css");
+const SEARCH_SCRIPT: &str = include_str!("../../../assets/maki-search.js");
+const TOC_SCRIPT: &str = include_str!("../../../assets/maki-toc.js");
+const META_TEMPLATE: &str = include_str!("../../../templates/meta.maki");
+const RECENTS_TEMPLATE: &str = include_str!("../../../templates/recents.maki");
+const DATES_INDEX_TEMPLATE: &str = include_str!("../../../templates/dates-index.maki");
+const DATE_PERIOD_TEMPLATE: &str = include_str!("../../../templates/date-period.maki");
+const DIAGNOSTICS_TEMPLATE: &str = include_str!("../../../templates/diagnostics.maki");
 const DATE_RANGE_SEPARATOR_HTML: &str = "&ndash;";
 const KST_OFFSET_SECONDS: u64 = 9 * 60 * 60;
-pub(crate) const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
-pub(crate) const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
-pub(crate) const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
+pub const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
+pub const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
+pub const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
 const PROJECT_NAVIGATION_HTML: &str = r#"<header class="maki-nav">
 <nav aria-label="Maki navigation">
 <a class="maki-home-link" href="/">/</a>
@@ -42,19 +42,19 @@ const PROJECT_NAVIGATION_HTML: &str = r#"<header class="maki-nav">
 </nav>
 </header>"#;
 
-pub(crate) struct NoteInfo {
-    pub(crate) title: String,
+pub struct NoteInfo {
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum AssetMode {
+pub enum AssetMode {
     #[default]
     Inline,
     External,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeAsset {
+pub struct RuntimeAsset {
     request_path: &'static str,
     file_name: &'static str,
     content_type: &'static str,
@@ -62,20 +62,21 @@ pub(crate) struct RuntimeAsset {
 }
 
 impl RuntimeAsset {
-    pub(crate) fn request_path(&self) -> &'static str {
+    pub fn request_path(&self) -> &'static str {
         self.request_path
     }
 
-    pub(crate) fn content_type(&self) -> &'static str {
+    pub fn content_type(&self) -> &'static str {
         self.content_type
     }
 
-    pub(crate) fn embedded(&self) -> &'static str {
+    pub fn embedded(&self) -> &'static str {
         self.embedded
     }
 
-    pub(crate) fn source_path(&self) -> PathBuf {
+    pub fn source_path(&self) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
             .join("assets")
             .join(self.file_name)
     }
@@ -102,11 +103,11 @@ const RUNTIME_ASSETS: &[RuntimeAsset] = &[
     },
 ];
 
-pub(crate) fn runtime_assets() -> &'static [RuntimeAsset] {
+pub fn runtime_assets() -> &'static [RuntimeAsset] {
     RUNTIME_ASSETS
 }
 
-pub(crate) fn runtime_asset_for_request_path(path: &str) -> Option<RuntimeAsset> {
+pub fn runtime_asset_for_request_path(path: &str) -> Option<RuntimeAsset> {
     runtime_assets()
         .iter()
         .find(|asset| asset.request_path() == path)
@@ -697,7 +698,7 @@ impl<'a> Renderer<'a> {
 }
 
 #[derive(Default)]
-pub(crate) struct RenderContext<'a> {
+pub struct RenderContext<'a> {
     project: Option<ProjectRenderContext<'a>>,
     asset_mode: AssetMode,
     project_navigation: bool,
@@ -705,10 +706,7 @@ pub(crate) struct RenderContext<'a> {
 }
 
 impl<'a> RenderContext<'a> {
-    pub(crate) fn project(
-        resolve_note_link: NoteLinkResolver<'a>,
-        get_note: NoteInfoGetter<'a>,
-    ) -> Self {
+    pub fn project(resolve_note_link: NoteLinkResolver<'a>, get_note: NoteInfoGetter<'a>) -> Self {
         Self {
             project: Some(ProjectRenderContext {
                 resolve_note_link,
@@ -720,17 +718,17 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    pub(crate) fn with_asset_mode(mut self, asset_mode: AssetMode) -> Self {
+    pub fn with_asset_mode(mut self, asset_mode: AssetMode) -> Self {
         self.asset_mode = asset_mode;
         self
     }
 
-    pub(crate) fn with_project_navigation(mut self) -> Self {
+    pub fn with_project_navigation(mut self) -> Self {
         self.project_navigation = true;
         self
     }
 
-    pub(crate) fn with_date_source_path(mut self, path: &'a Path) -> Self {
+    pub fn with_date_source_path(mut self, path: &'a Path) -> Self {
         self.date_source_path = Some(path);
         self
     }
@@ -744,26 +742,23 @@ struct ProjectRenderContext<'a> {
 type NoteLinkResolver<'a> = &'a dyn Fn(&str) -> NoteLinkResolution;
 type NoteInfoGetter<'a> = &'a dyn Fn(&NoteRef) -> Option<NoteInfo>;
 
-pub(crate) fn render_document_with_context(
-    document: &Document<'_>,
-    context: RenderContext<'_>,
-) -> String {
+pub fn render_document_with_context(document: &Document<'_>, context: RenderContext<'_>) -> String {
     let mut renderer = Renderer::new_with_context(context);
 
     renderer.render(document)
 }
 
-pub(crate) fn render_document(document: &Document<'_>) -> String {
+pub fn render_document(document: &Document<'_>) -> String {
     render_document_with_context(document, RenderContext::default())
 }
 
-pub(crate) fn render_maki_source_with_context(source: &str, context: RenderContext<'_>) -> String {
+pub fn render_maki_source_with_context(source: &str, context: RenderContext<'_>) -> String {
     let parsed = parser::parse(source);
 
     render_document_with_context(&parsed.document, context)
 }
 
-pub(crate) fn render_search_page(
+pub fn render_search_page(
     query: &str,
     results: &[SearchEntry],
     total_entries: usize,
@@ -811,25 +806,25 @@ pub(crate) fn render_search_page(
     renderer.html
 }
 
-pub(crate) fn render_meta_index_page(asset_mode: AssetMode) -> String {
+pub fn render_meta_index_page(asset_mode: AssetMode) -> String {
     render_project_maki_source(META_TEMPLATE, asset_mode)
 }
 
-pub(crate) fn render_recents_page(entries: &[RecentEntry], asset_mode: AssetMode) -> String {
+pub fn render_recents_page(entries: &[RecentEntry], asset_mode: AssetMode) -> String {
     let body = recents_page_body_source(entries);
     let source = render_maki_template(RECENTS_TEMPLATE, &[("{{body}}", &body)]);
 
     render_project_maki_source(&source, asset_mode)
 }
 
-pub(crate) fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
+pub fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
     let body = date_index_page_body_source(date_index);
     let source = render_maki_template(DATES_INDEX_TEMPLATE, &[("{{body}}", &body)]);
 
     render_project_maki_source(&source, asset_mode)
 }
 
-pub(crate) fn render_date_period_page(
+pub fn render_date_period_page(
     period: DatePeriod,
     date_index: &DateIndex,
     asset_mode: AssetMode,
@@ -1174,7 +1169,7 @@ fn push_indented_maki_code_block(source: &mut String, input: &str, indent: &str)
     }
 }
 
-pub(crate) fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String {
+pub fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String {
     let mut renderer = Renderer::new_with_asset_mode(asset_mode);
     renderer.begin_project_page("Not Found");
     renderer
@@ -1190,7 +1185,7 @@ pub(crate) fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String
     renderer.html
 }
 
-pub(crate) fn render_diagnostics_page(
+pub fn render_diagnostics_page(
     diagnostics: &[ProjectDiagnostic],
     total_notes: usize,
     asset_mode: AssetMode,

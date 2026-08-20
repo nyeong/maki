@@ -6,6 +6,8 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use maki_core::ProjectLoadMeter;
+
 const HTTP_DURATION_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
 const RESPONSE_BYTES_BUCKETS: &[f64] = &[
     128.0,
@@ -23,7 +25,7 @@ const PROJECT_LOAD_BUCKETS: &[f64] = &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2
 const WARMUP_DURATION_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
 
 #[derive(Clone, Default)]
-pub(crate) struct Metrics {
+pub struct Metrics {
     inner: Option<Arc<MetricsInner>>,
 }
 
@@ -165,7 +167,7 @@ impl Histogram {
     }
 }
 
-pub(crate) struct InflightRequest {
+pub struct InflightRequest {
     metrics: Metrics,
 }
 
@@ -178,17 +180,17 @@ impl Drop for InflightRequest {
 }
 
 impl Metrics {
-    pub(crate) fn enabled() -> Self {
+    pub fn enabled() -> Self {
         Self {
             inner: Some(Arc::new(MetricsInner::default())),
         }
     }
 
-    pub(crate) fn disabled() -> Self {
+    pub fn disabled() -> Self {
         Self::default()
     }
 
-    pub(crate) fn track_http_inflight_request(&self) -> InflightRequest {
+    pub fn track_http_inflight_request(&self) -> InflightRequest {
         if let Some(inner) = &self.inner {
             inner.http_inflight_requests.fetch_add(1, Ordering::Relaxed);
         }
@@ -198,7 +200,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn record_http_request(
+    pub fn record_http_request(
         &self,
         method: &'static str,
         route: &'static str,
@@ -230,7 +232,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn record_metrics_request(
+    pub fn record_metrics_request(
         &self,
         method: &'static str,
         status: impl Into<String>,
@@ -252,7 +254,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn record_response_cache_request(&self, kind: &'static str, cache: &'static str) {
+    pub fn record_response_cache_request(&self, kind: &'static str, cache: &'static str) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -262,7 +264,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn set_response_cache_entries(&self, entries: usize) {
+    pub fn set_response_cache_entries(&self, entries: usize) {
         if let Some(inner) = &self.inner {
             inner
                 .response_cache_entries
@@ -270,11 +272,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn record_response_cache_warmup_item(
-        &self,
-        kind: &'static str,
-        result: &'static str,
-    ) {
+    pub fn record_response_cache_warmup_item(&self, kind: &'static str, result: &'static str) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -284,7 +282,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn record_response_cache_warmup_duration(&self, duration: Duration) {
+    pub fn record_response_cache_warmup_duration(&self, duration: Duration) {
         if let Some(inner) = &self.inner
             && let Ok(mut histogram) = inner.response_cache_warmup_duration.lock()
         {
@@ -292,7 +290,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn record_render_duration(&self, kind: &'static str, duration: Duration) {
+    pub fn record_render_duration(&self, kind: &'static str, duration: Duration) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -304,20 +302,20 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn record_render_error(&self, kind: &'static str) {
+    pub fn record_render_error(&self, kind: &'static str) {
         let Some(inner) = &self.inner else {
             return;
         };
         increment_counter(&inner.render_errors, KindLabels { kind });
     }
 
-    pub(crate) fn set_project_notes(&self, notes: usize) {
+    pub fn set_project_notes(&self, notes: usize) {
         if let Some(inner) = &self.inner {
             inner.project_notes.store(notes as u64, Ordering::Relaxed);
         }
     }
 
-    pub(crate) fn record_project_load_phase(&self, phase: &'static str, duration: Duration) {
+    pub fn record_project_load_phase(&self, phase: &'static str, duration: Duration) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -329,7 +327,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn record_project_reload(
+    pub fn record_project_reload(
         &self,
         source: &'static str,
         result: &'static str,
@@ -350,7 +348,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn record_git_refresh(&self, result: &'static str, duration: Duration) {
+    pub fn record_git_refresh(&self, result: &'static str, duration: Duration) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -365,7 +363,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn set_live_reload_clients(&self, clients: usize) {
+    pub fn set_live_reload_clients(&self, clients: usize) {
         if let Some(inner) = &self.inner {
             inner
                 .live_reload_clients
@@ -373,7 +371,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn increment_live_reload_events(&self) {
+    pub fn increment_live_reload_events(&self) {
         if let Some(inner) = &self.inner {
             inner
                 .live_reload_events_total
@@ -381,7 +379,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn to_prometheus_text(&self) -> String {
+    pub fn to_prometheus_text(&self) -> String {
         let Some(inner) = &self.inner else {
             return String::new();
         };
@@ -714,6 +712,12 @@ impl Metrics {
         );
 
         output
+    }
+}
+
+impl ProjectLoadMeter for Metrics {
+    fn record_project_load_phase(&self, phase: &'static str, duration: Duration) {
+        Metrics::record_project_load_phase(self, phase, duration);
     }
 }
 

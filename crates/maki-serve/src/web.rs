@@ -27,12 +27,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use percent_encoding::percent_decode_str;
 
-use crate::html::AssetMode;
 use crate::http::Response;
-use crate::maki;
-use crate::maki::{DatePeriod, HomeMode, Maki, MakiConfigOverrides, MakiRoute};
 use crate::metrics::Metrics;
 use crate::{RunError, http};
+use maki_core::html::{self, AssetMode};
+use maki_core::{
+    DatePeriod, Error as MakiError, HomeMode, Maki, MakiConfig, MakiConfigOverrides, MakiRoute,
+    PROJECT_FILE_NAME, SearchEntry,
+};
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
 const META_PATH: &str = "/@/";
@@ -54,12 +56,12 @@ const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct MetricsEndpoint {
-    pub(crate) host: String,
-    pub(crate) port: u16,
+pub struct MetricsEndpoint {
+    pub host: String,
+    pub port: u16,
 }
 
-pub(crate) struct AppState {
+struct AppState {
     project_root: PathBuf,
     config_overrides: MakiConfigOverrides,
     project: RwLock<ProjectState>,
@@ -170,9 +172,9 @@ impl AppState {
         }
     }
 
-    fn reload(&self) -> Result<(), maki::Error> {
+    fn reload(&self) -> Result<(), MakiError> {
         let started = Instant::now();
-        let mut config = maki::MakiConfig::load_project(&self.project_root)?;
+        let mut config = MakiConfig::load_project(&self.project_root)?;
         self.config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(&self.project_root);
         let result = Maki::load_with_config_metered(&source_root, config, &self.metrics)
@@ -183,23 +185,23 @@ impl AppState {
         result
     }
 
-    fn current_root(&self) -> Result<PathBuf, maki::Error> {
+    fn current_root(&self) -> Result<PathBuf, MakiError> {
         let project = self
             .project
             .read()
-            .map_err(|_| maki::Error::ReadDirectoryFailed(PathBuf::from(".")))?;
+            .map_err(|_| MakiError::ReadDirectoryFailed(PathBuf::from(".")))?;
 
         Ok(project.maki.root().to_path_buf())
     }
 
-    pub(crate) fn replace_maki(&self, next: Maki) -> Result<(), maki::Error> {
+    fn replace_maki(&self, next: Maki) -> Result<(), MakiError> {
         let root = next.root().to_path_buf();
         let notes_len = next.notes_len();
         {
             let mut project = self
                 .project
                 .write()
-                .map_err(|_| maki::Error::ReadDirectoryFailed(root))?;
+                .map_err(|_| MakiError::ReadDirectoryFailed(root))?;
             *project = ProjectState::new(next);
         }
         self.metrics.set_project_notes(notes_len);
@@ -237,8 +239,23 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    pub(crate) fn metrics(&self) -> &Metrics {
+    fn metrics(&self) -> &Metrics {
         &self.metrics
+    }
+}
+
+#[derive(Clone)]
+pub struct ProjectReloader {
+    state: Arc<AppState>,
+}
+
+impl ProjectReloader {
+    pub fn replace_maki(&self, next: Maki) -> Result<(), MakiError> {
+        self.state.replace_maki(next)
+    }
+
+    pub fn metrics(&self) -> &Metrics {
+        self.state.metrics()
     }
 }
 
@@ -369,7 +386,7 @@ enum Error {
     ZeroLengthRequest,
     BadRequest,
     Maki {
-        source: maki::Error,
+        source: MakiError,
     },
 }
 
@@ -395,10 +412,10 @@ impl Error {
     fn into_response(self) -> Response {
         match self {
             e @ Error::Maki {
-                source: maki::Error::NoteNotFound(..),
+                source: MakiError::NoteNotFound(..),
             } => not_found(&e),
             e @ Error::Maki {
-                source: maki::Error::InvalidNotePath(..),
+                source: MakiError::InvalidNotePath(..),
             }
             | e @ Error::InvalidRequest { .. }
             | e @ Error::TooLongRequest
@@ -421,8 +438,8 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<maki::Error> for Error {
-    fn from(error: maki::Error) -> Self {
+impl From<MakiError> for Error {
+    fn from(error: MakiError) -> Self {
         Self::Maki { source: error }
     }
 }
@@ -529,7 +546,7 @@ fn escape_json_string(input: &str) -> String {
     output
 }
 
-fn search_index_json(entries: &[maki::SearchEntry]) -> String {
+fn search_index_json(entries: &[SearchEntry]) -> String {
     let mut json = String::from("[");
 
     for (index, entry) in entries.iter().enumerate() {
@@ -550,7 +567,7 @@ fn search_index_json(entries: &[maki::SearchEntry]) -> String {
     json
 }
 
-fn runtime_asset_response(asset: crate::html::RuntimeAsset) -> http::Response {
+fn runtime_asset_response(asset: html::RuntimeAsset) -> http::Response {
     let body =
         std::fs::read(asset.source_path()).unwrap_or_else(|_| asset.embedded().as_bytes().to_vec());
 
@@ -599,40 +616,34 @@ fn render_cacheable_response(
     let started = Instant::now();
     let result = match key {
         ResponseCacheKey::MetaIndex => {
-            let html = crate::html::render_meta_index_page(AssetMode::External);
+            let html = html::render_meta_index_page(AssetMode::External);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::Recents => {
-            let html = crate::html::render_recents_page(maki.recent_entries(), AssetMode::External);
+            let html = html::render_recents_page(maki.recent_entries(), AssetMode::External);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::Diagnostics => {
             let diagnostics = maki.diagnostics_without_external_links();
-            let html = crate::html::render_diagnostics_page(
-                &diagnostics,
-                maki.notes_len(),
-                AssetMode::External,
-            );
+            let html =
+                html::render_diagnostics_page(&diagnostics, maki.notes_len(), AssetMode::External);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::DatesIndex => {
-            let html = crate::html::render_date_index_page(maki.date_index(), AssetMode::External);
+            let html = html::render_date_index_page(maki.date_index(), AssetMode::External);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::DatePeriodPage(period) => {
-            let html = crate::html::render_date_period_page(
-                *period,
-                maki.date_index(),
-                AssetMode::External,
-            );
+            let html =
+                html::render_date_period_page(*period, maki.date_index(), AssetMode::External);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
@@ -664,12 +675,12 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         return Err(Error::BadRequest);
     }
 
-    if let Some(asset) = crate::html::runtime_asset_for_request_path(&target.path) {
+    if let Some(asset) = html::runtime_asset_for_request_path(&target.path) {
         return Ok(runtime_asset_response(asset));
     }
 
     let project = state.project.read().map_err(|_| Error::Maki {
-        source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
+        source: MakiError::ReadDirectoryFailed(PathBuf::from(".")),
     })?;
     let maki = &project.maki;
 
@@ -706,7 +717,7 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
         let query = query_param(target.query, "q")?.unwrap_or_default();
         let results = maki.search_titles(&query, SEARCH_PAGE_RESULT_LIMIT);
         let started = Instant::now();
-        let html = crate::html::render_search_page(
+        let html = html::render_search_page(
             &query,
             &results,
             maki.search_entries().len(),
@@ -733,8 +744,8 @@ fn handle_request(state: &AppState, request: &http::Request) -> Result<http::Res
                 .set_header("Content-Type", "text/plain; charset=utf-8")
                 .set_body(path.as_bytes())),
         },
-        Err(maki::Error::NoteNotFound(_path)) => {
-            let html = crate::html::render_not_found_page(&target.path, AssetMode::External);
+        Err(MakiError::NoteNotFound(_path)) => {
+            let html = html::render_not_found_page(&target.path, AssetMode::External);
             Ok(http::Response::new(http::StatusCode::NotFound)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
@@ -767,7 +778,7 @@ fn route_label_for_request(state: &AppState, request: &http::Request) -> &'stati
     if target.path == LIVE_RELOAD_PATH {
         return "events";
     }
-    if crate::html::runtime_asset_for_request_path(&target.path).is_some() {
+    if html::runtime_asset_for_request_path(&target.path).is_some() {
         return "asset";
     }
     if target.path == META_PATH || target.path == META_PATH_NO_SLASH {
@@ -881,7 +892,7 @@ where
 {
     let Some(live_reload) = state.live_reload() else {
         let response = not_found(&Error::Maki {
-            source: maki::Error::NoteNotFound(PathBuf::from(LIVE_RELOAD_PATH)),
+            source: MakiError::NoteNotFound(PathBuf::from(LIVE_RELOAD_PATH)),
         });
         return write_response(stream, response);
     };
@@ -894,7 +905,7 @@ where
         }
         Err(LiveReloadError::StatePoisoned) => {
             let response = internal_server_error(&Error::Maki {
-                source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
+                source: MakiError::ReadDirectoryFailed(PathBuf::from(".")),
             });
             return write_response(stream, response);
         }
@@ -1003,7 +1014,7 @@ where
         metrics_response(metrics)
     } else {
         let response = not_found(&Error::Maki {
-            source: maki::Error::NoteNotFound(PathBuf::from("/metrics")),
+            source: MakiError::NoteNotFound(PathBuf::from("/metrics")),
         });
         let status = response.status().code().to_string();
         metrics.record_metrics_request(request.method().as_str(), status, started.elapsed());
@@ -1086,7 +1097,7 @@ fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Erro
 
             let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
             let is_maki_note = path.extension().is_some_and(|ext| ext == "maki");
-            let is_project_file = relative_path == Path::new(maki::PROJECT_FILE_NAME);
+            let is_project_file = relative_path == Path::new(PROJECT_FILE_NAME);
             if !is_maki_note && !is_project_file {
                 continue;
             }
@@ -1103,7 +1114,7 @@ fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Erro
 }
 
 fn collect_runtime_asset_snapshot(snapshot: &mut FileSnapshot) -> Result<(), std::io::Error> {
-    for asset in crate::html::runtime_assets() {
+    for asset in html::runtime_assets() {
         let source_path = asset.source_path();
         if !source_path.is_file() {
             continue;
@@ -1129,11 +1140,11 @@ fn collect_watched_project_snapshot(
     let mut snapshot = collect_watched_file_snapshot(source_root)?;
 
     if project_root != source_root {
-        let project_file = project_root.join(maki::PROJECT_FILE_NAME);
+        let project_file = project_root.join(PROJECT_FILE_NAME);
         if project_file.is_file() {
             insert_file_stamp(
                 &mut snapshot,
-                PathBuf::from("__project__").join(maki::PROJECT_FILE_NAME),
+                PathBuf::from("__project__").join(PROJECT_FILE_NAME),
                 &project_file,
             )?;
         }
@@ -1225,7 +1236,7 @@ fn warm_response_cache(state: &AppState) -> Result<(), Error> {
     let started = Instant::now();
     let keys = {
         let project = state.project.read().map_err(|_| Error::Maki {
-            source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
+            source: MakiError::ReadDirectoryFailed(PathBuf::from(".")),
         })?;
         response_cache_warmup_keys(&project.maki)
     };
@@ -1233,7 +1244,7 @@ fn warm_response_cache(state: &AppState) -> Result<(), Error> {
     for key in keys {
         let kind = key.kind();
         let project = state.project.read().map_err(|_| Error::Maki {
-            source: maki::Error::ReadDirectoryFailed(PathBuf::from(".")),
+            source: MakiError::ReadDirectoryFailed(PathBuf::from(".")),
         })?;
 
         match cacheable_response(state, &project, key, false) {
@@ -1263,21 +1274,21 @@ fn spawn_response_cache_warmer(state: Arc<AppState>) {
     });
 }
 
-pub(crate) enum ServeRuntime {
+pub enum ServeRuntime {
     Development,
     Publish,
 }
 
-pub(crate) struct ServeConfig<'a> {
-    pub(crate) host: &'a str,
-    pub(crate) port: u16,
-    pub(crate) config_overrides: MakiConfigOverrides,
-    pub(crate) runtime: ServeRuntime,
-    pub(crate) metrics: Metrics,
-    pub(crate) metrics_endpoint: Option<MetricsEndpoint>,
+pub struct ServeConfig<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub config_overrides: MakiConfigOverrides,
+    pub runtime: ServeRuntime,
+    pub metrics: Metrics,
+    pub metrics_endpoint: Option<MetricsEndpoint>,
 }
 
-pub(crate) fn serve_project(
+pub fn serve_project(
     maki: Maki,
     project_root: PathBuf,
     host: &str,
@@ -1301,14 +1312,14 @@ pub(crate) fn serve_project(
     )
 }
 
-pub(crate) fn serve_with_runtime<F>(
+pub fn serve_with_runtime<F>(
     maki: Maki,
     project_root: PathBuf,
     config: ServeConfig<'_>,
     setup: F,
 ) -> Result<(), RunError>
 where
-    F: FnOnce(Arc<AppState>),
+    F: FnOnce(ProjectReloader),
 {
     let ServeConfig {
         host,
@@ -1340,7 +1351,9 @@ where
     if live_reload {
         spawn_file_watcher(Arc::clone(&state));
     }
-    setup(Arc::clone(&state));
+    setup(ProjectReloader {
+        state: Arc::clone(&state),
+    });
     spawn_response_cache_warmer(Arc::clone(&state));
 
     println!("Listening on http://{}:{}", host, port);
@@ -1368,12 +1381,18 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use crate::maki;
     use crate::metrics::Metrics;
     use crate::web::*;
+    use maki_core::MakiConfig;
+
+    fn repo_path(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(path)
+    }
 
     #[test]
     fn test_render_not_found_response() {
@@ -1399,7 +1418,7 @@ mod tests {
     fn test_handle_unknown_path_returns_not_found() {
         let request = http::Request::get("/missing");
 
-        let maki = Maki::load(PathBuf::from(".")).unwrap();
+        let maki = Maki::load(repo_path(".")).unwrap();
         let state = AppState::new(maki);
 
         let response = handle_request(&state, &request).unwrap();
@@ -1421,7 +1440,7 @@ mod tests {
 
     #[test]
     fn test_rendered_note_includes_live_reload_script() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
         let request = http::Request::get("/index");
 
@@ -1438,7 +1457,7 @@ mod tests {
 
     #[test]
     fn test_source_note_does_not_include_live_reload_script() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
         let request = http::Request::get("/index.maki");
 
@@ -1450,7 +1469,7 @@ mod tests {
 
     #[test]
     fn test_search_index_returns_note_titles() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
         let request = http::Request::get("/.maki/search-index.json");
 
@@ -1467,7 +1486,7 @@ mod tests {
 
     #[test]
     fn test_search_page_returns_matching_titles() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
         let request = http::Request::get("/.maki/search?q=syntax");
 
@@ -1536,7 +1555,7 @@ mod tests {
 
     #[test]
     fn test_response_cache_hit_miss_metrics_follow_requests() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let metrics = Metrics::enabled();
         let state = AppState::new_with_metrics(maki, metrics.clone());
         let request = http::Request::get("/index");
@@ -1562,8 +1581,7 @@ mod tests {
         fs::write(root.join("home.maki"), "Home generation one").unwrap();
 
         let metrics = Metrics::enabled();
-        let maki =
-            Maki::load_with_config_metered(&root, maki::MakiConfig::default(), &metrics).unwrap();
+        let maki = Maki::load_with_config_metered(&root, MakiConfig::default(), &metrics).unwrap();
         let state = AppState::new_with_metrics(maki, metrics.clone());
 
         handle_request(&state, &http::Request::get("/home")).unwrap();
@@ -1583,7 +1601,7 @@ mod tests {
 
     #[test]
     fn test_warm_response_cache_populates_cacheable_project_routes() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let expected_entries = response_cache_warmup_keys(&maki).len();
         let state = AppState::new(maki);
 
@@ -1596,7 +1614,7 @@ mod tests {
 
     #[test]
     fn test_runtime_asset_routes_return_source_assets() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
 
         let css = handle_request(&state, &http::Request::get("/.maki/assets/maki.css")).unwrap();
@@ -1630,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_watched_file_snapshot_includes_runtime_assets() {
-        let root = PathBuf::from("docs");
+        let root = repo_path("docs");
         let snapshot = collect_watched_file_snapshot(&root).unwrap();
 
         assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki.css")));
@@ -1640,7 +1658,7 @@ mod tests {
 
     #[test]
     fn test_meta_index_links_internal_indexes() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
         let response = handle_request(&state, &http::Request::get("/@/")).unwrap();
         let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -1823,7 +1841,7 @@ Task with property date.
 
     #[test]
     fn test_head_diagnostics_page_returns_headers_without_body() {
-        let maki = Maki::load(PathBuf::from("docs")).unwrap();
+        let maki = Maki::load(repo_path("docs")).unwrap();
         let state = AppState::new(maki);
         let request = http::Request::new(http::Method::Head, "/@/diagnostics");
 

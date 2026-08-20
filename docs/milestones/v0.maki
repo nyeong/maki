@@ -41,8 +41,8 @@
 --v status: done
 == Parser
 
-- [[architecture#Line Scan]]: source를 `LineToken[]`으로 변환한다.
-- [[architecture#Block Build]]: line token을 `BlockDraft[]`로 묶는다.
+- [[architecture#Scan Lines]]: source를 `LineToken[]`으로 변환한다.
+- [[architecture#Build Drafts]]: line token을 `BlockDraft[]`로 묶는다.
 - 지원하는 draft
   - File
   - Heading

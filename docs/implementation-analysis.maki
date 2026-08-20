@@ -33,9 +33,11 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 
 근거:
 
-- `src/main.rs`: path serve, git serve, build, project diagnostics summary.
-- `src/git_source.rs`: git mirror/checkout/update runtime.
-- `src/metrics.rs`: low-cardinality Prometheus metric registry와 text exposition serialization.
+- `src/cli.rs`: serve/build CLI parsing과 option validation.
+- `src/commands.rs`: path serve, git serve, build command 실행.
+- `src/output.rs`: parse warning과 project diagnostics summary 출력 포맷.
+- `crates/maki-serve/src/git_source.rs`: git mirror/checkout/update runtime.
+- `crates/maki-serve/src/metrics.rs`: low-cardinality Prometheus metric registry와 text exposition serialization.
 - `tests/milestone_quality.rs`: project root discovery, source directory, git serve polling, build diagnostics.
 
 평가:
@@ -75,10 +77,10 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 
 근거:
 
-- `src/parser.rs`: parse pipeline, line scan, draft build, document build.
-- `src/parser.rs`: `NumberDot { width }`, paragraph boundary, ordered/unordered list parser.
-- `src/parser.rs`: pipe table parser, middle separator row, inline table cell parsing, digit-only numeric column detection.
-- `src/parser.rs`: inline code, star-delimited strong text, wikilink, markdown link, plain URL parser.
+- `crates/maki-core/src/parser.rs`: parse pipeline, line scan, draft build, document build.
+- `crates/maki-core/src/parser.rs`: `NumberDot { width }`, paragraph boundary, ordered/unordered list parser.
+- `crates/maki-core/src/parser.rs`: pipe table parser, middle separator row, inline table cell parsing, digit-only numeric column detection.
+- `crates/maki-core/src/parser.rs`: inline code, star-delimited strong text, wikilink, markdown link, plain URL parser.
 
 평가:
 
@@ -97,8 +99,11 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 
 근거:
 
-- `src/maki.rs`: `NoteRef`, `Maki`, `Note`, `NoteIndex`, `SearchEntry`.
-- `src/maki.rs`: project config parser, source directory validation, root discovery.
+- `crates/maki-core/src/maki/note.rs`: `NoteRef`, `Note`, `SearchEntry`, `RecentEntry`.
+- `crates/maki-core/src/maki/project.rs`: `Maki`, project load, search, render, route resolution.
+- `crates/maki-core/src/maki/links.rs`: `NoteIndex`, wikilink normalization, external link collection.
+- `crates/maki-core/src/maki/config.rs`: project config parser, source directory validation.
+- `crates/maki-core/src/maki/files.rs`: project file listing and relative path handling.
 
 평가:
 
@@ -122,8 +127,9 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 
 근거:
 
-- `src/maki.rs`: `NoteIndex`, `normalize_note_link_target`, `resolve_note_link`.
-- `src/maki.rs` tests: case-insensitive path/stem lookup, sibling priority, ambiguity, exact priority.
+- `crates/maki-core/src/maki/links.rs`: `NoteIndex`, `normalize_note_link_target`.
+- `crates/maki-core/src/maki/project.rs`: `resolve_note_link`.
+- `crates/maki-core/src/maki/tests.rs`: case-insensitive path/stem lookup, sibling priority, ambiguity, exact priority.
 
 평가:
 
@@ -142,7 +148,7 @@ project page에는 nav shell, search input, meta index link, TOC/search scripts�
 
 근거:
 
-- `src/html.rs`: project navigation, runtime assets, link rendering, built-in containers, search/recents/diagnostics/not-found pages.
+- `crates/maki-core/src/html.rs`: project navigation, runtime assets, link rendering, built-in containers, search/recents/diagnostics/not-found pages.
 - `assets/maki.css`, `assets/maki-search.js`, `assets/maki-toc.js`.
 - `templates/*.maki`: compile-time embed되는 사람이 읽는 meta page의 maki template.
 
@@ -170,8 +176,9 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 근거:
 
-- `src/web.rs`: route handling, recents/search/diagnostics routes, runtime asset routes, response cache warmer, live reload, watcher.
-- `tests/milestone_quality.rs`, `src/web.rs` tests: rendered pages, search index/page, diagnostics page, response cache invalidation/warmup, runtime assets, live reload, metrics endpoint.
+- `crates/maki-serve/src/web.rs`: route handling, recents/search/diagnostics routes, runtime asset routes, response cache warmer, live reload, watcher.
+- `crates/maki-serve/src/http.rs`: raw HTTP request/response parsing and serialization.
+- `tests/milestone_quality.rs`, `crates/maki-serve/src/web.rs` tests: rendered pages, search index/page, diagnostics page, response cache invalidation/warmup, runtime assets, live reload, metrics endpoint.
 
 평가:
 
@@ -186,7 +193,8 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 == 잘 맞는 추상화
 
 - Parser의 scan/draft/document 3단계는 현재 문서화된 architecture와 잘 맞는다.
-- `maki` domain과 `html` renderer가 분리되어 있어 project-aware render를 구현하기 쉽다.
+- `maki-core`와 `maki-serve`가 분리되어 parser/render/project domain이 serving runtime에 의존하지 않는다.
+- `maki` domain과 `html` renderer가 core crate 안에서 분리되어 있어 project-aware render를 구현하기 쉽다.
 - `http` 모듈이 Maki route 정책을 모르도록 분리한 점은 좋다.
 - `RenderContext`가 이미 있어 renderer가 project lookup을 직접 알 필요가 없다.
 - `MakiConfigOverrides`는 CLI override와 project config의 우선순위를 표현하기 좋다.
@@ -196,7 +204,7 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 == 부족한 추상화
 
-- `Maki`가 아직 "project index"가 아니라 note map, note lookup index, external links, search entries를 직접 들고 있다.
+- `Maki`가 아직 "project index"가 아니라 note map, note lookup index, date index, external links, search entries, recent entries를 직접 들고 있다.
 - `NoteRef`가 case, unicode, slash, extension normalization 정책을 타입 차원에서 갖지 않는다.
 - `Block`에 span/id가 없어 lint, heading link, precise diagnostics, query가 어렵다.
 - link diagnostics에 line number가 거의 없다. parser diagnostics만 line을 가진다.
@@ -264,7 +272,7 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 권장 구현:
 
-- `Maki` 내부의 `notes`, `index`, `external_links`, `search_entries`를 `ProjectIndex` 또는 유사 구조로 묶는다.
+- `Maki` 내부의 `notes`, `index`, `date_index`, `external_links`, `search_entries`, `recent_entries`를 `ProjectIndex` 또는 유사 구조로 묶는다.
 - note title은 load/index 단계에서 한 번만 읽고 재사용한다.
 - search entries도 note, heading, file name, alias metadata에서 파생한다.
 - link diagnostics는 가능하면 link occurrence와 source span을 함께 저장한다.
@@ -410,9 +418,14 @@ diagnostics page와 search가 이미 있기 때문에 sitemap은 같은 project 
 - `docs/milestones/v4.maki`
 - `docs/milestones/later.maki`
 - `src/main.rs`
-- `src/maki.rs`
-- `src/parser.rs`
-- `src/html.rs`
-- `src/http.rs`
-- `src/web.rs`
+- `src/cli.rs`
+- `src/commands.rs`
+- `src/output.rs`
+- `crates/maki-core/src/parser.rs`
+- `crates/maki-core/src/html.rs`
+- `crates/maki-core/src/maki/*.rs`
+- `crates/maki-serve/src/http.rs`
+- `crates/maki-serve/src/web.rs`
+- `crates/maki-serve/src/git_source.rs`
+- `crates/maki-serve/src/metrics.rs`
 - `tests/milestone_quality.rs`

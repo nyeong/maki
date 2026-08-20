@@ -209,7 +209,7 @@ command는 shell string이 아니라 argv 배열로 받는다.
 --v milestone: v2
 = ProjectIndex를 semantic index로 확장
 
-현재 `Maki`는 note map, note lookup index, date index, external links, search entries를 따로 가진다.
+현재 `Maki`는 note map, note lookup index, date index, external links, search entries, recent entries를 따로 가진다.
 하지만 JSON export, heading 검색, inner link, agenda, timeline, property 기반 render는 모두 같은 project-level 의미 정보를 필요로 한다.
 
 따라서 `NoteIndex`를 단순 lookup table에서 `ProjectIndex`에 가까운 구조로 확장한다.

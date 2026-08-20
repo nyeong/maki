@@ -6,7 +6,7 @@
 use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Error {
+pub enum Error {
     InvalidRequest,
     InvalidVersion,
     InvalidMethod,
@@ -19,7 +19,7 @@ pub(crate) enum Error {
 use Error::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum StatusCode {
+pub enum StatusCode {
     Ok, // 200
     #[allow(dead_code)]
     MovedPermanently, // 301
@@ -31,7 +31,7 @@ pub(crate) enum StatusCode {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum Version {
+pub enum Version {
     Http1_1,
 }
 
@@ -52,22 +52,22 @@ impl Display for Version {
 }
 
 impl Headers {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self(HashMap::new())
     }
 
-    pub(crate) fn insert(&mut self, key: String, value: String) {
+    pub fn insert(&mut self, key: String, value: String) {
         self.0.insert(key.to_lowercase(), value);
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get(&self, key: &str) -> Option<&str> {
+    pub fn get(&self, key: &str) -> Option<&str> {
         self.0.get(&key.to_lowercase()).map(|s| s.as_str())
     }
 }
 
 /// Parses a raw HTTP request string into a [`HttpRequest`] struct.
-pub(crate) fn parse_request(request: &str) -> Result<Request, Error> {
+pub fn parse_request(request: &str) -> Result<Request, Error> {
     let mut lines = request.lines();
     let first_line = lines.next().ok_or(EmptyRequest)?;
 
@@ -84,7 +84,7 @@ pub(crate) fn parse_request(request: &str) -> Result<Request, Error> {
     })
 }
 #[derive(Debug, PartialEq)]
-pub(crate) struct Request {
+pub struct Request {
     method: Method,
     target: String,
     version: Version,
@@ -94,7 +94,7 @@ pub(crate) struct Request {
 
 impl Request {
     #[allow(dead_code)]
-    pub(crate) fn new(method: Method, target: impl Into<String>) -> Self {
+    pub fn new(method: Method, target: impl Into<String>) -> Self {
         Self {
             method,
             target: target.into(),
@@ -105,21 +105,21 @@ impl Request {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get(target: impl Into<String>) -> Self {
+    pub fn get(target: impl Into<String>) -> Self {
         Self::new(Method::Get, target.into())
     }
 
-    pub(crate) fn target(&self) -> &str {
+    pub fn target(&self) -> &str {
         &self.target
     }
 
-    pub(crate) fn method(&self) -> Method {
+    pub fn method(&self) -> Method {
         self.method
     }
 }
 
 /// Parses an HTTP request-line.
-pub(crate) fn parse_request_line(line: &str) -> Result<(Method, String, Version), Error> {
+pub fn parse_request_line(line: &str) -> Result<(Method, String, Version), Error> {
     let mut parts = line.split_whitespace();
     let method = parts.next().ok_or(InvalidMethod)?.parse()?;
     let target = parts.next().ok_or(InvalidTarget)?.to_string();
@@ -130,7 +130,7 @@ pub(crate) fn parse_request_line(line: &str) -> Result<(Method, String, Version)
     Ok((method, target, version))
 }
 
-pub(crate) fn parse_request_headers<'a>(
+pub fn parse_request_headers<'a>(
     lines: &mut impl Iterator<Item = &'a str>,
 ) -> Result<Headers, Error> {
     let mut headers = Headers::new();
@@ -154,7 +154,7 @@ pub(crate) fn parse_request_headers<'a>(
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Headers(HashMap<String, String>);
+pub struct Headers(HashMap<String, String>);
 
 impl Display for StatusCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -171,7 +171,7 @@ impl Display for StatusCode {
 }
 
 impl StatusCode {
-    pub(crate) fn code(self) -> u16 {
+    pub fn code(self) -> u16 {
         match self {
             StatusCode::Ok => 200,
             StatusCode::MovedPermanently => 301,
@@ -185,13 +185,13 @@ impl StatusCode {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum Method {
+pub enum Method {
     Get,
     Head,
 }
 
 impl Method {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Method::Get => "GET",
             Method::Head => "HEAD",
@@ -208,7 +208,7 @@ impl std::str::FromStr for Method {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Response {
+pub struct Response {
     status: StatusCode,
     version: Version,
     headers: Headers,
@@ -216,7 +216,7 @@ pub(crate) struct Response {
 }
 
 impl Response {
-    pub(crate) fn new(status: StatusCode) -> Self {
+    pub fn new(status: StatusCode) -> Self {
         Response {
             status,
             version: Version::Http1_1,
@@ -226,33 +226,33 @@ impl Response {
         .set_header("Connection", "close")
     }
 
-    pub(crate) fn set_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn set_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
         self
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_header(&self, key: &str) -> Option<&str> {
+    pub fn get_header(&self, key: &str) -> Option<&str> {
         self.headers.get(key)
     }
 
-    pub(crate) fn set_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+    pub fn set_body(mut self, body: impl Into<Vec<u8>>) -> Self {
         self.body = body.into();
         self.headers
             .insert("Content-Length".to_string(), self.body.len().to_string());
         self
     }
 
-    pub(crate) fn without_body(mut self) -> Self {
+    pub fn without_body(mut self) -> Self {
         self.body.clear();
         self
     }
 
-    pub(crate) fn get_status_line(&self) -> String {
+    pub fn get_status_line(&self) -> String {
         format!("{} {}", self.version, self.status)
     }
 
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut raw = Vec::new();
         let status_line = self.get_status_line();
 
@@ -270,12 +270,12 @@ impl Response {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn status(&self) -> StatusCode {
+    pub fn status(&self) -> StatusCode {
         self.status
     }
 
     #[allow(dead_code)]
-    pub(crate) fn body(&self) -> &[u8] {
+    pub fn body(&self) -> &[u8] {
         &self.body
     }
 }
@@ -295,7 +295,7 @@ impl Display for Headers {
     }
 }
 
-pub(crate) fn parse_method(method: &str) -> Result<Method, Error> {
+pub fn parse_method(method: &str) -> Result<Method, Error> {
     match method {
         "GET" => Ok(Method::Get),
         "HEAD" => Ok(Method::Head),
@@ -303,7 +303,7 @@ pub(crate) fn parse_method(method: &str) -> Result<Method, Error> {
     }
 }
 
-pub(crate) fn parse_version(protocol: &str) -> Result<Version, Error> {
+pub fn parse_version(protocol: &str) -> Result<Version, Error> {
     match protocol {
         "HTTP/1.1" => Ok(Version::Http1_1),
         _ => Err(InvalidVersion),

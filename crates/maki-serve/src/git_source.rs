@@ -5,16 +5,12 @@ use std::{
     hash::Hasher,
     path::{Path, PathBuf},
     process::Command,
-    sync::Arc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{
-    maki::{self, Maki, MakiConfig, MakiConfigOverrides},
-    metrics::Metrics,
-    web,
-};
+use crate::{metrics::Metrics, web};
+use maki_core::{Error as MakiError, Maki, MakiConfig, MakiConfigOverrides, PROJECT_FILE_NAME};
 
 const DEFAULT_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 const REPOSITORY_GIT_ENV: &[&str] = &[
@@ -27,15 +23,15 @@ const REPOSITORY_GIT_ENV: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GitServeConfig {
-    pub(crate) url: String,
-    pub(crate) branch: String,
-    pub(crate) state_dir: PathBuf,
-    pub(crate) fetch_interval: Duration,
+pub struct GitServeConfig {
+    pub url: String,
+    pub branch: String,
+    pub state_dir: PathBuf,
+    pub fetch_interval: Duration,
 }
 
 impl GitServeConfig {
-    pub(crate) fn new(url: String) -> Self {
+    pub fn new(url: String) -> Self {
         Self {
             url,
             branch: "main".to_string(),
@@ -46,7 +42,7 @@ impl GitServeConfig {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GitSource {
+pub struct GitSource {
     config: GitServeConfig,
     site_dir: PathBuf,
     mirror_dir: PathBuf,
@@ -54,23 +50,23 @@ pub(crate) struct GitSource {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GitCheckout {
+pub struct GitCheckout {
     commit: String,
     root: PathBuf,
 }
 
 impl GitCheckout {
-    pub(crate) fn commit(&self) -> &str {
+    pub fn commit(&self) -> &str {
         &self.commit
     }
 
-    pub(crate) fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.root
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum Error {
+pub enum Error {
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -87,12 +83,12 @@ pub(crate) enum Error {
         path: PathBuf,
     },
     Maki {
-        source: maki::Error,
+        source: MakiError,
     },
 }
 
-impl From<maki::Error> for Error {
-    fn from(source: maki::Error) -> Self {
+impl From<MakiError> for Error {
+    fn from(source: MakiError) -> Self {
         Self::Maki { source }
     }
 }
@@ -123,7 +119,7 @@ impl Display for Error {
                 write!(
                     f,
                     "git checkout is missing {} at {}",
-                    maki::PROJECT_FILE_NAME,
+                    PROJECT_FILE_NAME,
                     root.display()
                 )
             }
@@ -139,7 +135,7 @@ impl Display for Error {
     }
 }
 
-pub(crate) fn default_state_dir() -> PathBuf {
+pub fn default_state_dir() -> PathBuf {
     default_state_dir_for_os()
 }
 
@@ -177,7 +173,7 @@ fn default_state_dir_for_os() -> PathBuf {
     PathBuf::from("/var/lib/maki")
 }
 
-pub(crate) fn parse_fetch_interval(raw: &str) -> Result<Duration, String> {
+pub fn parse_fetch_interval(raw: &str) -> Result<Duration, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("empty duration".to_string());
@@ -205,7 +201,7 @@ pub(crate) fn parse_fetch_interval(raw: &str) -> Result<Duration, String> {
 }
 
 impl GitSource {
-    pub(crate) fn new(config: GitServeConfig) -> Self {
+    pub fn new(config: GitServeConfig) -> Self {
         let site_id = site_id(&config.url, &config.branch);
         let site_dir = config.state_dir.join("sites").join(site_id);
         let mirror_dir = site_dir.join("repo.git");
@@ -219,22 +215,22 @@ impl GitSource {
         }
     }
 
-    pub(crate) fn fetch_interval(&self) -> Duration {
+    pub fn fetch_interval(&self) -> Duration {
         self.config.fetch_interval
     }
 
-    pub(crate) fn prepare(&self) -> Result<GitCheckout, Error> {
+    pub fn prepare(&self) -> Result<GitCheckout, Error> {
         self.ensure_mirror()?;
         self.fetch()?;
         self.checkout_current_branch()
     }
 
-    pub(crate) fn refresh(&self) -> Result<GitCheckout, Error> {
+    pub fn refresh(&self) -> Result<GitCheckout, Error> {
         self.fetch()?;
         self.checkout_current_branch()
     }
 
-    pub(crate) fn load_maki(
+    pub fn load_maki(
         &self,
         checkout: &GitCheckout,
         config_overrides: &MakiConfigOverrides,
@@ -242,7 +238,7 @@ impl GitSource {
     ) -> Result<Maki, Error> {
         reject_symlinks(checkout.root())?;
 
-        let project_file = checkout.root().join(maki::PROJECT_FILE_NAME);
+        let project_file = checkout.root().join(PROJECT_FILE_NAME);
         if !project_file.is_file() {
             return Err(Error::MissingProjectFile {
                 root: checkout.root().to_path_buf(),
@@ -259,7 +255,7 @@ impl GitSource {
         )?)
     }
 
-    pub(crate) fn record_active(&self, checkout: &GitCheckout) -> Result<(), Error> {
+    pub fn record_active(&self, checkout: &GitCheckout) -> Result<(), Error> {
         let content = format!(
             "branch = \"{}\"\nactive_commit = \"{}\"\nactive_path = \"{}\"\nupdated_at_unix = {}\n",
             escape_toml_string(&self.config.branch),
@@ -270,7 +266,7 @@ impl GitSource {
         write_file(&self.site_dir.join("state.toml"), content.as_bytes())
     }
 
-    pub(crate) fn record_failure(&self, message: &str) -> Result<(), Error> {
+    pub fn record_failure(&self, message: &str) -> Result<(), Error> {
         let content = format!(
             "branch = \"{}\"\nlast_error = \"{}\"\nfailed_at_unix = {}\n",
             escape_toml_string(&self.config.branch),
@@ -363,10 +359,10 @@ impl GitSource {
     }
 }
 
-pub(crate) fn spawn_updater(
+pub fn spawn_updater(
     source: GitSource,
     config_overrides: MakiConfigOverrides,
-    state: Arc<web::AppState>,
+    state: web::ProjectReloader,
     initial_commit: String,
 ) {
     thread::spawn(move || {

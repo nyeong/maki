@@ -102,7 +102,7 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 
 초기 구현은 request 전체, cache, render, reload 중심의 coarse metric을 우선한다.
 [[v3]]에 적힌 `request_read`, `route_resolve`, `source_read` 같은 phase별 request timing은 v5 이후 refine 단계로 남긴다.
-다만 `Maki::load_with_config`처럼 이미 단계가 명확한 project load는 phase label을 허용한다.
+다만 `Maki::load_with_config_metered`처럼 이미 단계가 명확한 project load는 phase label을 허용한다.
 
 == HTTP
 
@@ -168,7 +168,7 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 - warmer 처리량과 실패율: `web::warm_response_cache`
 - directory reload: `web::spawn_file_watcher`와 `AppState::reload`
 - git refresh/update: `git_source::spawn_updater`
-- project load phase: `Maki::load_with_config`
+- project load phase: `Maki::load_with_config_metered`
 - note render 내부: `Maki::render_html_with_asset_mode`
 
 = 성공기준

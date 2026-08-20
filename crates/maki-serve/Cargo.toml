@@ -1,0 +1,8 @@
+[package]
+name = "maki-serve"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+maki-core = { path = "../maki-core" }
+percent-encoding = "2.3.2"
