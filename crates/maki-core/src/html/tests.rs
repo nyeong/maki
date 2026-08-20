@@ -170,6 +170,22 @@ fn project_rendering_can_use_external_assets() {
 }
 
 #[test]
+fn project_rendering_can_suffix_browser_title_with_site_title() {
+    let parsed = parser::parse("--^ title: Page\n\nbody");
+    let resolve_note_link = |_target: &str| NoteLinkResolution::Broken;
+    let get_note_info = |_note_ref: &NoteRef| None;
+
+    let html = render_document_with_context(
+        &parsed.document,
+        RenderContext::project(&resolve_note_link, &get_note_info)
+            .with_site_title(Some("Maki & Co")),
+    );
+
+    assert!(html.contains("<title>Page | Maki &amp; Co</title>"));
+    assert!(html.contains("<h1 id=\"Page\">Page</h1>"));
+}
+
+#[test]
 fn format_unix_seconds_kst_formats_known_instants() {
     assert_eq!(format_unix_seconds_kst(0), "1970-01-01 09:00 KST");
     assert_eq!(format_unix_seconds_kst(951_782_400), "2000-02-29 09:00 KST");

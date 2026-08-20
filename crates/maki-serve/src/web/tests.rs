@@ -128,6 +128,38 @@ fn test_search_page_returns_matching_titles() {
 }
 
 #[test]
+fn test_project_title_suffixes_served_html_titles() {
+    let root = std::env::temp_dir().join(format!("maki-site-title-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("maki.toml"),
+        "[project]\ntitle = \"Site & Name\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("home.maki"), "--^ title: Home\n\nbody").unwrap();
+
+    let config = MakiConfig::load_project(&root).unwrap();
+    let maki = Maki::load_with_config(&root, config).unwrap();
+    let state = AppState::new(maki);
+
+    let note = handle_request(&state, &http::Request::get("/home")).unwrap();
+    let note_body = String::from_utf8(note.body().to_vec()).unwrap();
+    let search = handle_request(&state, &http::Request::get("/.maki/search")).unwrap();
+    let search_body = String::from_utf8(search.body().to_vec()).unwrap();
+    let meta = handle_request(&state, &http::Request::get("/@/")).unwrap();
+    let meta_body = String::from_utf8(meta.body().to_vec()).unwrap();
+    let missing = handle_request(&state, &http::Request::get("/missing")).unwrap();
+    let missing_body = String::from_utf8(missing.body().to_vec()).unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+    assert!(note_body.contains("<title>Home | Site &amp; Name</title>"));
+    assert!(search_body.contains("<title>Search | Site &amp; Name</title>"));
+    assert!(meta_body.contains("<title>Meta | Site &amp; Name</title>"));
+    assert!(missing_body.contains("<title>Not Found | Site &amp; Name</title>"));
+}
+
+#[test]
 fn test_search_index_escapes_json_strings() {
     let root = std::env::temp_dir().join(format!("maki-search-json-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);

@@ -5,7 +5,7 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 ## 현재 동작
 
 - `.maki` 파일을 프로젝트 단위로 읽고 HTML로 렌더링한다.
-- `maki.toml`의 `[project] title`, `source`, `home`을 읽는다.
+- `maki.toml`의 `[project] title`, `source`, `home`을 읽고, `title`이 있으면 serve HTML title을 `page title | project title`로 렌더링한다.
 - `[[note]]`, `[title](note)`, `[title](https://...)`, plain HTTP/HTTPS URL을 링크로 렌더링한다.
 - wikilink는 exact path를 우선하고, 그 다음 case-insensitive path/stem lookup을 사용한다.
 - paragraph, heading, property, quote, code, unordered/ordered list, hyphen-fenced container를 파싱한다.
@@ -64,6 +64,7 @@ home = "index"
 
 `source`는 project 내부 relative path여야 한다.
 `home`은 note ref 기준이며, leading slash가 없으면 `/`가 붙은 redirect target으로 사용된다.
+`title`은 serve HTML의 browser title suffix로 사용된다. 예를 들어 page title이 `Home`이면 `<title>Home | My Maki Notes</title>`가 된다. `title`이 없으면 기존처럼 page title만 사용한다.
 
 ## Web routes
 

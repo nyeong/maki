@@ -62,7 +62,7 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 - 핵심은 CLI가 사용자가 넘긴 path를 바로 root로 넘기지 않고, 먼저 `maki.toml` discovery를 수행하는 것이다.
 - `project.home`은 기존 `--index-redirect` 기본값과 연결한다.
 - watcher는 project root 아래의 `.maki` 문서뿐 아니라 `maki.toml` 변경도 감지해야 한다.
-- `project.title`은 당장 렌더링에 쓰지 않더라도 config로 읽어 둘 수 있다.
+- `project.title`은 serve HTML의 browser title suffix로 쓴다.
 - 향후 `.maki/project.maki` 같은 자기호스팅 manifest를 도입하더라도, 초기에는 `maki.toml`을 stable bootstrap layer로 삼는다.
 
 == 성공 기준

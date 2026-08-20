@@ -254,6 +254,7 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 완료:
 
 - project page에 home link, meta index link, title search form이 있는 nav header가 들어간다.
+- `maki.toml`의 `[project] title`이 있으면 serve HTML browser title은 `page title | project title` 형식이 되고, 없으면 page title만 쓴다.
 - `/@/recents` page가 파일 수정시각 내림차순으로 `KST 수정시각 + note link`를 보여주고, UTC 표기나 source path는 item에 직접 노출하지 않는다.
 - `/@/diagnostics` page가 parse warning, broken internal link, ambiguous internal link, read failure summary를 보여준다.
 - `/.maki/search-index.json`과 `/.maki/search?q=...`가 title search를 제공한다.

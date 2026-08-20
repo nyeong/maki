@@ -237,6 +237,15 @@ impl Maki {
         path: &Path,
         asset_mode: AssetMode,
     ) -> Result<String, Error> {
+        self.render_html_with_site_title(path, asset_mode, None)
+    }
+
+    pub fn render_html_with_site_title(
+        &self,
+        path: &Path,
+        asset_mode: AssetMode,
+        site_title: Option<&str>,
+    ) -> Result<String, Error> {
         let raw = self.get_raw_content(path)?;
         let parsed = parser::parse(&raw);
         let current = Note::load(&self.root, path)?.note_ref();
@@ -252,7 +261,8 @@ impl Maki {
             &parsed.document,
             RenderContext::project(&resolve_note_link, &get_note_info)
                 .with_asset_mode(asset_mode)
-                .with_date_source_path(path),
+                .with_date_source_path(path)
+                .with_site_title(site_title),
         ))
     }
 

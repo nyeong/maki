@@ -31,8 +31,13 @@ pub fn render_search_page(
     results: &[SearchEntry],
     total_entries: usize,
     asset_mode: AssetMode,
+    site_title: Option<&str>,
 ) -> String {
-    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
+    let mut renderer = Renderer::new_with_context(
+        RenderContext::default()
+            .with_asset_mode(asset_mode)
+            .with_site_title(site_title),
+    );
     renderer.begin_project_page("Search");
     renderer.push_raw("<main class=\"maki-search-page\">");
     renderer.push_raw("<p class=\"maki-search-summary\">");
@@ -66,32 +71,41 @@ pub fn render_search_page(
     renderer.into_html()
 }
 
-pub fn render_meta_index_page(asset_mode: AssetMode) -> String {
-    render_project_maki_source(META_TEMPLATE, asset_mode)
+pub fn render_meta_index_page(asset_mode: AssetMode, site_title: Option<&str>) -> String {
+    render_project_maki_source(META_TEMPLATE, asset_mode, site_title)
 }
 
-pub fn render_recents_page(entries: &[RecentEntry], asset_mode: AssetMode) -> String {
+pub fn render_recents_page(
+    entries: &[RecentEntry],
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+) -> String {
     let body = recents_page_body_source(entries);
     let source = render_maki_template(RECENTS_TEMPLATE, &[("{{body}}", &body)]);
 
-    render_project_maki_source(&source, asset_mode)
+    render_project_maki_source(&source, asset_mode, site_title)
 }
 
-pub fn render_date_index_page(date_index: &DateIndex, asset_mode: AssetMode) -> String {
+pub fn render_date_index_page(
+    date_index: &DateIndex,
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+) -> String {
     let body = date_index_page_body_source(date_index);
     let source = render_maki_template(DATES_INDEX_TEMPLATE, &[("{{body}}", &body)]);
 
-    render_project_maki_source(&source, asset_mode)
+    render_project_maki_source(&source, asset_mode, site_title)
 }
 
 pub fn render_date_period_page(
     period: DatePeriod,
     date_index: &DateIndex,
     asset_mode: AssetMode,
+    site_title: Option<&str>,
 ) -> String {
     let source = date_period_page_source(period, date_index);
 
-    render_project_maki_source(&source, asset_mode)
+    render_project_maki_source(&source, asset_mode, site_title)
 }
 
 fn render_maki_template(template: &str, replacements: &[(&str, &str)]) -> String {
@@ -104,12 +118,17 @@ fn render_maki_template(template: &str, replacements: &[(&str, &str)]) -> String
     source
 }
 
-fn render_project_maki_source(source: &str, asset_mode: AssetMode) -> String {
+fn render_project_maki_source(
+    source: &str,
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+) -> String {
     render_maki_source_with_context(
         source,
         RenderContext::default()
             .with_asset_mode(asset_mode)
-            .with_project_navigation(),
+            .with_project_navigation()
+            .with_site_title(site_title),
     )
 }
 
@@ -429,8 +448,16 @@ fn push_indented_maki_code_block(source: &mut String, input: &str, indent: &str)
     }
 }
 
-pub fn render_not_found_page(path: &str, asset_mode: AssetMode) -> String {
-    let mut renderer = Renderer::new_with_asset_mode(asset_mode);
+pub fn render_not_found_page(
+    path: &str,
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+) -> String {
+    let mut renderer = Renderer::new_with_context(
+        RenderContext::default()
+            .with_asset_mode(asset_mode)
+            .with_site_title(site_title),
+    );
     renderer.begin_project_page("Not Found");
     renderer.push_raw("<main class=\"maki-not-found-page\">");
     renderer.push_raw("<p class=\"maki-not-found-summary\">No Maki note is available at <code>");
@@ -445,10 +472,11 @@ pub fn render_diagnostics_page(
     diagnostics: &[ProjectDiagnostic],
     total_notes: usize,
     asset_mode: AssetMode,
+    site_title: Option<&str>,
 ) -> String {
     let source = diagnostics_page_source(diagnostics, total_notes);
 
-    render_project_maki_source(&source, asset_mode)
+    render_project_maki_source(&source, asset_mode, site_title)
 }
 
 fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {

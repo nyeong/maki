@@ -159,36 +159,47 @@ fn render_cacheable_response(
 ) -> Result<http::Response, Error> {
     let kind = key.kind();
     let started = Instant::now();
+    let site_title = maki.config().project_title();
     let result = match key {
         ResponseCacheKey::MetaIndex => {
-            let html = html::render_meta_index_page(AssetMode::External);
+            let html = html::render_meta_index_page(AssetMode::External, site_title);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::Recents => {
-            let html = html::render_recents_page(maki.recent_entries(), AssetMode::External);
+            let html =
+                html::render_recents_page(maki.recent_entries(), AssetMode::External, site_title);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::Diagnostics => {
             let diagnostics = maki.diagnostics_without_external_links();
-            let html =
-                html::render_diagnostics_page(&diagnostics, maki.notes_len(), AssetMode::External);
+            let html = html::render_diagnostics_page(
+                &diagnostics,
+                maki.notes_len(),
+                AssetMode::External,
+                site_title,
+            );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::DatesIndex => {
-            let html = html::render_date_index_page(maki.date_index(), AssetMode::External);
+            let html =
+                html::render_date_index_page(maki.date_index(), AssetMode::External, site_title);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
         ResponseCacheKey::DatePeriodPage(period) => {
-            let html =
-                html::render_date_period_page(*period, maki.date_index(), AssetMode::External);
+            let html = html::render_date_period_page(
+                *period,
+                maki.date_index(),
+                AssetMode::External,
+                site_title,
+            );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
@@ -197,7 +208,7 @@ fn render_cacheable_response(
             .set_header("Content-Type", "application/json; charset=utf-8")
             .set_body(search_index_json(maki.search_entries()))),
         ResponseCacheKey::NotePage(path) => {
-            let html = maki.render_html_with_asset_mode(path, AssetMode::External)?;
+            let html = maki.render_html_with_site_title(path, AssetMode::External, site_title)?;
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
@@ -268,6 +279,7 @@ pub(super) fn handle_request(
                     &results,
                     maki.search_entries().len(),
                     AssetMode::External,
+                    maki.config().project_title(),
                 );
                 state
                     .metrics()
@@ -294,7 +306,11 @@ pub(super) fn handle_request(
                 .set_body(path.as_bytes())),
         },
         Err(MakiError::NoteNotFound(_path)) => {
-            let html = html::render_not_found_page(&target.path, AssetMode::External);
+            let html = html::render_not_found_page(
+                &target.path,
+                AssetMode::External,
+                maki.config().project_title(),
+            );
             Ok(http::Response::new(http::StatusCode::NotFound)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))

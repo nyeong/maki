@@ -13,9 +13,11 @@ fn maki_serve_discovers_project_root_from_maki_toml() {
 
     let root_page = http_get(port, "/start");
     root_page.assert_status("HTTP/1.1 200 OK");
+    root_page.assert_body_contains("<title>Start | Project Fixture</title>");
 
     let nested_page = http_get(port, "/notes/page");
     nested_page.assert_status("HTTP/1.1 200 OK");
+    nested_page.assert_body_contains("<title>Page | Project Fixture</title>");
     nested_page.assert_body_contains("<a href=\"/start\">Start</a>");
 }
 
@@ -44,7 +46,7 @@ fn maki_serve_uses_project_source_from_maki_toml() {
 
     let index = http_get(port, "/index");
     index.assert_status("HTTP/1.1 200 OK");
-    index.assert_body_contains("<title>Source Index</title>");
+    index.assert_body_contains("<title>Source Index | Source Fixture</title>");
 
     let nested_path = http_get(port, "/docs/index");
     nested_path.assert_status("HTTP/1.1 404 Not Found");

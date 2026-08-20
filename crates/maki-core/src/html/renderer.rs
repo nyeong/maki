@@ -8,7 +8,7 @@ use crate::{
 
 use super::{
     assets::{push_project_navigation, push_stylesheet},
-    context::{AssetMode, RenderContext},
+    context::RenderContext,
     date_markup::{DATE_RANGE_SEPARATOR_HTML, date_stamp_class, date_stamp_delimiters},
 };
 
@@ -41,10 +41,18 @@ impl<'a> Renderer<'a> {
         push_stylesheet(&mut self.html, self.context.asset_mode);
         if let Some(title) = title {
             self.html.push_str("<title>");
-            self.escape_html_into(title);
+            self.render_page_title(title);
             self.html.push_str("</title>");
         }
         self.html.push_str("</head><body>");
+    }
+
+    fn render_page_title(&mut self, title: &str) {
+        self.escape_html_into(title);
+        if let Some(site_title) = self.context.site_title {
+            self.html.push_str(" | ");
+            self.escape_html_into(site_title);
+        }
     }
 
     pub(in crate::html) fn begin_project_page(&mut self, title: &str) {
@@ -518,10 +526,6 @@ impl<'a> Renderer<'a> {
             inline_date_occurrence_index: 0,
             property_date_occurrence_index: 0,
         }
-    }
-
-    pub(in crate::html) fn new_with_asset_mode(asset_mode: AssetMode) -> Self {
-        Self::new_with_context(RenderContext::default().with_asset_mode(asset_mode))
     }
 
     pub(in crate::html) fn push_raw(&mut self, input: &str) {

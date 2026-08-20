@@ -19,6 +19,7 @@ pub struct RenderContext<'a> {
     pub(in crate::html) asset_mode: AssetMode,
     pub(in crate::html) project_navigation: bool,
     pub(in crate::html) date_source_path: Option<&'a Path>,
+    pub(in crate::html) site_title: Option<&'a str>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -31,6 +32,7 @@ impl<'a> RenderContext<'a> {
             asset_mode: AssetMode::Inline,
             project_navigation: true,
             date_source_path: None,
+            site_title: None,
         }
     }
 
@@ -46,6 +48,11 @@ impl<'a> RenderContext<'a> {
 
     pub fn with_date_source_path(mut self, path: &'a Path) -> Self {
         self.date_source_path = Some(path);
+        self
+    }
+
+    pub fn with_site_title(mut self, site_title: Option<&'a str>) -> Self {
+        self.site_title = site_title.filter(|title| !title.trim().is_empty());
         self
     }
 }
