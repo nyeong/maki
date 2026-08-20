@@ -9,6 +9,7 @@ readme = "README.md"
 [workspace]
 members = [
     "crates/maki-core",
+    "crates/maki-http",
     "crates/maki-serve",
 ]
 

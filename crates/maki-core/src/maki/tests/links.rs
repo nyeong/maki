@@ -1,0 +1,153 @@
+use super::*;
+
+#[test]
+fn note_path() {
+    let note = Note::load(repo_path("."), "docs/use-cases.maki").unwrap();
+
+    assert_eq!(note.source_path(), PathBuf::from("docs/use-cases.maki"));
+    assert_eq!(note.canonical_path(), PathBuf::from("docs/use-cases"));
+    assert_eq!(note.file_stem(), "use-cases");
+    assert_eq!(note.note_ref().web_path(), "/docs/use-cases");
+}
+
+#[test]
+fn note_ref() {
+    let note = Note::load(repo_path("."), "docs/use-cases.maki").unwrap();
+    let ref_ = note.note_ref();
+    assert_eq!(ref_.canonical_path(), PathBuf::from("docs/use-cases"));
+    assert_eq!(ref_.web_path(), "/docs/use-cases");
+}
+
+#[test]
+fn resolve_note_link() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("index"), "use-cases"),
+        NoteLinkResolution::Found(NoteRef::new("use-cases"))
+    );
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("index"), "v0"),
+        NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+    );
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("index"), "milestones/v0"),
+        NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+    );
+}
+
+#[test]
+fn resolve_note_link_uses_case_insensitive_path_lookup() {
+    let project = temp_project("case-insensitive-path");
+    write_note(&project, "milestones/v0.maki");
+    write_note(&project, "index.maki");
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("index"), "Milestones/V0"),
+        NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+    );
+}
+
+#[test]
+fn resolve_note_link_uses_case_insensitive_sibling_stem_lookup() {
+    let project = temp_project("case-insensitive-sibling");
+    write_note(&project, "notes/devenv.maki");
+    write_note(&project, "notes/nix.maki");
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("notes/devenv"), "Nix"),
+        NoteLinkResolution::Found(NoteRef::new("notes/nix"))
+    );
+}
+
+#[test]
+fn resolve_note_link_prefers_sibling_stem_before_project_wide_stem() {
+    let project = temp_project("sibling-before-project-stem");
+    write_note(&project, "notes/page.maki");
+    write_note(&project, "notes/nix.maki");
+    write_note(&project, "other/Nix.maki");
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("notes/page"), "NIX"),
+        NoteLinkResolution::Found(NoteRef::new("notes/nix"))
+    );
+}
+
+#[test]
+fn resolve_note_link_reports_case_insensitive_stem_ambiguity() {
+    let project = temp_project("case-insensitive-stem-ambiguity");
+    write_note(&project, "start.maki");
+    write_note(&project, "alpha/nix.maki");
+    write_note(&project, "beta/NIX.maki");
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("start"), "Nix"),
+        NoteLinkResolution::Ambiguous
+    );
+}
+
+#[test]
+fn resolve_note_link_preserves_exact_path_priority() {
+    let project = temp_project("exact-before-sibling");
+    write_note(&project, "nix.maki");
+    write_note(&project, "notes/page.maki");
+    write_note(&project, "notes/nix.maki");
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("notes/page"), "nix"),
+        NoteLinkResolution::Found(NoteRef::new("nix"))
+    );
+}
+
+#[test]
+fn markdown_style_links_can_resolve_to_notes_with_custom_titles() {
+    let project = temp_project("markdown-style-note-link");
+    write_note_with_content(&project, "start.maki", "See [the page](page).");
+    write_note_with_content(&project, "page.maki", "--^ title: Page\n\nbody");
+
+    let maki = Maki::load(&project.root).unwrap();
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+    assert!(html.contains("<a href=\"/page\">the page</a>"));
+}
+
+#[test]
+fn markdown_style_external_links_render_as_plain_hrefs() {
+    let project = temp_project("markdown-style-external-link");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "See [djot](https://github.com/jgm/djot).",
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+    assert!(
+        html.contains("<a class=\"external-link\" href=\"https://github.com/jgm/djot\">djot</a>")
+    );
+}
+
+#[test]
+fn plain_external_urls_render_as_links() {
+    let project = temp_project("plain-external-link");
+    write_note_with_content(&project, "start.maki", "See https://example.com/docs.");
+
+    let maki = Maki::load(&project.root).unwrap();
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+    assert!(html.contains(
+        "<a class=\"external-link\" href=\"https://example.com/docs\">https://example.com/docs</a>."
+    ));
+}

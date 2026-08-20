@@ -2,11 +2,15 @@
 
 = 코드 구조
 
-Maki는 workspace 안의 세 층으로 나뉜다.
+Maki는 workspace 안의 네 crate 경계로 나뉜다.
 
 - root `maki` binary: CLI parsing, command 실행, stderr 출력 포맷.
 - `maki-core`: parser, HTML renderer, project domain, note/link/date/diagnostics/search metadata.
-- `maki-serve`: HTTP parser/response, web route handling, live reload, watcher, response cache, git source runtime, Prometheus metrics.
+- `maki-http`: Maki 의미를 모르는 raw HTTP request/response parsing and serialization.
+- `maki-serve`: Maki web route handling, live reload, watcher, response cache, git source runtime, Prometheus metrics.
+
+crate 경계는 "대체 가능성"을 기준으로 둔다.
+`maki-http`는 나중에 `hyper`/`axum` 같은 외부 HTTP stack으로 바뀔 수 있는 얇은 계층이고, `maki-serve`는 Maki route/cache/reload/metrics 정책을 담는다.
 
 = 파싱
 

@@ -161,12 +161,12 @@ Grafana는 Prometheus를 data source로 붙이고 dashboard를 구성한다.
 
 = 계측 지점
 
-- HTTP 요청 전체 시간: `web::handle_connection` 또는 `web::response_for_request`
-- route 분류: `web::handle_request`
-- response cache hit/miss: `web::cacheable_response`
-- cacheable render 시간: `web::render_cacheable_response`
-- warmer 처리량과 실패율: `web::warm_response_cache`
-- directory reload: `web::spawn_file_watcher`와 `AppState::reload`
+- HTTP 요청 전체 시간: `web::server::handle_connection` 또는 `web::routes::response_for_request`
+- route 분류: `web::routes::handle_request`
+- response cache hit/miss: `web::routes::cacheable_response`
+- cacheable render 시간: `web::routes::render_cacheable_response`
+- warmer 처리량과 실패율: `web::cache_warmer::warm_response_cache`
+- directory reload: `web::watch::spawn_file_watcher`와 `AppState::reload`
 - git refresh/update: `git_source::spawn_updater`
 - project load phase: `Maki::load_with_config_metered`
 - note render 내부: `Maki::render_html_with_asset_mode`

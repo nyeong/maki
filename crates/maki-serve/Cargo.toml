@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 maki-core = { path = "../maki-core" }
+maki-http = { path = "../maki-http" }
 percent-encoding = "2.3.2"

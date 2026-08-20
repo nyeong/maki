@@ -119,7 +119,7 @@ impl Request {
 }
 
 /// Parses an HTTP request-line.
-pub fn parse_request_line(line: &str) -> Result<(Method, String, Version), Error> {
+fn parse_request_line(line: &str) -> Result<(Method, String, Version), Error> {
     let mut parts = line.split_whitespace();
     let method = parts.next().ok_or(InvalidMethod)?.parse()?;
     let target = parts.next().ok_or(InvalidTarget)?.to_string();
@@ -130,9 +130,7 @@ pub fn parse_request_line(line: &str) -> Result<(Method, String, Version), Error
     Ok((method, target, version))
 }
 
-pub fn parse_request_headers<'a>(
-    lines: &mut impl Iterator<Item = &'a str>,
-) -> Result<Headers, Error> {
+fn parse_request_headers<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result<Headers, Error> {
     let mut headers = Headers::new();
 
     for line in lines {
@@ -295,7 +293,7 @@ impl Display for Headers {
     }
 }
 
-pub fn parse_method(method: &str) -> Result<Method, Error> {
+fn parse_method(method: &str) -> Result<Method, Error> {
     match method {
         "GET" => Ok(Method::Get),
         "HEAD" => Ok(Method::Head),
@@ -303,7 +301,7 @@ pub fn parse_method(method: &str) -> Result<Method, Error> {
     }
 }
 
-pub fn parse_version(protocol: &str) -> Result<Version, Error> {
+fn parse_version(protocol: &str) -> Result<Version, Error> {
     match protocol {
         "HTTP/1.1" => Ok(Version::Http1_1),
         _ => Err(InvalidVersion),

@@ -1,9 +1,10 @@
 use std::fmt::Display;
 
 pub mod git_source;
-pub mod http;
 pub mod metrics;
 pub mod web;
+
+pub use maki_http as http;
 
 #[derive(Debug)]
 pub enum RunError {

@@ -1,0 +1,524 @@
+use super::MAX_REQUEST_HEAD_SIZE;
+use super::cache_warmer::{response_cache_warmup_keys, warm_response_cache};
+use super::error::Error;
+use super::live_reload::{LiveReload, LiveReloadError, LiveReloadEvent};
+use super::routes::{handle_request, response_for_request};
+use super::server::read_request_head;
+use super::state::AppState;
+use super::watch::collect_watched_file_snapshot;
+use crate::http;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::metrics::Metrics;
+use maki_core::{Maki, MakiConfig};
+
+fn repo_path(path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path)
+}
+
+#[test]
+fn test_render_not_found_response() {
+    let response = http::Response::new(http::StatusCode::NotFound)
+        .set_header("Content-Type", "text/plain; charset=utf-8")
+        .set_body("Not Found".to_string());
+    assert_eq!(response.status(), http::StatusCode::NotFound);
+    assert_eq!(response.body(), b"Not Found");
+    assert_eq!(
+        response.get_header("Content-Type"),
+        Some("text/plain; charset=utf-8")
+    );
+}
+
+#[test]
+fn test_read_request_with_split_header() {
+    let mut input = &b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"[..];
+    let raw = read_request_head(&mut input).unwrap();
+    assert!(raw.ends_with(b"\r\n\r\n"));
+}
+
+#[test]
+fn test_handle_unknown_path_returns_not_found() {
+    let request = http::Request::get("/missing");
+
+    let maki = Maki::load(repo_path(".")).unwrap();
+    let state = AppState::new(maki);
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::NotFound);
+    assert_eq!(
+        response.get_header("Content-Type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert!(body.contains("<title>Not Found</title>"));
+    assert!(body.contains("<header class=\"maki-nav\">"));
+    assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
+    assert!(body.contains("<code>/missing</code>"));
+    assert!(body.contains("new EventSource(\"/.maki/events\")"));
+}
+
+#[test]
+fn test_rendered_note_includes_live_reload_script() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/index");
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
+    assert!(body.contains("new EventSource(\"/.maki/events\")"));
+    assert!(body.contains("</script></body>"));
+    assert!(!body.contains("<style>:root"));
+}
+
+#[test]
+fn test_source_note_does_not_include_live_reload_script() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/index.maki");
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    assert!(!body.contains("new EventSource(\"/.maki/events\")"));
+}
+
+#[test]
+fn test_search_index_returns_note_titles() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/.maki/search-index.json");
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    assert_eq!(
+        response.get_header("Content-Type"),
+        Some("application/json; charset=utf-8")
+    );
+    assert!(body.contains("\"title\":\"Maki Syntax\""));
+    assert!(body.contains("\"path\":\"/maki-syntax\""));
+}
+
+#[test]
+fn test_search_page_returns_matching_titles() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/.maki/search?q=syntax");
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    assert!(body.contains("<title>Search</title>"));
+    assert!(body.contains("<a href=\"/maki-syntax\">Maki Syntax</a>"));
+    assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
+    assert!(body.contains("new EventSource(\"/.maki/events\")"));
+}
+
+#[test]
+fn test_search_index_escapes_json_strings() {
+    let root = std::env::temp_dir().join(format!("maki-search-json-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("quote.maki"), "--^ title: Quote \"Note\"\n").unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/.maki/search-index.json");
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+    assert!(body.contains("Quote \\\"Note\\\""));
+}
+
+#[test]
+fn test_note_page_response_cache_is_replaced_with_project() {
+    let root = std::env::temp_dir().join(format!("maki-response-cache-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("home.maki"), "Cache marker: first generation").unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/home");
+
+    let first = handle_request(&state, &request).unwrap();
+    let first_body = String::from_utf8(first.body().to_vec()).unwrap();
+    assert!(first_body.contains("Cache marker: first generation"));
+    assert_eq!(state.cached_response_count(), 1);
+
+    fs::write(root.join("home.maki"), "Cache marker: second generation").unwrap();
+
+    let cached = handle_request(&state, &request).unwrap();
+    let cached_body = String::from_utf8(cached.body().to_vec()).unwrap();
+    assert!(cached_body.contains("Cache marker: first generation"));
+    assert!(!cached_body.contains("Cache marker: second generation"));
+
+    state.reload().unwrap();
+    assert_eq!(state.cached_response_count(), 0);
+
+    let reloaded = handle_request(&state, &request).unwrap();
+    let reloaded_body = String::from_utf8(reloaded.body().to_vec()).unwrap();
+    assert!(reloaded_body.contains("Cache marker: second generation"));
+    assert_eq!(state.cached_response_count(), 1);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn test_response_cache_hit_miss_metrics_follow_requests() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let metrics = Metrics::enabled();
+    let state = AppState::new_with_metrics(maki, metrics.clone());
+    let request = http::Request::get("/index");
+
+    let first = handle_request(&state, &request).unwrap();
+    assert_eq!(first.status(), http::StatusCode::Ok);
+
+    let second = handle_request(&state, &request).unwrap();
+    assert_eq!(second.status(), http::StatusCode::Ok);
+
+    let text = metrics.to_prometheus_text();
+    assert!(text.contains("maki_response_cache_requests_total{kind=\"note\",cache=\"hit\"} 1"));
+    assert!(text.contains("maki_response_cache_requests_total{kind=\"note\",cache=\"miss\"} 1"));
+}
+
+#[test]
+fn test_reload_updates_project_and_cache_gauges() {
+    let root = std::env::temp_dir().join(format!("maki-metrics-reload-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("home.maki"), "Home generation one").unwrap();
+
+    let metrics = Metrics::enabled();
+    let maki = Maki::load_with_config_metered(&root, MakiConfig::default(), &metrics).unwrap();
+    let state = AppState::new_with_metrics(maki, metrics.clone());
+
+    handle_request(&state, &http::Request::get("/home")).unwrap();
+    let before = metrics.to_prometheus_text();
+    assert!(before.contains("maki_project_notes 1"));
+    assert!(before.contains("maki_response_cache_entries 1"));
+
+    fs::write(root.join("next.maki"), "Next generation").unwrap();
+    state.reload().unwrap();
+
+    let after = metrics.to_prometheus_text();
+    fs::remove_dir_all(root).unwrap();
+    assert!(after.contains("maki_project_notes 2"));
+    assert!(after.contains("maki_response_cache_entries 0"));
+    assert!(after.contains("maki_project_reload_total{source=\"directory\",result=\"ok\"} 1"));
+}
+
+#[test]
+fn test_warm_response_cache_populates_cacheable_project_routes() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let expected_entries = response_cache_warmup_keys(&maki).len();
+    let state = AppState::new(maki);
+
+    assert_eq!(state.cached_response_count(), 0);
+
+    warm_response_cache(&state).unwrap();
+
+    assert_eq!(state.cached_response_count(), expected_entries);
+}
+
+#[test]
+fn test_runtime_asset_routes_return_source_assets() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+
+    let css = handle_request(&state, &http::Request::get("/.maki/assets/maki.css")).unwrap();
+    let css_body = String::from_utf8(css.body().to_vec()).unwrap();
+    assert_eq!(
+        css.get_header("Content-Type"),
+        Some("text/css; charset=utf-8")
+    );
+    assert_eq!(css.get_header("Cache-Control"), Some("no-cache"));
+    assert!(css_body.contains(":root"));
+
+    let js = handle_request(&state, &http::Request::get("/.maki/assets/maki-search.js")).unwrap();
+    let js_body = String::from_utf8(js.body().to_vec()).unwrap();
+    assert_eq!(
+        js.get_header("Content-Type"),
+        Some("application/javascript; charset=utf-8")
+    );
+    assert_eq!(js.get_header("Cache-Control"), Some("no-cache"));
+    assert!(js_body.contains("SEARCH_INDEX_PATH"));
+
+    let toc = handle_request(&state, &http::Request::get("/.maki/assets/maki-toc.js")).unwrap();
+    let toc_body = String::from_utf8(toc.body().to_vec()).unwrap();
+    assert_eq!(
+        toc.get_header("Content-Type"),
+        Some("application/javascript; charset=utf-8")
+    );
+    assert_eq!(toc.get_header("Cache-Control"), Some("no-cache"));
+    assert!(toc_body.contains("HEADING_SELECTOR"));
+}
+
+#[test]
+fn test_watched_file_snapshot_includes_runtime_assets() {
+    let root = repo_path("docs");
+    let snapshot = collect_watched_file_snapshot(&root).unwrap();
+
+    assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki.css")));
+    assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-search.js")));
+    assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-toc.js")));
+}
+
+#[test]
+fn test_meta_index_links_internal_indexes() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let response = handle_request(&state, &http::Request::get("/@/")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert!(body.contains("<title>Meta</title>"));
+    assert!(body.contains("<a href=\"/@/recents\">Recents</a>"));
+    assert!(body.contains("<a href=\"/@/diagnostics\">Diagnostics</a>"));
+    assert!(body.contains("<a href=\"/@/dates\">Dates</a>"));
+}
+
+#[test]
+fn test_recents_page_lists_recent_notes() {
+    let root = std::env::temp_dir().join(format!("maki-recents-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("alpha.maki"), "--^ title: Alpha\n").unwrap();
+    fs::create_dir_all(root.join("notes")).unwrap();
+    fs::write(root.join("notes/beta.maki"), "--^ title: Beta\n").unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let response = handle_request(&state, &http::Request::get("/@/recents")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert!(body.contains("<title>Recents</title>"));
+    assert!(body.contains("KST <a href=\"/alpha\">Alpha</a></li>"));
+    assert!(body.contains("<a href=\"/alpha\">Alpha</a>"));
+    assert!(body.contains("<a href=\"/notes/beta\">Beta</a>"));
+    assert!(!body.contains("alpha.maki"));
+    assert!(!body.contains("notes/beta.maki"));
+    assert!(!body.contains("UTC"));
+}
+
+#[test]
+fn test_dates_pages_list_dates_and_backlinks() {
+    let root = std::env::temp_dir().join(format!("maki-dates-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        r#"--^ title: Home
+--^ date: [2026-08-15]
+
+Plan <2026-08-16> and [2026-08-17]--[2026-08-19].
+
+Task with property date.
+--^ scheduled: <2026-08-20 15:00>"#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+
+    let index = handle_request(&state, &http::Request::get("/@/dates")).unwrap();
+    let index_body = String::from_utf8(index.body().to_vec()).unwrap();
+    let year = handle_request(&state, &http::Request::get("/@/dates/2026")).unwrap();
+    let year_body = String::from_utf8(year.body().to_vec()).unwrap();
+    let month = handle_request(&state, &http::Request::get("/@/dates/2026-08")).unwrap();
+    let month_body = String::from_utf8(month.body().to_vec()).unwrap();
+    assert_eq!(index.status(), http::StatusCode::Ok);
+    assert!(index_body.contains("<title>Dates</title>"));
+    assert!(index_body.contains("<a href=\"/@/dates/2026\">2026</a>"));
+    assert!(!index_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+
+    assert_eq!(year.status(), http::StatusCode::Ok);
+    assert!(year_body.contains("<title>2026</title>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2025\">← 2025</a>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2027\">2027 →</a>"));
+    assert!(year_body.contains("<a href=\"/@/dates\">↑ Dates</a>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+
+    assert_eq!(month.status(), http::StatusCode::Ok);
+    assert!(month_body.contains("<title>2026-08</title>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-07\">← 2026-07</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-09\">2026-09 →</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
+    assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
+    assert!(month_body.contains(
+        "<h4 id=\"[2026-08-17 Mon](/@/dates/2026-08-17)\"><a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a></h4>"
+    ));
+    assert!(!month_body.contains("href=\"/@/dates/2026-08-18\""));
+    assert!(month_body.contains(
+        "<h4 id=\"[2026-08-19 Wed](/@/dates/2026-08-19)\"><a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a></h4>"
+    ));
+    assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
+    assert!(month_body.contains(
+        "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
+    ));
+    assert!(month_body.contains(
+        "<li><a href=\"/home#date-property-home-maki-2\">Home</a> event, single, property:scheduled<pre><code>scheduled: &lt;2026-08-20 15:00&gt;\nTask with property date.</code></pre></li>"
+    ));
+    let date_heading_position = |date: &str| {
+        month_body
+            .find(&format!("href=\"/@/dates/{date}\""))
+            .unwrap()
+    };
+    assert!(date_heading_position("2026-08-20") < date_heading_position("2026-08-19"));
+    assert!(date_heading_position("2026-08-19") < date_heading_position("2026-08-17"));
+
+    let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
+    let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
+    let empty_detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-21")).unwrap();
+    let empty_detail_body = String::from_utf8(empty_detail.body().to_vec()).unwrap();
+    let property_detail =
+        handle_request(&state, &http::Request::get("/@/dates/2026-08-20")).unwrap();
+    let property_detail_body = String::from_utf8(property_detail.body().to_vec()).unwrap();
+    let note = handle_request(&state, &http::Request::get("/home")).unwrap();
+    let note_body = String::from_utf8(note.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(detail.status(), http::StatusCode::Ok);
+    assert!(detail_body.contains("<title>2026-08-18 Tue</title>"));
+    assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">← 2026-08-17 Mon</a>"));
+    assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed →</a>"));
+    assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">↑ 2026-08</a>"));
+    assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
+    assert!(detail_body.contains("range"));
+    assert!(detail_body.contains(
+        "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
+    ));
+    assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
+
+    assert_eq!(empty_detail.status(), http::StatusCode::Ok);
+    assert!(empty_detail_body.contains("<title>2026-08-21 Fri</title>"));
+    assert!(empty_detail_body.contains("No date markers."));
+
+    assert_eq!(property_detail.status(), http::StatusCode::Ok);
+    assert!(property_detail_body.contains("<a href=\"/home#date-property-home-maki-2\">Home</a>"));
+    assert!(property_detail_body.contains("event, single, property:scheduled"));
+    assert!(property_detail_body.contains("scheduled: &lt;2026-08-20 15:00&gt;"));
+    assert!(property_detail_body.contains("Task with property date."));
+
+    assert_eq!(note.status(), http::StatusCode::Ok);
+    assert!(note_body.contains("id=\"date-inline-home-maki-2\""));
+    assert!(note_body.contains("<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-17#date-inline-home-maki-2\">[2026-08-17]</a>&ndash;<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-19#date-inline-home-maki-2\">[2026-08-19]</a>"));
+    assert!(note_body.contains("id=\"date-property-home-maki-2\""));
+}
+
+#[test]
+fn test_diagnostics_page_lists_project_issues() {
+    let root = std::env::temp_dir().join(format!("maki-diagnostics-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        "See [[missing]] and [Ghost](ghost).",
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::get("/@/diagnostics");
+
+    let response = handle_request(&state, &request).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+    assert_eq!(
+        response.get_header("Content-Type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert!(body.contains("<title>Diagnostics</title>"));
+    assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
+    assert!(body.contains("2 issue(s)"));
+    assert!(body.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>"));
+    assert!(body.contains("broken link: missing"));
+    assert!(body.contains("broken link: ghost"));
+    assert!(!body.contains("maki-diagnostics-table"));
+}
+
+#[test]
+fn test_head_diagnostics_page_returns_headers_without_body() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let request = http::Request::new(http::Method::Head, "/@/diagnostics");
+
+    let response = response_for_request(&state, &request).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert_eq!(
+        response.get_header("Content-Type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert!(
+        response
+            .get_header("Content-Length")
+            .is_some_and(|length| length.parse::<usize>().unwrap() > 0)
+    );
+    assert_eq!(response.body(), b"");
+}
+
+#[test]
+fn test_live_reload_rejects_clients_over_limit() {
+    let live_reload = LiveReload::new(1);
+
+    assert!(live_reload.register_client().is_ok());
+    assert!(matches!(
+        live_reload.register_client(),
+        Err(LiveReloadError::TooManyClients)
+    ));
+}
+
+#[test]
+fn test_live_reload_broadcasts_reload() {
+    let live_reload = LiveReload::new(1);
+    let (_client_id, _version, receiver) = live_reload.register_client().unwrap();
+
+    live_reload.broadcast_reload();
+
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_millis(100)).unwrap(),
+        LiveReloadEvent::Reload { version: 1 }
+    );
+}
+
+#[test]
+fn test_empty_request() {
+    let mut input = &b""[..];
+
+    assert!(matches!(
+        read_request_head(&mut input),
+        Err(Error::ZeroLengthRequest)
+    ))
+}
+
+#[test]
+fn test_too_long_request() {
+    let bytes = vec![b'a'; MAX_REQUEST_HEAD_SIZE + 1];
+    let mut input = &bytes[..];
+
+    assert!(matches!(
+        read_request_head(&mut input),
+        Err(Error::TooLongRequest)
+    ))
+}

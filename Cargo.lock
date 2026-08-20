@@ -199,10 +199,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "maki-http"
+version = "0.1.0"
+
+[[package]]
 name = "maki-serve"
 version = "0.1.0"
 dependencies = [
  "maki-core",
+ "maki-http",
  "percent-encoding",
 ]
 
