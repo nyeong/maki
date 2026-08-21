@@ -145,6 +145,7 @@ project page에는 nav shell, search input, meta index link, TOC/search scripts�
 `/@/` 아래의 사람이 읽는 meta page는 `include_str!`로 embed한 `templates/*.maki`를 기반으로 가상 maki source를 만든 뒤 같은 maki -> HTML renderer를 통과시킨다.
 최근 수정 목록, 날짜 navigation/list/backlink와 diagnostics summary/item처럼 데이터에 따라 달라지는 조각은 Rust helper가 maki snippet으로 생성하고 template placeholder에 삽입한다.
 충분히 넓은 화면에서는 ToC가 왼쪽 overlay로 고정되고, 현재 화면의 섹션만 강조된다.
+데스크탑 1-column 화면에서는 ToC가 오른쪽 스크롤 위치 지도처럼 바뀌어 heading 위치마다 점을 표시하고, hover/focus 시 제목을 보여주며 클릭으로 이동한다.
 
 근거:
 

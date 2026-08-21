@@ -5,6 +5,7 @@
   const MIN_CONTENT_HEADING_LEVEL = 1;
   const ACTIVE_ANCHOR_RATIO = 0.32;
   const ACTIVE_ANCHOR_MAX = 260;
+  const MARKER_PRECISION = 3;
 
   const getHeadingLevel = (heading) => {
     const ariaLevel = Number(heading.getAttribute("aria-level"));
@@ -45,6 +46,18 @@
 
   const headingTop = (heading) =>
     heading.getBoundingClientRect().top + globalThis.scrollY;
+
+  const scrollRange = () =>
+    Math.max(
+      document.documentElement.scrollHeight,
+      document.body?.scrollHeight ?? 0,
+    ) - globalThis.innerHeight;
+
+  const markerPosition = (heading, range) => {
+    if (range <= 0) return 0;
+
+    return Math.min(Math.max(headingTop(heading) / range, 0), 1);
+  };
 
   const insertToc = (toc) => {
     const title = document.querySelector("body > h1");
@@ -117,6 +130,7 @@
 
       const link = document.createElement("a");
       link.href = heading.id ? `#${encodeURIComponent(heading.id)}` : "#";
+      link.setAttribute("aria-label", labelText);
       link.addEventListener("click", (event) => {
         event.preventDefault();
         heading.scrollIntoView({ block: "start" });
@@ -130,21 +144,25 @@
         scheduleActiveUpdate();
       });
 
+      const label = document.createElement("span");
+      label.className = "maki-toc-label";
       if (parts.number) {
         const number = document.createElement("span");
         number.className = "maki-toc-list-number";
         const nestedNumber = parts.number.replace(/\.$/, "");
         number.textContent = `${nestedNumber.includes(".") ? nestedNumber : parts.number} `;
-        link.append(number);
+        label.append(number);
       }
-      link.append(document.createTextNode(parts.title));
+      label.append(document.createTextNode(parts.title));
+      link.append(label);
       item.append(link);
       list.append(item);
 
       return { heading, item, link };
     });
 
-    let frame = 0;
+    let activeFrame = 0;
+    let markerFrame = 0;
     let activeIndex = -1;
 
     const findActiveIndex = () => {
@@ -176,20 +194,45 @@
     };
 
     function scheduleActiveUpdate() {
-      if (frame) return;
+      if (activeFrame) return;
 
-      frame = globalThis.requestAnimationFrame(() => {
-        frame = 0;
+      activeFrame = globalThis.requestAnimationFrame(() => {
+        activeFrame = 0;
         setActiveIndex(findActiveIndex());
       });
     }
 
-    scheduleActiveUpdate();
+    const updateMarkerPositions = () => {
+      const range = scrollRange();
+
+      items.forEach(({ heading, item }) => {
+        item.style.setProperty(
+          "--maki-toc-marker-y",
+          `${(markerPosition(heading, range) * 100).toFixed(MARKER_PRECISION)}%`,
+        );
+      });
+    };
+
+    function scheduleMarkerUpdate() {
+      if (markerFrame) return;
+
+      markerFrame = globalThis.requestAnimationFrame(() => {
+        markerFrame = 0;
+        updateMarkerPositions();
+      });
+    }
+
+    const scheduleLayoutUpdate = () => {
+      scheduleMarkerUpdate();
+      scheduleActiveUpdate();
+    };
+
+    scheduleLayoutUpdate();
     globalThis.requestAnimationFrame(() => toc.classList.add("is-ready"));
-    globalThis.addEventListener("load", scheduleActiveUpdate, {
+    globalThis.addEventListener("load", scheduleLayoutUpdate, {
       passive: true,
     });
-    globalThis.addEventListener("resize", scheduleActiveUpdate, {
+    globalThis.addEventListener("resize", scheduleLayoutUpdate, {
       passive: true,
     });
     globalThis.addEventListener("scroll", scheduleActiveUpdate, {

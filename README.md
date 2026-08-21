@@ -11,6 +11,7 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 - paragraph, heading, property, quote, code, unordered/ordered list, hyphen-fenced container를 파싱한다.
 - project page에는 home, meta, title search와 섹션 ToC가 있는 navigation shell이 붙는다.
 - 충분히 넓은 화면에서는 ToC가 왼쪽 overlay로 고정되고, 현재 화면의 섹션만 강조된다.
+- 데스크탑 1-column 화면에서는 ToC가 오른쪽 스크롤 위치 지도처럼 표시되고, 점 hover/focus 시 섹션 이름을 보여주며 클릭하면 해당 heading으로 이동한다.
 - `/@/diagnostics`에서 diagnostics를 보고, `/@/dates`에서 date index를 보며, `/.maki/search`와 `/.maki/search-index.json`에서 title search를 쓸 수 있다.
 - local serve는 live reload를 지원한다.
 - `serve --git`는 git repository를 mirror/checkout하고 주기적으로 branch를 poll한다.

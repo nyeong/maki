@@ -658,6 +658,142 @@ th {
   }
 }
 
+@media (hover: hover) and (pointer: fine) and (min-width: 820px) and (max-width: 1359px) {
+  .maki-toc {
+    position: fixed;
+    z-index: 30;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(44rem, calc(100vw - 1rem));
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--fg);
+    font-size: 1rem;
+    line-height: 1.35;
+    pointer-events: none;
+  }
+
+  .maki-toc-panel {
+    display: contents;
+  }
+
+  .maki-toc-summary {
+    display: none;
+  }
+
+  .maki-toc-list {
+    position: absolute;
+    top: clamp(2.5rem, 6vh, 4rem);
+    right: clamp(0.45rem, 0.9vw, 0.85rem);
+    bottom: clamp(2.5rem, 6vh, 4rem);
+    width: min(44rem, calc(100vw - 1.8rem));
+    max-height: none;
+    margin: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .maki-toc-list li {
+    position: absolute;
+    top: var(--maki-toc-marker-y, 0%);
+    right: 0;
+    width: 100%;
+    margin: 0;
+    padding-left: 0;
+    transform: translateY(-50%);
+    opacity: 1;
+    pointer-events: none;
+  }
+
+  .maki-toc-list a {
+    position: relative;
+    display: block;
+    width: 1.55rem;
+    min-height: 2rem;
+    margin-left: auto;
+    padding: 0;
+    color: var(--fg);
+    outline: 0;
+    pointer-events: auto;
+    text-decoration: none;
+  }
+
+  .maki-toc-list a::after {
+    position: absolute;
+    top: 50%;
+    right: 0.18rem;
+    width: 0.48rem;
+    height: 0.48rem;
+    border-radius: 999px;
+    background: #707070;
+    box-shadow: 0 0 0 2px rgb(255 255 255 / 72%);
+    content: "";
+    transform: translateY(-50%);
+    transition:
+      background-color 140ms ease,
+      transform 140ms ease;
+  }
+
+  .maki-toc-label {
+    position: absolute;
+    top: 50%;
+    right: 1.55rem;
+    display: block;
+    max-width: min(42rem, calc(100vw - 4rem));
+    overflow: hidden;
+    padding: 0.22rem 0.6rem 0.24rem;
+    border: 1px solid #c7d0d9;
+    border-radius: 6px;
+    background: #ffffff;
+    box-shadow: 0 8px 18px rgb(32 33 36 / 14%);
+    color: var(--fg);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.35;
+    opacity: 0;
+    pointer-events: none;
+    text-overflow: ellipsis;
+    transform: translate(0.35rem, -50%);
+    transition:
+      opacity 120ms ease,
+      transform 120ms ease;
+    white-space: nowrap;
+  }
+
+  .maki-toc-list-number {
+    color: currentColor;
+  }
+
+  .maki-toc-list a:hover,
+  .maki-toc-list a:focus-visible {
+    width: min(42rem, calc(100vw - 2.5rem));
+    color: var(--fg);
+    text-decoration: none;
+  }
+
+  .maki-toc-list a:hover::after,
+  .maki-toc-list a:focus-visible::after,
+  .maki-toc-list li.is-active a::after {
+    background: #454545;
+    transform: translateY(-50%) scale(1.2);
+  }
+
+  .maki-toc-list a:hover .maki-toc-label,
+  .maki-toc-list a:focus-visible .maki-toc-label {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+
+  .maki-toc-list a:focus-visible .maki-toc-label {
+    outline: 2px solid #c9dafc;
+    outline-offset: 2px;
+  }
+}
+
 @media (min-width: 1360px) {
   .maki-toc {
     position: fixed;
