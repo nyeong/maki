@@ -196,17 +196,25 @@
     let markerFrame = 0;
     let activeIndex = -1;
 
-    const findActiveIndex = () => {
+    const visibleHeadingIndex = () =>
+      items.findIndex(({ heading }) => {
+        const rect = heading.getBoundingClientRect();
+        return rect.top < globalThis.innerHeight && rect.bottom > 0;
+      });
+
+    const previousHeadingIndex = () => {
       const anchorY = activeAnchorY();
 
       for (let index = items.length - 1; index >= 0; index -= 1) {
         if (headingTop(items[index].heading) <= anchorY) return index;
       }
 
-      return items.findIndex(({ heading }) => {
-        const rect = heading.getBoundingClientRect();
-        return rect.top < globalThis.innerHeight && rect.bottom >= 0;
-      });
+      return -1;
+    };
+
+    const findActiveIndex = () => {
+      const visibleIndex = visibleHeadingIndex();
+      return visibleIndex >= 0 ? visibleIndex : previousHeadingIndex();
     };
 
     const setActiveIndex = (nextActiveIndex) => {
