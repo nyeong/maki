@@ -706,6 +706,10 @@ th {
     pointer-events: none;
   }
 
+  .maki-toc-map-item.is-overlapped {
+    display: none;
+  }
+
   .maki-toc-map-link {
     position: relative;
     display: block;

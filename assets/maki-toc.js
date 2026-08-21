@@ -6,6 +6,7 @@
   const ACTIVE_ANCHOR_RATIO = 0.32;
   const ACTIVE_ANCHOR_MAX = 260;
   const MARKER_PRECISION = 3;
+  const MARKER_OVERLAP_GAP = 2;
 
   const getHeadingLevel = (heading) => {
     const ariaLevel = Number(heading.getAttribute("aria-level"));
@@ -58,6 +59,9 @@
 
     return Math.min(Math.max(headingTop(heading) / range, 0), 1);
   };
+
+  const markerBoxOverlaps = (box, otherBox) =>
+    box.top < otherBox.bottom && box.bottom > otherBox.top;
 
   const insertToc = (toc) => {
     const title = document.querySelector("body > h1");
@@ -246,13 +250,42 @@
 
     const updateMarkerPositions = () => {
       const range = scrollRange();
+      const listRect = markerList.getBoundingClientRect();
 
-      items.forEach(({ heading, markerItem }) => {
+      const markerBoxes = items.map(({ heading, markerItem, markerLink }, index) => {
+        const position = markerPosition(heading, range);
         markerItem.style.setProperty(
           "--maki-toc-marker-y",
-          `${(markerPosition(heading, range) * 100).toFixed(MARKER_PRECISION)}%`,
+          `${(position * 100).toFixed(MARKER_PRECISION)}%`,
         );
+        markerItem.classList.remove("is-overlapped");
+
+        const height = Math.max(markerLink.getBoundingClientRect().height, 1);
+        const center = listRect.top + listRect.height * position;
+        return {
+          bottom: center + height / 2 + MARKER_OVERLAP_GAP,
+          index,
+          level: getContentHeadingLevel(heading),
+          top: center - height / 2 - MARKER_OVERLAP_GAP,
+        };
       });
+
+      if (listRect.height <= 0) return;
+
+      const visibleBoxes = [];
+      markerBoxes
+        .sort((left, right) => left.level - right.level || right.index - left.index)
+        .forEach((box) => {
+          const overlapped = visibleBoxes.some((visibleBox) =>
+            markerBoxOverlaps(box, visibleBox),
+          );
+
+          if (overlapped) {
+            items[box.index].markerItem.classList.add("is-overlapped");
+          } else {
+            visibleBoxes.push(box);
+          }
+        });
     };
 
     function scheduleMarkerUpdate() {
