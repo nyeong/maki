@@ -3,6 +3,181 @@
 
 편하게 maki를 작성하기 위한 주변 도구 세팅
 
-- 최소한의 syntax highlighting
-- 최소한의 LSP
-- 포매터?
+= 상황
+
+Maki는 개인 문서 저장소로 쓰기 시작하면 작성 경험이 곧 제품 경험이 된다.
+현재는 build/serve 경로가 먼저 안정화되고 있지만, 문서를 자주 고치려면 editor 안에서 문법 오류, 링크 해석, heading 이동, property 자동완성이 바로 보여야 한다.
+
+LSP를 바로 붙일 수는 있지만, LSP가 쓸 수 있는 source 위치 정보와 index가 아직 충분하지 않다.
+따라서 v4는 LSP server 자체보다 먼저 `maki-core`의 분석 surface를 정리하고, 그 위에 얇은 LSP adapter를 올리는 것을 목표로 한다.
+
+[[maki-syntax]]는 LSP가 따라야 할 stable syntax spec이다.
+현재 문서는 stable 문법, 구현 상태, future idea가 섞여 있으므로 v4의 선행 작업으로 stable/draft 경계를 분명히 한다.
+
+= 목표
+
+- editor에서 Maki 문서를 고칠 때 문법 오류와 깨진 내부 링크를 빠르게 확인할 수 있다.
+- note link와 heading link를 editor에서 이동할 수 있다.
+- note, heading, property key, 관습적 property value를 자동완성할 수 있다.
+- document/workspace symbol로 문서 구조를 훑을 수 있다.
+- LSP의 핵심 분석 로직은 IO 없는 `maki-core` API로 제공하고, LSP crate은 protocol adapter 역할만 한다.
+- 한글/일본어가 들어간 문서에서도 range와 cursor 위치가 어긋나지 않는다.
+
+= 비목표
+
+- formatter
+- rename/refactor 전체 구현
+- semantic token 기반 고급 highlighting
+- tree-sitter grammar
+- 외부 링크 실시간 HTTP 검사
+- collaborative editing
+- editor별 extension marketplace 배포
+
+= 설계 원칙
+
+== IO와 sans IO 분리
+
+`maki-lsp`는 stdin/stdout, LSP message dispatch, editor document cache만 담당한다.
+파싱, 진단, link resolve, symbol 추출, completion 후보 생성은 `maki-core`에서 IO 없는 함수로 제공한다.
+
+초기에는 project load를 통째로 다시 해도 된다.
+다만 API 모양은 나중 incremental index로 바꾸기 쉽도록 source snapshot을 입력으로 받게 둔다.
+
+== Source 위치 보존
+
+LSP는 range가 전부다.
+현재 parser는 line number 수준의 diagnostic만 제공하므로, v4에서는 block, inline, property, diagnostic에 span을 붙인다.
+
+- byte offset range
+- line/column 변환
+- LSP UTF-16 position 변환
+- 원문 line index
+
+이 네 가지를 한 곳에서 관리한다.
+
+== Parser와 index를 먼저 정리
+
+LSP feature는 아래 index를 소비한다.
+
+- document property index
+- block index
+- heading index
+- note link occurrence index
+- property occurrence index
+- date marker occurrence index
+
+이 index가 안정화되면 HTML renderer, diagnostics page, search도 같은 데이터를 공유할 수 있다.
+
+= LSP crate 선택
+
+초기 구현은 `lsp-server`와 `lsp-types` 조합을 우선한다.
+
+- 현재 Maki crate들은 async runtime을 쓰지 않는다.
+- `lsp-server`는 protocol handshake와 message parsing만 맡기고 dispatch loop는 직접 제어할 수 있다.
+- `lsp-types`는 LSP data type만 가져오는 얇은 의존성이다.
+- `tower-lsp`는 편하지만 tokio/tower runtime을 새로 들여온다.
+- `async-lsp`는 cancellation, concurrency, middleware가 필요해질 때 다시 검토한다.
+
+따라서 crate 경계는 아래처럼 둔다.
+
+: crates/maki-core  : parser, analysis, project index
+: crates/maki-lsp   : LSP protocol adapter
+: root maki binary  : `maki lsp` command
+
+= 작업
+
+--v status: todo
+== Syntax spec 정리
+
+[[maki-syntax]]를 LSP가 의존할 수 있는 문법 명세로 정리한다.
+
+- [ ] stable 문법과 draft/later 아이디어를 분리한다.
+- [ ] block/line/inline/property 문법의 확정 범위를 명시한다.
+- [ ] 구현된 문법과 문서화된 문법의 차이를 확인한다.
+- [ ] diagnostic을 낼 수 있는 문법 오류와 range 규칙을 정의한다.
+
+--v status: todo
+== Source map 추가
+
+parser가 원문 위치를 잃지 않도록 source map을 추가한다.
+
+- [ ] byte offset 기반 `SourceSpan`을 정의한다.
+- [ ] line start offset index를 만든다.
+- [ ] byte offset을 line/column으로 변환한다.
+- [ ] LSP UTF-16 position 변환을 제공한다.
+- [ ] 한글/일본어/emoji가 섞인 source 위치 테스트를 추가한다.
+
+--v status: todo
+== Located parser model
+
+Block, Inline, Property, Diagnostic이 span을 보존하도록 parser model을 확장한다.
+
+- [ ] `ParseDiagnostic`을 line number 대신 range 중심으로 바꾼다.
+- [ ] Block span과 body span을 구분한다.
+- [ ] Heading level marker와 heading text span을 구분한다.
+- [ ] Inline link target span을 보존한다.
+- [ ] Property key/value span을 보존한다.
+- [ ] 기존 HTML renderer API가 과도하게 흔들리지 않도록 compatibility layer를 둔다.
+
+--v status: todo
+== Analysis API
+
+LSP와 HTML/search/diagnostics가 함께 쓸 수 있는 sans IO 분석 API를 만든다.
+
+- [ ] `DocumentAnalysis`를 정의한다.
+- [ ] `ProjectAnalysis`를 정의한다.
+- [ ] heading anchor와 stable `id` property를 함께 index한다.
+- [ ] note link occurrence와 resolve result를 함께 index한다.
+- [ ] property occurrence를 key/value/range 단위로 index한다.
+- [ ] date marker occurrence를 visible inline과 property value로 구분한다.
+- [ ] diagnostics는 parser warning과 project semantic warning을 한 surface로 모은다.
+
+--v status: todo
+== LSP MVP
+
+`crates/maki-lsp`와 `maki lsp` command를 추가한다.
+
+- [ ] workspace root에서 `maki.toml`을 찾는다.
+- [ ] `textDocument/didOpen`을 처리한다.
+- [ ] `textDocument/didChange`를 처리한다.
+- [ ] `textDocument/didClose`를 처리한다.
+- [ ] `textDocument/publishDiagnostics`를 보낸다.
+- [ ] `textDocument/definition`으로 note/heading link 이동을 제공한다.
+- [ ] `textDocument/completion`으로 note, heading, property key, 관습 value 후보를 제공한다.
+- [ ] `textDocument/documentSymbol`로 heading 구조를 제공한다.
+- [ ] `workspace/symbol`로 note title과 heading을 검색한다.
+- [ ] `textDocument/hover`로 property 의미, link resolve 결과, date marker 의미를 보여준다.
+
+--v status: todo
+== Editor 연동
+
+초기 editor 연동은 로컬 설정 수준으로 둔다.
+
+- [ ] `maki lsp` 실행 방법을 문서화한다.
+- [ ] Zed에서 `.maki` 파일을 LSP에 연결한다.
+- [ ] 필요하면 VS Code용 최소 설정 예시를 문서화한다.
+- [ ] syntax highlighting은 별도 grammar 없이 가능한 최소 수준부터 시작한다.
+
+= 성공기준
+
+- [ ] [core] parser diagnostic이 정확한 source range를 가진다.
+- [ ] [core] 한글/일본어가 들어간 문서에서 LSP position 변환 테스트가 통과한다.
+- [ ] [core] heading, property, note link occurrence index가 있다.
+- [ ] [lsp] `maki lsp`가 stdio LSP server로 실행된다.
+- [ ] [lsp] 저장하지 않은 editor buffer의 문법 오류가 diagnostics로 표시된다.
+- [ ] [lsp] `[[note]]`에서 대상 note로 이동할 수 있다.
+- [ ] [lsp] `[[#heading]]`에서 대상 heading으로 이동할 수 있다.
+- [ ] [lsp] note link 자동완성이 동작한다.
+- [ ] [lsp] property key 자동완성이 동작한다.
+- [ ] [docs] LSP 동작과 syntax spec의 stable 범위가 서로 어긋나지 않는다.
+
+= 나중에 할 것
+
+- formatter
+- semantic tokens
+- rename note
+- rename heading id
+- 깨진 note link에서 새 note 만들기 code action
+- heading에 stable `id` property 추가하기 code action
+- project index incremental update
+- tree-sitter grammar
