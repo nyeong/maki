@@ -730,7 +730,7 @@ th {
     width: 0.48rem;
     height: 0.48rem;
     border-radius: 999px;
-    background: #707070;
+    background: #9a9a9a;
     box-shadow: 0 0 0 2px rgb(255 255 255 / 72%);
     content: "";
     transform: translateY(-50%);
