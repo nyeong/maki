@@ -63,6 +63,28 @@
   const markerBoxOverlaps = (box, otherBox) =>
     box.top < otherBox.bottom && box.bottom > otherBox.top;
 
+  const markerBoxPriority = (left, right) =>
+    left.level - right.level || left.index - right.index;
+
+  const overlappedMarkerIndexes = (markerBoxes) => {
+    const visibleBoxes = [];
+    const overlappedIndexes = new Set();
+
+    [...markerBoxes].sort(markerBoxPriority).forEach((box) => {
+      const overlapped = visibleBoxes.some((visibleBox) =>
+        markerBoxOverlaps(box, visibleBox),
+      );
+
+      if (overlapped) {
+        overlappedIndexes.add(box.index);
+      } else {
+        visibleBoxes.push(box);
+      }
+    });
+
+    return overlappedIndexes;
+  };
+
   const insertToc = (toc) => {
     const title = document.querySelector("body > h1");
     if (title) {
@@ -272,20 +294,10 @@
 
       if (listRect.height <= 0) return;
 
-      const visibleBoxes = [];
-      markerBoxes
-        .sort((left, right) => left.level - right.level || right.index - left.index)
-        .forEach((box) => {
-          const overlapped = visibleBoxes.some((visibleBox) =>
-            markerBoxOverlaps(box, visibleBox),
-          );
-
-          if (overlapped) {
-            items[box.index].markerItem.classList.add("is-overlapped");
-          } else {
-            visibleBoxes.push(box);
-          }
-        });
+      const overlappedIndexes = overlappedMarkerIndexes(markerBoxes);
+      items.forEach(({ markerItem }, index) => {
+        markerItem.classList.toggle("is-overlapped", overlappedIndexes.has(index));
+      });
     };
 
     function scheduleMarkerUpdate() {
@@ -325,6 +337,14 @@
     globalThis.addEventListener("load", start, { once: true });
     globalThis.addEventListener("resize", start, { passive: true });
   };
+
+  if (globalThis.__makiTocUnitTestExports) {
+    globalThis.__makiTocUnitTestExports({
+      markerBoxOverlaps,
+      overlappedMarkerIndexes,
+    });
+    return;
+  }
 
   startWhenReady();
 })();
