@@ -1,0 +1,171 @@
+--^ title: Zed End-user Release
+--^ date: [2026-08-26]
+--^ status: todo
+
+[[zed-forgejo-loop]]까지는 저장소 세 개를 직접 checkout한 개발자가 Maki를 Zed에서 dogfooding하는 경로다.
+이 마일스톤은 저장소 구조와 Nix 환경을 모르는 사용자가 Maki와 Zed extension을 설치하고 업데이트할 수 있는 배포 경로를 만든다.
+
+= 사용자 정의
+
+이 마일스톤의 end user는 다음을 전제로 하지 않는다.
+
+- sibling `maki`, `tree-sitter-maki`, `maki-zed` checkout
+- local `file://` grammar URL
+- Rust, `wasm32-wasip2`, wasi-sdk 개발환경
+- 개인 Forgejo 접근권한
+- Zed global settings의 절대경로 binary override
+
+Nix 사용자는 우선 지원하되, Zed extension registry 사용자가 반드시 Nix를 알아야 하지는 않는다.
+
+= 현재 차이
+
+- `maki-zed`와 `tree-sitter-maki` Forgejo 저장소는 private이다.
+- extension grammar URL은 `/Users/nyeong/Repos/tree-sitter-maki` local path다.
+- extension은 `PATH` 또는 수동 binary override에서 `maki`를 찾는다.
+- 세 저장소에 배포 가능한 license file이 없다.
+- Maki release tag, platform binary, checksum, compatibility policy가 없다.
+- Zed registry submission과 clean-machine install 검증이 없다.
+
+Zed registry는 extension repository가 public HTTPS URL로 접근 가능하고, 제출 commit이 branch에 존재하며, 허용 license가 extension root에 있기를 요구한다.
+Language extension은 remote Tree-sitter repository와 고정 revision을 manifest에 등록해야 한다.
+Extension ID는 unique kebab-case여야 하고 `zed`나 `extension`을 포함할 수 없으며, user-facing text는 English로 작성해야 한다.
+
+= 목표 사용자 흐름
+
+== Nix 사용자
+
+1. public Maki flake에서 package를 설치한다.
+2. Zed extension registry에서 Maki를 설치한다.
+3. `.maki` 파일을 열면 grammar와 `maki lsp`가 별도 설정 없이 시작된다.
+4. Maki package와 extension을 독립적으로 업데이트하고 호환성 오류는 명시적으로 확인한다.
+
+== 비Nix 사용자
+
+1. supported platform의 signed 또는 checksummed Maki release artifact를 설치한다.
+2. Zed extension registry에서 Maki를 설치한다.
+3. `PATH` discovery가 실패하면 extension이 지원 platform artifact를 내려받거나, 정확한 수동 설치 안내를 제공한다.
+
+첫 public release는 automatic binary download보다 명확한 `PATH` prerequisite를 선택할 수 있다.
+자동 download는 release integrity와 platform coverage가 준비된 뒤 추가한다.
+
+= 배포 계약
+
+== 저장소와 license
+
+- `maki-zed`를 public HTTPS Git repository로 제공한다.
+- `tree-sitter-maki`도 Zed build infrastructure가 clone 가능한 public HTTPS repository로 제공한다.
+- Maki, grammar, extension의 license를 결정하고 각 repository root에 license file을 둔다.
+- extension license는 Zed가 허용하는 license 목록에 포함되어야 한다.
+- private Forgejo는 개발 mirror로 남길 수 있지만 public release commit과 tag의 provenance를 추적할 수 있어야 한다.
+
+== Version과 compatibility
+
+독립 version을 사용한다.
+
+: Maki CLI/LSP       : semantic behavior와 LSP protocol capability
+: tree-sitter-maki  : grammar node contract
+: maki-zed          : Zed adapter/query와 pinned grammar revision
+
+`maki-zed` release마다 다음을 기록한다.
+
+- extension version
+- pinned Tree-sitter commit
+- 지원하는 최소 Maki version 또는 LSP capability
+- Zed extension API/schema version
+- tested Zed stable version과 platform matrix
+
+Maki는 machine-readable version을 제공하고, extension은 LSP를 시작하기 전에 최소 지원 version을 확인한다.
+LSP initialize response의 `serverInfo.version`도 같은 version을 보고해 호환성 진단에 사용한다.
+
+== Maki artifact
+
+초기 platform matrix:
+
+- macOS aarch64, x86_64
+- Linux aarch64, x86_64
+
+release는 versioned archive, SHA-256 checksum, 변경사항, source commit을 제공한다.
+가능하면 reproducible Nix build 결과와 CI artifact의 hash를 비교한다.
+자동 download를 도입하면 platform 판별, checksum 검증, atomic install, retry, offline behavior, 이전 정상 version fallback을 함께 구현한다.
+이 경우 필요한 `download_file`과 `process:exec` capability만 선언하고, 사용자가 capability를 제한했을 때 수동 설치 경로를 안내한다.
+
+== Zed registry
+
+1. unique extension ID, English user-facing text, manifest 필수 metadata를 확인한다.
+2. 제출할 exact commit을 local dev extension으로 수동 검증한다.
+3. `file://` grammar를 public HTTPS repository의 immutable commit으로 바꾼다.
+4. `extension.toml` version과 repository metadata를 release 상태에 맞춘다.
+5. `zed-industries/extensions`에 public HTTPS submodule과 같은 version entry를 추가한다.
+6. `pnpm sort-extensions`를 실행하고, Maki 하나만 추가하는 PR을 연다.
+7. registry merge 뒤 clean Zed profile에서 install/update/remove를 확인한다.
+
+= Release gate
+
+한 release candidate는 다음을 모두 통과한다.
+
+1. Maki 전체 test와 package build
+2. Tree-sitter generate/corpus/query/binding test와 representative docs parse
+3. Zed adapter unit/WASI check, grammar/query validation, LSP smoke
+4. clean-machine Nix install smoke
+5. 최소 macOS/Linux 한 환경씩 non-Nix artifact install smoke
+6. Zed stable에서 highlighting, outline, diagnostics, completion, definition, symbols 확인
+7. checksum mismatch, missing binary, denied extension capability error 확인
+8. previous extension/Maki 조합으로 rollback 확인
+
+= 작업 순서
+
+--v status: todo
+== 1. Public release foundation
+
+- [ ] 세 저장소의 license와 copyright 정책을 결정한다.
+- [ ] public HTTPS release repository/mirror와 visibility를 결정한다.
+- [ ] grammar remote URL과 immutable revision 정책을 정한다.
+- [ ] version/compatibility 표를 문서화한다.
+
+--v status: todo
+== 2. Maki binary release
+
+- [ ] Nix flake install command를 clean environment에서 검증한다.
+- [ ] release version을 출력하는 machine-readable CLI contract를 추가한다.
+- [ ] 네 platform의 versioned artifact를 build한다.
+- [ ] checksum과 source provenance를 publish한다.
+- [ ] artifact install/uninstall/rollback 절차를 검증한다.
+
+--v status: todo
+== 3. Registry candidate
+
+- [ ] `maki-zed` manifest를 public grammar와 release metadata로 전환한다.
+- [ ] extension ID, English user-facing text, allowed license를 검증한다.
+- [ ] PATH prerequisite 또는 automatic download 정책을 구현한다.
+- [ ] 제출할 exact commit을 clean Zed profile에서 end-to-end 검증한다.
+- [ ] sorted `zed-industries/extensions` submission PR을 연다.
+
+--v status: todo
+== 4. Maintenance loop
+
+- [ ] release checklist와 changelog template을 만든다.
+- [ ] compatibility-breaking grammar/LSP change의 순서를 정한다.
+- [ ] update와 rollback smoke를 release마다 실행한다.
+- [ ] security issue와 compromised artifact 대응 절차를 기록한다.
+
+= 성공기준
+
+- [ ] 새 사용자가 source checkout 없이 Maki와 Zed extension을 설치할 수 있다.
+- [ ] 사용자는 Rust/WASI 개발환경 없이 published extension을 사용할 수 있다.
+- [ ] grammar, extension, Maki binary의 source revision과 checksum을 추적할 수 있다.
+- [ ] incompatible/missing binary가 침묵하지 않고 해결 방법을 제시한다.
+- [ ] clean profile 설치, update, rollback이 문서와 실제 동작에서 일치한다.
+
+- [Zed Publishing Prerequisites]
+- [Zed License Requirements]
+- [Zed Publishing Guide]
+- [Zed Updating Guide]
+- [Zed Language Extensions]
+- [Zed Extension Capabilities]
+
+[Zed Publishing Prerequisites]: https://zed.dev/docs/extensions/publishing/prerequisites
+[Zed License Requirements]: https://zed.dev/docs/extensions/publishing/license-requirements
+[Zed Publishing Guide]: https://zed.dev/docs/extensions/publishing/publishing-guide
+[Zed Updating Guide]: https://zed.dev/docs/extensions/publishing/updating-and-maintenance
+[Zed Language Extensions]: https://zed.dev/docs/extensions/languages
+[Zed Extension Capabilities]: https://zed.dev/docs/extensions/capabilities
