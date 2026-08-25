@@ -293,7 +293,7 @@ fn date_index_page_body_source(date_index: &DateIndex) -> String {
     }
 
     source.push_str("== Years\n\n");
-    for (year, count) in year_counts.iter().rev() {
+    for (year, count) in &year_counts {
         push_maki_link_item_with_count(
             &mut source,
             &mut references,
@@ -421,7 +421,7 @@ fn push_date_year_source(
         return;
     }
 
-    for (month, count) in month_counts.iter().rev() {
+    for (month, count) in &month_counts {
         let period = DatePeriod::Month {
             year,
             month: *month,
@@ -434,7 +434,7 @@ fn push_date_year_source(
     }
 
     source.push_str("\n== ISO Weeks\n\n");
-    for (week, count) in week_counts.iter().rev() {
+    for (week, count) in &week_counts {
         let week = IsoWeek::new(year, *week).expect("indexed ISO week is valid");
         let period = DatePeriod::Week(week);
         push_maki_link_item_with_count(source, references, &period.title(), &period.path(), *count);
@@ -498,7 +498,7 @@ fn push_date_days_section(
         return;
     }
 
-    for date in dates.iter().rev() {
+    for date in dates {
         source.push_str("=== ");
         references.push_link(source, &date_label(*date), &maki::date_page_path(*date));
         source.push_str("\n\n");

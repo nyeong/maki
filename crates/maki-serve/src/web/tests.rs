@@ -402,19 +402,22 @@ Task with property date.
         "<h4 id=\"[Date 2026-08-19 Wed]\"><a href=\"/@/dates/2026-08-19\">Date 2026-08-19 Wed</a></h4>"
     ));
     assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
+    assert!(month_body.contains("href=\"/home#date-inline-home-maki-2\""));
     assert!(month_body.contains(
-        "<li><a href=\"/home#date-inline-home-maki-2\">Home (2)</a> date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
+        "date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
     ));
+    assert!(month_body.contains("href=\"/home#date-property-home-maki-2\""));
     assert!(month_body.contains(
-        "<li><a href=\"/home#date-property-home-maki-2\">Home</a> event, single, property:scheduled<pre><code>scheduled: &lt;2026-08-20 15:00&gt;\nTask with property date.</code></pre></li>"
+        "event, single, property:scheduled<pre><code>scheduled: &lt;2026-08-20 15:00&gt;\nTask with property date.</code></pre></li>"
     ));
-    let date_heading_position = |date: &str| {
-        month_body
-            .find(&format!("href=\"/@/dates/{date}\""))
-            .unwrap()
-    };
-    assert!(date_heading_position("2026-08-20") < date_heading_position("2026-08-19"));
-    assert!(date_heading_position("2026-08-19") < date_heading_position("2026-08-17"));
+    assert_text_order(
+        &month_body,
+        &[
+            "href=\"/@/dates/2026-08-17\"",
+            "href=\"/@/dates/2026-08-19\"",
+            "href=\"/@/dates/2026-08-20\"",
+        ],
+    );
 
     let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
     let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
@@ -519,6 +522,63 @@ Target [2026-06-01]."#,
 
     assert_eq!(month_day.status(), http::StatusCode::Ok);
     assert!(month_day_body.contains("date, month day, inline"));
+}
+
+#[test]
+fn test_date_index_hierarchy_is_ascending() {
+    let root = std::env::temp_dir().join(format!("maki-ascending-dates-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        r#"Old [2025-12-31].
+Months [2026-08] [2026-01-15] [2026-12-15].
+Weeks [2026-W40] [2026-W03].
+Future [2027-01-01]."#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let body_for = |path: &str| {
+        let response = handle_request(&state, &http::Request::get(path)).unwrap();
+        assert_eq!(response.status(), http::StatusCode::Ok);
+        String::from_utf8(response.body().to_vec()).unwrap()
+    };
+
+    let index_body = body_for("/@/dates");
+    let year_body = body_for("/@/dates/2026");
+    let month_body = body_for("/@/dates/2026-08");
+    let week_body = body_for("/@/dates/2026-W40");
+    fs::remove_dir_all(root).unwrap();
+
+    assert_text_order(&index_body, &[">2025</a>", ">2026</a>", ">2027</a>"]);
+    assert_text_order(
+        &year_body,
+        &["Month 2026-01", "Month 2026-08", "Month 2026-12"],
+    );
+    assert_text_order(&year_body, &["Week 2026-W03", "Week 2026-W40"]);
+    assert_text_order(
+        &month_body,
+        &["Date 2026-08-01", "Date 2026-08-15", "Date 2026-08-31"],
+    );
+    assert_text_order(
+        &week_body,
+        &["Date 2026-09-28", "Date 2026-10-01", "Date 2026-10-04"],
+    );
+}
+
+fn assert_text_order(haystack: &str, needles: &[&str]) {
+    let mut previous = None;
+    for needle in needles {
+        let position = haystack
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing {needle:?}"));
+        if let Some(previous) = previous {
+            assert!(previous < position, "{needle:?} is out of order");
+        }
+        previous = Some(position);
+    }
 }
 
 #[test]
