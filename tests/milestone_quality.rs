@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -367,27 +367,49 @@ impl HttpResponse {
 }
 
 fn http_get(port: u16, target: &str) -> HttpResponse {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut latest_error = String::new();
+
+    while Instant::now() < deadline {
+        match try_http_get(port, target) {
+            Ok(response) if !response.status_line.is_empty() => return response,
+            Ok(response) => {
+                latest_error = format!("empty status line in response: {response:?}");
+            }
+            Err(error) => {
+                latest_error = error.to_string();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    panic!("GET {target} on port {port} failed: {latest_error}");
+}
+
+fn try_http_get(port: u16, target: &str) -> io::Result<HttpResponse> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     write!(
         stream,
         "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
+    )?;
 
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).unwrap();
-    let raw = String::from_utf8(raw).unwrap();
+    stream.read_to_end(&mut raw)?;
+    let raw = String::from_utf8(raw).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("response was not UTF-8: {error}"),
+        )
+    })?;
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
     let mut head_lines = head.lines();
 
-    HttpResponse {
+    Ok(HttpResponse {
         status_line: head_lines.next().unwrap_or("").to_string(),
         headers: head_lines.collect::<Vec<_>>().join("\n"),
         body: body.to_string(),
-    }
+    })
 }
 
 fn open_sse(port: u16) -> TcpStream {
