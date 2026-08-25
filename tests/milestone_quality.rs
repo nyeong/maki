@@ -275,6 +275,10 @@ fn git_is_available() -> bool {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
+    run_git_with_env(repo, args, &[]);
+}
+
+fn run_git_with_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) {
     let mut command = Command::new("git");
     command
         .arg("-c")
@@ -282,6 +286,7 @@ fn run_git(repo: &Path, args: &[&str]) {
         .arg("-C")
         .arg(repo)
         .args(args);
+    command.envs(env.iter().copied());
     for key in REPOSITORY_GIT_ENV {
         command.env_remove(key);
     }
@@ -293,6 +298,18 @@ fn run_git(repo: &Path, args: &[&str]) {
         args,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn commit_git_project_at(repo: &Path, message: &str, timestamp: &str) {
+    run_git(repo, &["add", "."]);
+    run_git_with_env(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+        &[
+            ("GIT_AUTHOR_DATE", timestamp),
+            ("GIT_COMMITTER_DATE", timestamp),
+        ],
     );
 }
 
@@ -308,11 +325,7 @@ fn commit_git_project(repo: &Path, message: &str, body: &str) {
         format!("--^ title: Git Home\n\n{body}\n"),
     )
     .unwrap();
-    run_git(repo, &["add", "maki.toml", "docs/home.maki"]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", message],
-    );
+    commit_git_project_at(repo, message, "2001-01-01T00:00:00+0000");
 }
 
 fn temp_git_project(name: &str) -> TestProject {
@@ -325,6 +338,19 @@ fn temp_git_project(name: &str) -> TestProject {
     );
     commit_git_project(&project.root, "initial", "Git content marker: version one");
     project
+}
+
+fn assert_body_order(body: &str, needles: &[&str]) {
+    let mut previous = None;
+    for needle in needles {
+        let position = body
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing {needle:?} in body:\n{body}"));
+        if let Some(previous) = previous {
+            assert!(previous < position, "{needle:?} is out of order");
+        }
+        previous = Some(position);
+    }
 }
 
 #[derive(Debug)]
