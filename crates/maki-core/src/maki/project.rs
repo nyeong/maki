@@ -255,7 +255,14 @@ impl Maki {
             }
         }
 
-        let note_metadata_entries = self.notes.values().map(Note::metadata_entry).collect();
+        let note_metadata_entries = self
+            .notes
+            .values()
+            .map(|note| {
+                let title = snapshot_note_title(&self.snapshot, note);
+                note.metadata_entry_with_title(title)
+            })
+            .collect();
         self.recent_entries = collect_recent_entries(note_metadata_entries);
     }
 
