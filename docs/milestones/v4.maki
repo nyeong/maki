@@ -28,7 +28,7 @@ Maki는 개인 문서 저장소로 쓰기 시작하면 작성 경험이 곧 제�
 - formatter
 - rename/refactor 전체 구현
 - semantic token 기반 고급 highlighting
-- tree-sitter grammar
+- tree-sitter grammar: 이 마일스톤 밖의 [[zed-local]]에서 구현
 - 외부 링크 실시간 HTTP 검사
 - collaborative editing
 - editor별 extension marketplace 배포
@@ -155,9 +155,11 @@ LSP와 HTML/search/diagnostics가 함께 쓸 수 있는 sans IO 분석 API를 �
 초기 editor 연동은 로컬 설정 수준으로 둔다.
 
 - [x] `maki lsp` 실행 방법을 문서화한다.
-- [ ] Zed에서 `.maki` 파일을 LSP에 연결한다.
+- [x] Zed local development extension에 `.maki` language와 `maki lsp` 연결 설정을 추가한다.
 - [ ] 필요하면 VS Code용 최소 설정 예시를 문서화한다.
-- [ ] syntax highlighting은 별도 grammar 없이 가능한 최소 수준부터 시작한다.
+- [x] `tree-sitter-maki` 기반 syntax highlighting과 heading outline 설정을 추가한다.
+
+Zed dev extension의 자동 검증은 통과했지만, 실제 Zed UI에서 highlighting과 LSP 기능을 확인하는 수동 검증은 [[zed-local]]에 남아 있다.
 
 = 성공기준
 
@@ -181,4 +183,4 @@ LSP와 HTML/search/diagnostics가 함께 쓸 수 있는 sans IO 분석 API를 �
 - 깨진 note link에서 새 note 만들기 code action
 - heading에 stable `id` property 추가하기 code action
 - project index incremental update
-- tree-sitter grammar
+- Zed extension registry 배포와 Maki binary 자동 설치: [[zed-local]]의 후속 작업

@@ -2,7 +2,7 @@
 
 <https://github.com/nyeong/maki>
 
-현재 마일스톤: [[milestones/v4]]
+현재 마일스톤: [[milestones/zed-local]]
 
 - [[about-maki]]
 - core
@@ -17,6 +17,7 @@
 - [[implementation-analysis]]
 - 마일스톤
   - [[milestones/syntax-sot]]
+  - [[milestones/zed-local]]
   - [[milestones/v0]]
   - [[milestones/v1]]
   - [[milestones/v2]]

@@ -1,0 +1,155 @@
+--^ title: Zed Local Extension MVP
+--^ date: [2026-08-26]
+--^ status: doing
+
+`maki`를 Zed에서 작성할 수 있도록, stable syntax와 맞는 Tree-sitter grammar와 로컬 개발용 Zed extension을 만든다.
+
+= 상황
+
+[[v4]]에서 `maki lsp` stdio server와 editor 기능의 첫 vertical slice를 완성했다.
+Zed는 language metadata에 Tree-sitter grammar를 요구하고 language server command를 extension에서 등록하므로, LSP만으로는 `.maki` 파일을 연결할 수 없다.
+
+별도 저장소 `tree-sitter-maki`와 `maki-zed`에서 구현한다.
+착수 당시 `tree-sitter-maki`의 grammar는 heading section 구조를 실험한 상태로, [[maki-syntax]]의 stable block/inline 문법과 차이가 컸다.
+`maki-zed`도 착수 당시에는 빈 Git 저장소였다.
+
+현재는 stable grammar/query/corpus와 전체 Maki docs parse 검증, local file grammar를 쓰는 Zed extension, `PATH`의 `maki lsp` 연결, Nix+direnv 개발환경, wasm/query/LSP smoke 자동 검증까지 완료했다.
+Zed UI에서 dev extension을 설치해 highlighting과 LSP 기능을 확인하는 수동 검증은 남아 있다.
+
+이 마일스톤은 marketplace 배포보다 한 컴퓨터에서 end-to-end로 검증 가능한 개발 경로를 먼저 만든다.
+
+= 목표
+
+- `tree-sitter-maki`가 [[maki-syntax]]의 stable source를 구조적으로 인식한다.
+- Zed에서 `.maki` 파일을 Maki language로 자동 선택하고 syntax highlighting을 적용한다.
+- Zed extension이 사용자의 `PATH`에서 `maki`를 찾아 `maki lsp`로 실행한다.
+- Tree-sitter와 extension의 가능한 검증은 CLI로 자동화한다.
+- Zed 안에서만 확인 가능한 항목은 짧고 재현 가능한 수동 검증 절차로 남긴다.
+
+= 범위
+
+== Tree-sitter 정합성
+
+Tree-sitter grammar는 semantic parser를 복제하지 않는다.
+문서 편집에 필요한 구조와 source span을 안정적으로 제공하는 error-tolerant concrete syntax grammar로 둔다.
+
+- property와 heading
+- paragraph와 block-start escape
+- code, quote, unordered/ordered/todo list
+- table과 separator row
+- code/quote/unknown container
+- link와 footnote reference definition
+- inline code, note link, date, footnote, reference link, hyper link
+- italic, strong, superscript, subscript, highlight
+
+Reference Definition 존재 여부에 따른 Link/Footnote 의미, 날짜 유효성, container kind의 의미, note resolution은 `maki-core`와 LSP가 담당한다.
+
+== Zed extension
+
+- Maki language metadata와 `.maki` suffix 등록
+- 로컬 `tree-sitter-maki` Git 저장소의 고정 revision 사용
+- Zed가 지원하는 capture 이름의 highlighting query
+- heading outline과 기본 bracket matching
+- `PATH`에서 `maki`를 찾아 `maki lsp`를 실행하는 최소 Rust adapter
+
+= 비목표
+
+- Zed extension registry 또는 marketplace 배포
+- `maki` binary 자동 다운로드와 버전 관리
+- Tree-sitter semantic validation
+- semantic token
+- formatter, rename, code action
+- 모든 Zed theme에서 동일한 색상 보장
+- VS Code나 다른 editor 연동
+
+= 저장소 경계
+
+: maki              : 계획, LSP 연결 문서, 최종 검증 절차
+: tree-sitter-maki  : grammar, generated parser, query, corpus test
+: maki-zed          : extension manifest, language config/query, Rust adapter
+
+각 저장소는 독립적인 의미 단위로 커밋한다.
+로컬 검증 단계에서는 `maki-zed/extension.toml`의 grammar repository를 `file:///Users/nyeong/Repos/tree-sitter-maki`로 둔다.
+배포 준비 시 remote repository URL과 공개된 commit revision으로 교체한다.
+
+= 설계 결정
+
+== Grammar와 semantic parser의 역할
+
+Tree-sitter는 편집 중인 불완전한 source에서도 구조와 highlighting을 최대한 유지해야 한다.
+따라서 semantic parser의 warning 조건을 grammar rejection으로 옮기지 않는다.
+정확한 diagnostics와 project resolution은 계속 `maki lsp`가 단일 기준이다.
+
+== Language server 발견
+
+첫 MVP는 Zed worktree가 보는 `PATH`에서 `maki` executable을 찾는다.
+찾지 못하면 설치나 실행 방법을 알 수 있는 명시적 오류를 반환한다.
+binary 자동 설치는 로컬 연결이 검증된 뒤 별도 마일스톤으로 다룬다.
+
+== 검증 층위
+
+1. `tree-sitter generate`와 corpus test로 grammar/query source를 검증한다.
+2. Rust binding test로 generated parser가 load되는지 검증한다.
+3. Zed extension을 `wasm32-wasip2` 대상으로 build/check한다.
+4. 가능하면 Zed CLI의 extension 검증 명령을 사용한다.
+5. 마지막으로 Zed dev extension 설치 후 highlighting과 LSP 기능을 수동 확인한다.
+
+= 작업 순서
+
+--v status: done
+== 1. 기준과 차이 고정
+
+- [x] [[maki-syntax]]를 grammar의 Source of Truth로 지정한다.
+- [x] Tree-sitter와 semantic parser의 책임 경계를 정한다.
+- [x] 세 저장소의 변경 범위와 로컬 grammar 연결 방식을 정한다.
+
+--v status: done
+== 2. Tree-sitter grammar 정합성
+
+- [x] stable block syntax를 grammar에 반영한다.
+- [x] stable inline syntax를 grammar에 반영한다.
+- [x] heading과 property에 독립적인 named node를 제공한다.
+- [x] Zed-compatible highlighting query를 제공한다.
+- [x] heading outline과 bracket query에 필요한 node를 제공한다.
+- [x] representative stable syntax corpus와 회귀 fixture를 추가한다.
+- [x] generated parser와 binding을 갱신한다.
+
+--v status: doing
+== 3. Zed extension MVP
+
+- [x] `extension.toml`과 Rust extension crate를 만든다.
+- [x] Maki language metadata를 등록한다.
+- [x] local Tree-sitter grammar revision을 최종 commit으로 고정한다.
+- [x] highlighting, outline, bracket query를 연결한다.
+- [x] `maki lsp` command를 등록한다.
+- [x] `maki`를 찾지 못할 때의 오류를 명확히 한다.
+- [x] Nix flake와 direnv로 Maki package와 wasm Rust target을 제공한다.
+
+--v status: doing
+== 4. 검증과 문서화
+
+- [x] Tree-sitter generate/corpus/query/binding test를 통과한다.
+- [x] 대표 fixture와 Maki docs 전체가 unexpected `ERROR`/`MISSING` 없이 파싱된다.
+- [x] Zed extension Rust wasm build/check를 통과한다.
+- [x] extension query validation과 LSP initialize/shutdown smoke test를 통과한다.
+- [x] Zed dev extension 설치 절차를 문서화한다.
+- [x] highlighting, diagnostics, definition, completion, symbols 수동 체크리스트를 문서화한다.
+- [x] [[lsp]], [[implementation-analysis]], [[v4]]의 보류 설명을 현재 상태와 맞춘다.
+- [ ] Zed dev extension을 설치해 수동 체크리스트를 확인한다.
+
+= 성공기준
+
+- [x] representative stable `.maki` fixture가 Tree-sitter에서 unexpected `ERROR` 없이 파싱된다.
+- [x] grammar와 extension query가 존재하지 않는 node/capture를 참조하지 않는다.
+- [ ] `.maki` 파일이 Zed에서 Maki로 인식되고 기본 highlighting과 heading outline이 보인다.
+- [ ] Zed가 `maki lsp`를 시작하며 diagnostics를 표시한다.
+- [ ] note/heading definition, completion, document/workspace symbol 중 v4에서 지원한 기능을 Zed에서 확인할 수 있다.
+- [x] 자동 검증 명령과 남은 수동 검증 절차가 재현 가능하게 기록되어 있다.
+
+= 나중에 할 것
+
+- extension registry 제출과 remote grammar URL 전환
+- release artifact 기반 `maki` 자동 설치와 update
+- code/quote container language injection
+- richer text object, indent, override query
+- Zed settings를 통한 custom `maki` executable path

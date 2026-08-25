@@ -267,12 +267,16 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 - document/block/heading/note-link/property/date occurrence와 parser/semantic diagnostic range가 있다.
 - stdio LSP가 open/change/close, diagnostics, definition, completion, document/workspace symbol, hover를 처리한다.
 - editor의 저장하지 않은 전체 buffer가 source snapshot을 대체한다.
+- `tree-sitter-maki`가 stable syntax fixture와 이 저장소의 전체 `docs/**/*.maki`를 오류 없이 파싱한다.
+- `maki-zed` local extension이 `.maki` language, highlighting/outline/bracket query와 `maki lsp` command를 등록한다.
+- `maki-zed` Nix development shell에서 wasm extension build, query validation, LSP initialize/shutdown smoke test가 통과한다.
 
 남은 점:
 
 - nested Maki body와 reference definition target의 located occurrence가 없다.
 - LSP는 full document sync와 project 전체 재분석을 사용한다.
-- Zed 연결에는 최소 grammar와 local extension이 필요해 보류되어 있다.
+- Zed 안의 highlighting, diagnostics, completion, definition, symbol 동작은 dev extension 설치 후 최종 수동 확인이 남아 있다.
+- Zed extension registry 배포와 `maki` binary 자동 설치는 아직 지원하지 않는다.
 
 == Paragraph boundary와 NumberDot width
 
@@ -456,6 +460,7 @@ diagnostics page와 search가 이미 있기 때문에 sitemap은 같은 project 
 - `docs/milestones/v2.maki`
 - `docs/milestones/v3.maki`
 - `docs/milestones/v4.maki`
+- `docs/milestones/zed-local.maki`
 - `docs/milestones/later.maki`
 - `src/main.rs`
 - `src/cli.rs`
