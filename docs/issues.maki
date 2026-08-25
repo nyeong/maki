@@ -25,34 +25,35 @@ analysis surface에는 container occurrence span이 있지만, 아직 별도 `Un
 --v type: feature
 = `maki.toml` 중심으로 프로젝트 루트 인식 개편
 
-현재 maki는 `maki serve <directory>`처럼 명시적으로 받은 디렉토리를 프로젝트 루트로 본다.
-앞으로는 어떤 `.maki` 파일에 대해 작업하더라도, 상위 디렉토리로 올라가며 `maki.toml`을 찾아 프로젝트 루트를 자동 인식한다.
+개편 전 maki는 `maki serve <directory>`처럼 명시적으로 받은 디렉토리를 프로젝트 루트로 보았다.
+현재 CLI는 입력 경로에서, LSP는 editor workspace root에서 상위 디렉토리로 올라가며 가장 가까운 `maki.toml`을 찾아 프로젝트 루트를 자동 인식한다.
 
 == 의도
 
 - `package.json`, `Cargo.toml`처럼 프로젝트를 정의하는 명시적 파일을 둔다.
-- note identity, wikilink resolution, serve root, build context가 모두 같은 프로젝트 루트를 기준으로 동작하게 한다.
+- note identity, wikilink resolution, serve root, build context가 모두 project config의 source root를 기준으로 동작하게 한다.
 - 단일 파일 렌더링이 아니라 프로젝트 단위 렌더링이라는 maki의 멘탈 모델을 CLI에도 반영한다.
 
-== 초안 동작
+== 구현된 동작
 
 - `maki.toml`이 있는 디렉토리를 maki 프로젝트 루트로 본다.
 - 파일 경로를 입력받는 명령은 해당 파일의 parent부터 상위로 올라가며 가장 가까운 `maki.toml`을 찾는다.
 - 디렉토리 경로를 입력받는 명령은 해당 디렉토리부터 상위로 올라가며 가장 가까운 `maki.toml`을 찾는다.
-- `maki serve`는 현재 디렉토리 또는 입력받은 디렉토리에서 `maki.toml`을 찾아 상위로 올라가고, 발견한 프로젝트 루트 전체를 serve한다.
-- nested project는 상정하지 않는다.
-- `maki.toml`을 찾지 못하면 명령별 fallback을 둘 수 있다.
-  - `serve`: 기존처럼 입력 디렉토리를 root로 볼 수 있다.
-  - `build`: 일단 단일 파일 build로 동작할 수 있다.
+- `maki serve`는 현재 디렉토리 또는 입력받은 경로에서 가장 가까운 `maki.toml`을 찾는다. 입력 경로가 project root 또는 configured source root 안이면 source root를 serve하고, 그 밖이면 입력 디렉토리를 독립 note root로 serve한다.
+- nested manifest가 있으면 가장 가까운 `maki.toml`이 project root가 된다.
+- `maki.toml`을 찾지 못하면 명령별 fallback을 사용한다.
+  - `serve`: 입력 디렉토리를 note root로 사용한다.
+  - `build`: 입력 파일을 standalone HTML로 render한다.
 
-== 설정 초안
+== 설정
 
 --v lang: toml
 : [project]
 : title = "My Maki Notes"
+: source = "docs"
 : home = "README"
 
-초기 구현 범위는 `project.title`, `project.home`만 포함한다.
+초기 구현 범위는 `project.title`, `project.source`, `project.home`만 포함한다.
 `project.home`은 source path가 아니라 note ref 기준이다.
 예를 들어 `home = "README"`는 `README.maki`로 이동하는 의미이며, 나중에 heading ref redirect를 붙일 여지를 남긴다.
 
@@ -61,16 +62,16 @@ analysis surface에는 container occurrence span이 있지만, 아직 별도 `Un
 - 구현 세부 구조는 구현 시점의 코드 모양에 맞춰 판단한다.
 - 핵심은 CLI가 사용자가 넘긴 path를 바로 root로 넘기지 않고, 먼저 `maki.toml` discovery를 수행하는 것이다.
 - `project.home`은 기존 `--index-redirect` 기본값과 연결한다.
-- watcher는 project root 아래의 `.maki` 문서뿐 아니라 `maki.toml` 변경도 감지해야 한다.
+- watcher는 source root 아래의 `.maki` 문서뿐 아니라 project root의 `maki.toml` 변경도 감지해야 한다.
 - `project.title`은 serve HTML의 browser title suffix로 쓴다.
 - 향후 `.maki/project.maki` 같은 자기호스팅 manifest를 도입하더라도, 초기에는 `maki.toml`을 stable bootstrap layer로 삼는다.
 
 == 성공 기준
 
-- 하위 디렉토리에서 `maki build path/to/note.maki`를 실행해도 같은 프로젝트 루트를 기준으로 링크가 해석된다.
-- `maki serve path/to/subdir`를 실행했을 때 상위 `maki.toml`을 찾아 프로젝트 전체를 serve할 수 있다.
+- source root 안의 하위 디렉토리에서 `maki build path/to/note.maki`를 실행해도 같은 project config를 기준으로 링크가 해석된다.
+- source root 안에서 `maki serve path/to/subdir`를 실행했을 때 상위 `maki.toml`을 찾아 configured source root를 serve할 수 있다.
 - `maki.toml`이 없는 기존 fixture와 사용법은 당장 깨지지 않는다.
-- root-relative note identity가 `maki.toml`이 있는 디렉토리를 기준으로 안정적으로 정해진다.
+- source-root-relative note identity가 `maki.toml`의 `source` 설정을 기준으로 안정적으로 정해진다.
 
 == 후속 결정
 

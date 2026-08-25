@@ -1,0 +1,144 @@
+--^ title: maki.toml
+--^ updated: [2026-08-26]
+--^ status: stable
+
+= 개요
+
+`maki.toml`은 Maki 프로젝트를 정의하는 manifest이다.
+프로젝트 루트에 두고, note source가 어디에 있는지와 웹에서 어떤 이름과 홈 경로를 쓸지 선언한다.
+
+최소 예시는 아래와 같다.
+
+--v lang: toml
+: [project]
+: title = "My Notes"
+: source = "docs"
+: home = "index"
+
+이 설정은 다음 의미를 가진다.
+
+- 프로젝트 이름은 `My Notes`이다.
+- `.maki` 파일은 프로젝트 루트의 `docs/` 아래에서 찾는다.
+- 웹의 `/`는 `/index`로 redirect한다.
+
+= 프로젝트 루트
+
+Maki는 `maki.toml`이 있는 디렉토리를 프로젝트 루트로 본다.
+
+`maki serve <path>`와 `maki build <file>`은 CLI 입력 경로에서, `maki lsp`는 editor가 넘긴 workspace root에서 시작해 상위 디렉토리로 올라가며 가장 가까운 `maki.toml`을 찾는다.
+
+예:
+
+--v lang: text
+: my-notes/
+:   maki.toml
+:   docs/
+:     index.maki
+:     notes/today.maki
+
+위 구조에서 프로젝트 루트는 `my-notes/`이고, source root는 `my-notes/docs/`이다.
+`docs/index.maki`의 note route는 `/index`이고, `docs/notes/today.maki`의 note route는 `/notes/today`이다.
+
+프로젝트 설정을 적용하려면 `maki serve`에는 프로젝트 루트 또는 configured source root 안의 경로를 넘긴다.
+그 밖의 project 내부 경로는 입력 디렉토리를 독립적인 note root로 서빙한다.
+`maki build`는 파일이 configured source root 밖에 있으면 단일 파일 HTML render로 동작한다.
+`maki.toml`을 찾지 못한 경우도 같은 fallback을 사용한다.
+
+= [project]
+
+`[project]` table은 현재 `title`, `source`, `home`을 지원한다.
+
+== title
+
+선택 값이다.
+
+--v lang: toml
+: [project]
+: title = "My Notes"
+
+웹 HTML의 browser title suffix로 사용된다.
+예를 들어 note title이 `Home`이고 project title이 `My Notes`이면 HTML title은 `Home | My Notes`가 된다.
+
+`title`이 없으면 note title만 사용한다.
+Note 자체의 제목, 검색 제목, note route는 바꾸지 않는다.
+
+== source
+
+선택 값이며 기본값은 `.`이다.
+
+--v lang: toml
+: [project]
+: source = "docs"
+
+프로젝트 루트 기준으로 `.maki` 파일을 읽을 source root를 지정한다.
+Build와 serve는 source root 아래의 숨김 파일과 숨김 디렉토리를 제외하고 `.maki` 파일을 재귀적으로 읽는다.
+LSP workspace loading은 현재 숨김 경로도 읽으므로, 숨김 note를 두면 editor diagnostics/symbol/completion과 build/serve 결과가 달라질 수 있다.
+
+`source`는 프로젝트 루트 기준의 lexical relative path여야 한다.
+빈 값, absolute path, `..` component는 거부한다.
+
+- 가능: `source = "."`
+- 가능: `source = "docs"`
+- 불가: `source = ""`
+- 불가: `source = "../docs"`
+- 불가: `source = "/srv/maki/docs"`
+
+Local directory source에서는 source root 아래 symlink의 target이 프로젝트 안에 있는지 canonical path로 검사하지 않는다.
+따라서 신뢰하지 않는 local project를 실행할 때 symlink를 프로젝트 경계로 간주하면 안 된다.
+Git source serving은 repository 안의 symlink를 거부한다.
+
+`source = "docs"`일 때 `docs/project/plan.maki`의 note route는 `/project/plan`이다.
+Note link도 source root를 기준으로 해석하므로 `[[project/plan]]`처럼 쓴다.
+
+== home
+
+선택 값이며 기본값은 `README`이다.
+
+--v lang: toml
+: [project]
+: home = "index"
+
+웹의 `/` 요청이 redirect될 note route를 지정한다.
+값은 source path가 아니라 note ref이다.
+일반적으로 `.maki` 확장자는 쓰지 않는다.
+
+- `home = "index"`는 `/index`로 redirect한다.
+- `home = "/index"`도 `/index`로 redirect한다.
+- `home = "notes/today"`는 `/notes/today`로 redirect한다.
+
+CLI의 `maki serve --index-redirect <route>`를 사용하면 `maki.toml`의 `home`보다 우선한다.
+NixOS module에서는 target의 `indexRedirect`가 같은 override 역할을 한다.
+
+= 지원하는 TOML 형식
+
+현재 구현은 `maki.toml`에서 필요한 TOML subset만 읽는다.
+
+- `[project]` table만 설정으로 읽는다.
+- 알 수 없는 table과 key는 무시한다.
+- 설정 값은 한 줄짜리 quoted string이어야 한다.
+- `"` basic string과 `'` literal string을 사용할 수 있다.
+- `"` basic string에서는 `\n`, `\r`, `\t`, `\"`, `\\` escape만 지원한다.
+- `#` 뒤의 comment는 string 밖에서만 comment로 처리한다.
+
+= Git source serving
+
+`maki serve --git <url>`로 git repository를 서빙할 때는 checkout root에 `maki.toml`이 있어야 한다.
+그 뒤에는 checkout root의 `maki.toml`을 읽고 configured `source` 아래의 `.maki` 파일을 서빙한다.
+
+--v lang: bash
+: maki serve --git https://example.invalid/my-notes.git --branch main
+
+Git source serving은 publish runtime으로 동작하며, configured branch를 주기적으로 fetch한다.
+Repository 안의 symlink는 지원하지 않는다.
+
+= 이 저장소의 설정
+
+이 저장소의 `maki.toml`은 아래와 같다.
+
+--v lang: toml
+: [project]
+: title = "Maki"
+: source = "docs"
+: home = "index"
+
+따라서 repository root에서 `maki serve .`를 실행하면 `docs/`를 source root로 보고, `/`는 `/index`로 이동한다.
