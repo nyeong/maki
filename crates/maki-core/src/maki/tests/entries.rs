@@ -118,3 +118,29 @@ fn search_titles_matches_case_insensitive_title_substrings() {
 
     assert_eq!(titles, vec!["Beta Note", "Alpha Note"]);
 }
+
+#[test]
+fn loaded_project_uses_an_immutable_source_snapshot() {
+    let project = temp_project("immutable-source-snapshot");
+    write_note_with_content(&project, "index.maki", "Before reload");
+
+    let maki = Maki::load(&project.root).unwrap();
+    write_note_with_content(&project, "index.maki", "After reload");
+
+    assert_eq!(
+        maki.get_raw_content(Path::new("index.maki")).unwrap(),
+        "Before reload"
+    );
+    assert!(
+        maki.render_html(Path::new("index.maki"))
+            .unwrap()
+            .contains("Before reload")
+    );
+    assert!(
+        Maki::load(&project.root)
+            .unwrap()
+            .render_html(Path::new("index.maki"))
+            .unwrap()
+            .contains("After reload")
+    );
+}

@@ -36,18 +36,15 @@ impl Maki {
 
         for note in self.notes.values() {
             let source_path = note.source_path();
-            let source = match std::fs::read_to_string(&note.absolute_path) {
-                Ok(source) => source,
-                Err(_) => {
-                    diagnostics.push(ProjectDiagnostic::new(
-                        source_path,
-                        None,
-                        ProjectDiagnosticKind::ReadFailed,
-                    ));
-                    continue;
-                }
+            let Some(source) = self.snapshot.source(source_path) else {
+                diagnostics.push(ProjectDiagnostic::new(
+                    source_path,
+                    None,
+                    ProjectDiagnosticKind::ReadFailed,
+                ));
+                continue;
             };
-            let parsed = parser::parse(&source);
+            let parsed = parser::parse(source);
 
             for diagnostic in &parsed.diagnostics {
                 diagnostics.push(ProjectDiagnostic::new(

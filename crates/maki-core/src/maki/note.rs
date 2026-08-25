@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::parser;
-
 use super::Error;
 use super::links::normalize_key;
 
@@ -150,22 +148,9 @@ impl Note {
         self.project_path.as_ref()
     }
 
-    pub(super) fn title(&self) -> String {
-        let content = match std::fs::read_to_string(&self.absolute_path) {
-            Ok(content) => content,
-            Err(_) => return self.file_stem().to_string(),
-        };
-        let parsed = parser::parse(&content);
-        parsed
-            .document
-            .title()
-            .unwrap_or(self.file_stem())
-            .to_string()
-    }
-
-    pub(super) fn metadata_entry(&self) -> NoteMetadataEntry {
+    pub(super) fn metadata_entry_with_title(&self, title: String) -> NoteMetadataEntry {
         NoteMetadataEntry {
-            title: self.title(),
+            title,
             path: self.note_ref().web_path(),
             source_path: self.source_path().display().to_string(),
             modified: self.modified,

@@ -28,6 +28,7 @@ pub struct Maki {
     pub(super) root: PathBuf,                  // canonical absolute path
     pub(super) notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     pub(super) index: NoteIndex,
+    pub(super) snapshot: ProjectSnapshot,
     #[allow(dead_code)]
     pub(super) date_index: DateIndex,
     pub(super) external_links: Vec<ExternalLinkRef>,
@@ -35,6 +36,55 @@ pub struct Maki {
     pub(super) recent_entries: Vec<RecentEntry>,
     pub(super) sitemap_entries: Vec<SitemapEntry>,
     pub(super) config: MakiConfig,
+}
+
+pub(super) struct ProjectSnapshot {
+    sources: BTreeMap<PathBuf, String>,
+    read_failures: Vec<PathBuf>,
+    analysis: ProjectAnalysis,
+}
+
+impl ProjectSnapshot {
+    fn new(sources: BTreeMap<PathBuf, String>, read_failures: Vec<PathBuf>) -> Self {
+        let snapshots = sources
+            .iter()
+            .map(|(path, source)| SourceSnapshot {
+                path: path.as_path(),
+                source,
+            })
+            .collect::<Vec<_>>();
+        let analysis = analysis::analyze_project(&snapshots);
+
+        Self {
+            sources,
+            read_failures,
+            analysis,
+        }
+    }
+
+    pub(super) fn source(&self, path: &Path) -> Option<&str> {
+        self.sources.get(path).map(String::as_str)
+    }
+
+    pub(super) fn sources(&self) -> &BTreeMap<PathBuf, String> {
+        &self.sources
+    }
+
+    pub(super) fn analysis(&self) -> &ProjectAnalysis {
+        &self.analysis
+    }
+
+    fn first_read_failure(&self) -> Option<&Path> {
+        self.read_failures.first().map(PathBuf::as_path)
+    }
+}
+
+fn snapshot_note_title(snapshot: &ProjectSnapshot, note: &Note) -> String {
+    snapshot
+        .analysis()
+        .document(note.source_path())
+        .map(|document| document.title.clone())
+        .unwrap_or_else(|| note.file_stem().to_string())
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,6 +117,10 @@ impl Maki {
 
     fn note(&self, note_ref: &NoteRef) -> Option<&Note> {
         self.notes.get(note_ref)
+    }
+
+    fn note_by_source_path(&self, path: &Path) -> Option<&Note> {
+        self.notes.values().find(|note| note.source_path() == path)
     }
 
     pub fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
@@ -123,21 +177,13 @@ impl Maki {
         let Some(note) = self.note(&note_ref) else {
             return NoteLinkResolution::Broken;
         };
-        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+        let Some(document) = self.snapshot.analysis().document(note.source_path()) else {
             return NoteLinkResolution::Broken;
         };
-        let parsed = parser::parse(&source);
-        let headings = parsed.document.blocks.iter().filter_map(|block| {
-            let parser::BlockKind::Heading { raw_body, .. } = &block.kind else {
-                return None;
-            };
-            Some(
-                block
-                    .property("id")
-                    .filter(|id| !id.is_empty())
-                    .unwrap_or(raw_body),
-            )
-        });
+        let headings = document
+            .headings
+            .iter()
+            .map(|heading| heading.anchor.as_str());
         let exact = headings
             .clone()
             .filter(|anchor| *anchor == heading_anchor)
@@ -162,13 +208,14 @@ impl Maki {
     }
 
     pub fn get_raw_content(&self, path: &Path) -> Result<String, Error> {
-        let path = self.root.join(path);
+        let Some(note) = self.note_by_source_path(path) else {
+            return Err(Error::NoteNotFound(self.root.join(path)));
+        };
 
-        if !path.exists() || !path.is_file() {
-            return Err(Error::NoteNotFound(path));
-        }
-
-        std::fs::read_to_string(&path).map_err(|_source| Error::ReadNoteFailed(path))
+        self.snapshot
+            .source(note.source_path())
+            .map(str::to_string)
+            .ok_or_else(|| Error::ReadNoteFailed(note.absolute_path.clone()))
     }
 
     pub fn config(&self) -> &MakiConfig {
@@ -217,23 +264,11 @@ impl Maki {
     }
 
     pub fn analysis(&self) -> Result<ProjectAnalysis, Error> {
-        let mut sources = Vec::new();
-        for note in self.notes.values() {
-            sources.push((
-                note.source_path().to_path_buf(),
-                std::fs::read_to_string(&note.absolute_path)
-                    .map_err(|_source| Error::ReadNoteFailed(note.absolute_path.clone()))?,
-            ));
+        if let Some(path) = self.snapshot.first_read_failure() {
+            return Err(Error::ReadNoteFailed(path.to_path_buf()));
         }
-        let snapshots = sources
-            .iter()
-            .map(|(path, source)| SourceSnapshot {
-                path: path.as_path(),
-                source,
-            })
-            .collect::<Vec<_>>();
 
-        Ok(analysis::analyze_project(&snapshots))
+        Ok(self.snapshot.analysis().clone())
     }
 
     pub fn published_analysis(&self) -> Result<ProjectAnalysis, Error> {
@@ -299,34 +334,54 @@ impl Maki {
 
         let started = Instant::now();
         let mut notes = BTreeMap::new();
+        let mut sources = BTreeMap::new();
+        let mut read_failures = Vec::new();
 
         for file in &files {
             let note = Note::load(&root, file)?;
+            match std::fs::read_to_string(&note.absolute_path) {
+                Ok(source) => {
+                    sources.insert(note.source_path().to_path_buf(), source);
+                }
+                Err(_) => read_failures.push(note.absolute_path.clone()),
+            }
             notes.insert(note.note_ref(), note);
         }
         metrics.record_project_load_phase("load_notes", started.elapsed());
+
+        let started = Instant::now();
+        let snapshot = ProjectSnapshot::new(sources, read_failures);
+        metrics.record_project_load_phase("analyze", started.elapsed());
 
         let started = Instant::now();
         let index = NoteIndex::build(notes.keys());
         metrics.record_project_load_phase("index", started.elapsed());
 
         let started = Instant::now();
-        let date_index = collect_date_index(&notes);
-        let external_links = collect_external_links(&notes);
-        let note_metadata_entries = notes.values().map(Note::metadata_entry).collect::<Vec<_>>();
-        let search_entries = collect_search_entries(&notes, &note_metadata_entries);
-        let recent_entries = collect_recent_entries(note_metadata_entries);
-        let sitemap_entries = notes
+        let date_index = collect_date_index(&notes, snapshot.sources());
+        let external_links = collect_external_links(snapshot.sources());
+        let note_metadata_entries = notes
             .values()
-            .map(Note::metadata_entry)
+            .map(|note| {
+                let title = snapshot_note_title(&snapshot, note);
+                note.metadata_entry_with_title(title)
+            })
+            .collect::<Vec<_>>();
+        let search_entries =
+            collect_search_entries(&notes, &note_metadata_entries, snapshot.analysis());
+        let sitemap_entries = note_metadata_entries
+            .iter()
+            .cloned()
             .map(NoteMetadataEntry::into_sitemap_entry)
             .collect();
+        let recent_entries = collect_recent_entries(note_metadata_entries);
         metrics.record_project_load_phase("metadata", started.elapsed());
 
         Ok(Self {
             root,
             notes,
             index,
+            snapshot,
             date_index,
             external_links,
             search_entries,
@@ -362,12 +417,15 @@ impl Maki {
     ) -> Result<String, Error> {
         let raw = self.get_raw_content(path)?;
         let parsed = parser::parse(&raw);
-        let current = Note::load(&self.root, path)?.note_ref();
+        let current = self
+            .note_by_source_path(path)
+            .ok_or_else(|| Error::NoteNotFound(self.root.join(path)))?
+            .note_ref();
 
         let resolve_note_link = |target: &str| self.resolve_note_link(&current, target);
         let get_note_info = |note_ref: &NoteRef| {
             self.note(note_ref).map(|note| NoteInfo {
-                title: note.title(),
+                title: snapshot_note_title(&self.snapshot, note),
             })
         };
 
@@ -432,6 +490,7 @@ impl Maki {
 fn collect_search_entries(
     notes: &BTreeMap<NoteRef, Note>,
     metadata_entries: &[NoteMetadataEntry],
+    analysis: &ProjectAnalysis,
 ) -> Vec<SearchEntry> {
     let mut entries = metadata_entries
         .iter()
@@ -448,23 +507,15 @@ fn collect_search_entries(
             source_path.clone(),
         ));
 
-        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+        let Some(document) = analysis.document(note.source_path()) else {
             continue;
         };
-        let parsed = parser::parse(&source);
-        for block in &parsed.document.blocks {
-            let parser::BlockKind::Heading { raw_body, .. } = &block.kind else {
-                continue;
-            };
-            let anchor = block
-                .property("id")
-                .filter(|id| !id.is_empty())
-                .unwrap_or(raw_body);
+        for heading in &document.headings {
             entries.push(SearchEntry::new(
                 SearchEntryKind::Heading,
-                *raw_body,
-                format!("{}#{anchor}", note.note_ref().web_path()),
-                format!("{source_path}#{}", *raw_body),
+                heading.title.clone(),
+                format!("{}#{}", note.note_ref().web_path(), heading.anchor),
+                format!("{source_path}#{}", heading.title),
             ));
         }
     }

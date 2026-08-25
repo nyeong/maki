@@ -6,7 +6,7 @@ use std::{
 
 use crate::parser::{self, BlockKind, Inline};
 
-use super::{MAKI_SOURCE_EXTENSION, note::Note, note::NoteRef};
+use super::{MAKI_SOURCE_EXTENSION, note::NoteRef};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ExternalLinkRef {
@@ -370,16 +370,13 @@ fn collect_document_external_links(
     }
 }
 
-pub(super) fn collect_external_links(notes: &BTreeMap<NoteRef, Note>) -> Vec<ExternalLinkRef> {
+pub(super) fn collect_external_links(sources: &BTreeMap<PathBuf, String>) -> Vec<ExternalLinkRef> {
     let mut external_links = BTreeSet::new();
 
-    for note in notes.values() {
-        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
-            continue;
-        };
-        let parsed = parser::parse(&source);
+    for (source_path, source) in sources {
+        let parsed = parser::parse(source);
 
-        collect_document_external_links(&mut external_links, note.source_path(), &parsed.document);
+        collect_document_external_links(&mut external_links, source_path, &parsed.document);
     }
 
     external_links.into_iter().collect()
