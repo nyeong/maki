@@ -4,6 +4,7 @@
 // see the documentation: https://zed.dev/docs/configuring-zed#settings-files
 {
   "load_direnv": "direct",
+  "soft_wrap": "editor_width",
   "tasks": {
     "prefer_lsp": false,
   },
