@@ -8,6 +8,8 @@
 - core
   - [[maki-syntax]]
   - [[core-analysis]]
+- config
+  - [[maki-toml]]
 - serve
 - tooling
   - [[lsp]]
