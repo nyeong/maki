@@ -61,24 +61,20 @@ v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
 : }
 
 --v status: todo
-== 빠진 문법 구현
+== Stable 문법 구현 상태 맞추기
 
-[[maki-syntax]]에 있으나 구현하지 않은 것들을 구현한다.
+[[maki-syntax]]의 stable syntax와 구현 상태를 맞춘다.
+italic, underline, strike, highlight, footnote, inline container는 현재 stable syntax가 아니라 unsupported syntax로 둔다.
 
-- [ ] [[maki-syntax#Inline]]
-  - [ ] Extend Inline
-  - [x] Bold
-  - [ ] Italic
-  - [ ] Underline
-  - [ ] Strike
+- [ ] Inline
+  - [x] Strong
   - [x] Code
-  - [ ] highlight
-  - [x] Link
+  - [x] Markdown-Style Link
+  - [x] Plain URL
   - [x] Note Link
-  - [ ] Footnote
-  - [ ] Date marker kind
-- [ ] [[maki-syntax#Block]]
-  - [ ] Extend Block
+  - [x] Date Marker
+  - [x] Date Range
+- [ ] Block
   - [x] Paragraph
   - [x] Heading
   - [x] Property Block
@@ -86,6 +82,7 @@ v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
   - [x] Code Block
   - [x] List Block
   - [x] Table
+  - [x] Container
 
 --v status: todo
 == 1-token-1-block 의미론 폐지
