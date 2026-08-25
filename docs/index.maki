@@ -2,7 +2,7 @@
 
 <https://github.com/nyeong/maki>
 
-현재 마일스톤: [[milestones/zed-dev-loop]]
+현재 마일스톤: [[milestones/zed-forgejo-loop]]
 
 - [[about-maki]]
 - core
@@ -19,6 +19,7 @@
   - [[milestones/syntax-sot]]
   - [[milestones/zed-local]]
   - [[milestones/zed-dev-loop]]
+  - [[milestones/zed-forgejo-loop]]
   - [[milestones/v0]]
   - [[milestones/v1]]
   - [[milestones/v2]]
