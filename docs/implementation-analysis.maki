@@ -7,13 +7,14 @@
 syntax SoT에 맞춘 parser와 HTML renderer, `NoteIndex`, project diagnostics/search/runtime assets/git source serving/Prometheus metrics에 더해 `SourceMap`, `DocumentAnalysis`/`ProjectAnalysis`, stdio `maki lsp`, sitemap, project index JSON export가 들어와 있다.
 
 v4 분석 surface는 heading, note link, property, date와 parser/semantic diagnostic의 source range를 제공하고 note/heading link를 snapshot 안에서 resolve한다.
-기존 `Maki` runtime index와 새 `ProjectAnalysis`는 아직 parse 결과를 공유하지는 않지만, serve는 검색·사이트맵·프로젝트 인덱스 JSON을 같은 publish 경계에서 제공한다.
+`Maki` runtime은 load 시점의 source snapshot과 owned `ProjectAnalysis`를 보관하며, note title, heading search, heading link resolution, project index JSON export가 이 snapshot을 재사용한다.
+parser AST 자체는 아직 저장하지 않으므로 render/date/diagnostics collector의 parse 중복은 일부 남아 있다.
 located occurrence는 기존 AST가 빌린 source slice에서 range를 복원하므로 nested Maki body와 reference definition target까지 완전히 다루지는 않는다.
 external link check는 serve의 기본 diagnostics에서는 빠져 있지만 full/build diagnostics에는 아직 동기적으로 붙어 있다.
 
 추천 순서:
 
-- P0: `ProjectAnalysis`를 serve/build의 project runtime과 더 깊게 통합해 note title/render/link diagnostics의 중복 파싱을 줄인다.
+- P0: `ProjectAnalysis`와 project runtime의 남은 중복을 줄여 diagnostics occurrence와 date/property index까지 같은 snapshot surface로 수렴시킨다.
 - P0: nested Maki body와 reference definition target까지 located occurrence 범위를 넓힌다.
 - P0: external link diagnostics를 명시 옵션 또는 캐시/타임아웃 정책 뒤로 옮긴다.
 - P1: alias search entry와 `{date}` timestamp semantics를 project index surface에 추가한다.
@@ -126,12 +127,12 @@ Month/week에서 각 day로 펼친 backlink는 direct day marker와 range middle
 평가:
 
 - "프로젝트 전체가 의미 단위"라는 멘탈 모델의 최소 형태는 구현되어 있다.
-- `Maki` runtime 자체는 아직 index라기보다 lookup table과 derived metadata 묶음에 가깝다.
-- `ProjectAnalysis`에는 block/heading/link/property/date occurrence가 있고 project index JSON export가 이를 사용한다.
-- `Maki` runtime과 `ProjectAnalysis`는 아직 parse 결과를 공유하지 않아 search/render/diagnostics의 중복 파싱이 남아 있다.
+- `Maki` runtime 자체는 아직 index라기보다 immutable source snapshot, lookup table, derived metadata 묶음에 가깝다.
+- `ProjectAnalysis`에는 block/heading/link/property/date occurrence가 있고 project index JSON export와 heading 기반 search가 이를 사용한다.
+- `Maki` runtime과 `ProjectAnalysis`는 source snapshot과 owned analysis를 공유하지만 parser AST는 공유하지 않아 render/date/diagnostics의 parse 중복은 남아 있다.
 - search/sitemap/project-index export는 `PublishAll` publish boundary를 통과하지만, non-public filtering policy는 아직 없다.
-- link 렌더링 때 대상 note title을 다시 파일에서 읽고 파싱한다.
-- diagnostics도 response cache miss나 warm 단계에서는 각 note를 다시 읽고 파싱한다.
+- link 렌더링 때 대상 note title은 load snapshot의 analysis title을 재사용한다.
+- diagnostics도 response cache miss나 warm 단계에서 filesystem을 다시 읽지는 않지만, 기존 reference-link/container behavior 보존을 위해 source snapshot을 다시 parse한다.
 
 == Wikilink
 
@@ -234,12 +235,12 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 == 부족한 추상화
 
-- `Maki`와 `ProjectAnalysis`가 별도 project model이라 parse/index 결과를 공유하지 않는다.
+- `Maki`와 `ProjectAnalysis`는 같은 source snapshot을 공유하지만, parse AST와 occurrence owner relation은 아직 별도 collector가 재구성한다.
 - `NoteRef`가 case, unicode, slash, extension normalization 정책을 타입 차원에서 갖지 않는다.
 - 기존 `Block` AST는 native span/id가 없고 located analysis는 nested body/reference target까지 완전하지 않다.
 - LSP note-link diagnostics는 정확한 target range가 있지만 기존 serve/build diagnostics는 같은 occurrence index를 쓰지 않는다.
 - search, sitemap, project-index export는 `PublishAll` publish policy 경계를 통과하지만, note page/source/diagnostics까지 일반화한 public note set은 아직 없다.
-- response cache는 `web` 계층에 있어 HTTP 응답 재사용만 해결한다. `maki` 계층의 raw/source/AST/metadata 재사용 경계는 아직 없다.
+- response cache는 `web` 계층에 있어 HTTP 응답 재사용을 해결하고, `maki` 계층은 raw source와 owned analysis를 snapshot으로 보관한다. AST/metadata의 완전한 단일화는 아직 없다.
 - external link check 정책이 diagnostics 수집에 직접 붙어 있다.
 
 == 과하게 앞서가면 안 되는 추상화
@@ -324,12 +325,18 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 == P0: ProjectAnalysis runtime 통합
 
-권장 구현:
+완료:
 
-- `Maki` load 결과와 `ProjectAnalysis`가 같은 source snapshot과 parsed result를 공유하도록 경계를 정한다.
-- `Maki` 내부의 `notes`, `index`, `date_index`, `external_links`, `search_entries`, `recent_entries`를 `ProjectAnalysis` 또는 유사 project index와 연결한다.
+- `Maki` load 결과가 immutable source snapshot과 owned `ProjectAnalysis`를 보관한다.
 - note title은 load/index 단계에서 한 번만 읽고 재사용한다.
-- search entries도 note, heading, file name, alias metadata에서 파생한다.
+- search entries는 note, heading, file name metadata에서 파생한다. alias는 아직 없다.
+- heading link resolution은 note source를 다시 읽지 않고 snapshot analysis의 heading occurrence를 사용한다.
+- raw source rendering과 diagnostics/date/external collectors는 filesystem을 다시 읽지 않고 snapshot source를 사용한다.
+- `Maki::analysis()`는 read failure 계약을 유지하면서 load snapshot의 analysis clone을 반환한다.
+
+남은 구현:
+
+- parser AST 자체를 snapshot에 저장하거나 collector 입력을 owned analysis로 바꾼다.
 - link diagnostics는 가능하면 link occurrence와 source span을 함께 저장한다.
 - heading id/anchor와 note identity normalization 정책을 같은 index 경계에서 다룬다.
 - property occurrence와 date occurrence를 같은 index 경계에서 수집한다.
@@ -337,8 +344,8 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 성공 기준:
 
-- 렌더링 중 대상 note title을 다시 파일에서 읽지 않는다.
-- diagnostics 수집과 search index 생성이 같은 note metadata를 공유한다.
+- 렌더링 중 대상 note title을 다시 파일에서 읽지 않는다. 완료.
+- diagnostics 수집과 search index 생성이 같은 note metadata를 공유한다. 부분 완료.
 - link diagnostics가 최소한 inline link가 있는 block/line을 가리킬 수 있다.
 - 검색 자동완성이 title 외 heading/file/alias를 찾을 수 있다. title/heading/file은 완료됐고 alias가 남아 있다.
 - date occurrence가 reference/timestamp/scheduled 의미를 구분한다. reference/event/scheduled/deadline/metadata는 완료됐고 `{date}` timestamp 문법이 남아 있다.

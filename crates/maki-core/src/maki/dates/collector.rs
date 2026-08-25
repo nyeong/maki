@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::parser::{self, BlockKind, DateRange, DateStamp, Inline};
 
@@ -276,14 +276,17 @@ fn collect_document_dates(collector: &mut DateIndexCollector<'_>, document: &par
     collect_document_dates_with_context(collector, document, &mut context);
 }
 
-pub(in crate::maki) fn collect_date_index(notes: &BTreeMap<NoteRef, Note>) -> DateIndex {
+pub(in crate::maki) fn collect_date_index(
+    notes: &BTreeMap<NoteRef, Note>,
+    sources: &BTreeMap<PathBuf, String>,
+) -> DateIndex {
     let mut date_index = DateIndex::default();
 
     for note in notes.values() {
-        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+        let Some(source) = sources.get(note.source_path()) else {
             continue;
         };
-        let parsed = parser::parse(&source);
+        let parsed = parser::parse(source);
         let note_ref = note.note_ref();
         let note_title = parsed
             .document
