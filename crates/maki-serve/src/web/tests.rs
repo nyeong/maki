@@ -498,30 +498,24 @@ Task with property date.
     assert!(year_body.contains("<a href=\"/@/dates/2025\">← 2025</a>"));
     assert!(year_body.contains("<a href=\"/@/dates/2027\">2027 →</a>"));
     assert!(year_body.contains("<a href=\"/@/dates\">↑ Dates</a>"));
-    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">Month 2026-08</a>"));
+    assert!(year_body.contains("<h3 id=\"Months\">Months</h3>"));
+    assert!(year_body.contains("<h3 id=\"Weeks\">Weeks</h3>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
 
     assert_eq!(month.status(), http::StatusCode::Ok);
-    assert!(month_body.contains("<title>2026-08</title>"));
+    assert!(month_body.contains("<title>Month 2026-08</title>"));
     assert!(month_body.contains("<a href=\"/@/dates/2026-07\">← 2026-07</a>"));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-09\">Month 2026-09 →</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-09\">2026-09 →</a>"));
     assert!(month_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
+    assert!(month_body.contains("<h3 id=\"Backlinks\">Backlinks</h3>"));
     assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
-    assert!(month_body.contains(
-        "<h4 id=\"[Date 2026-08-17 Mon]\"><a href=\"/@/dates/2026-08-17\">Date 2026-08-17 Mon</a></h4>"
-    ));
+    assert!(month_body.contains("<h3 id=\"Weeks\">Weeks</h3>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a>"));
     assert!(!month_body.contains("href=\"/@/dates/2026-08-18\""));
-    assert!(month_body.contains(
-        "<h4 id=\"[Date 2026-08-19 Wed]\"><a href=\"/@/dates/2026-08-19\">Date 2026-08-19 Wed</a></h4>"
-    ));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a>"));
     assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
-    assert!(month_body.contains("href=\"/home#date-inline-home-maki-2\""));
-    assert!(month_body.contains(
-        "date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
-    ));
-    assert!(month_body.contains("href=\"/home#date-property-home-maki-2\""));
-    assert!(month_body.contains(
-        "event, single, property:scheduled<pre><code>scheduled: &lt;2026-08-20 15:00&gt;\nTask with property date.</code></pre></li>"
-    ));
+    assert!(!month_body.contains("href=\"/home#date-inline-home-maki-2\""));
+    assert!(!month_body.contains("href=\"/home#date-property-home-maki-2\""));
     assert_text_order(
         &month_body,
         &[
@@ -543,19 +537,18 @@ Task with property date.
     fs::remove_dir_all(root).unwrap();
 
     assert_eq!(detail.status(), http::StatusCode::Ok);
-    assert!(detail_body.contains("<title>2026-08-18 Tue</title>"));
+    assert!(detail_body.contains("<title>Date 2026-08-18 Tue</title>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">← 2026-08-17 Mon</a>"));
-    assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">Date 2026-08-19 Wed →</a>"));
+    assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed →</a>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">↑ 2026-08</a>"));
     assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
     assert!(detail_body.contains("range"));
-    assert!(detail_body.contains(
-        "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
-    ));
+    assert!(detail_body.contains("<a href=\"/home#date-inline-home-maki-2\">Home</a>"));
+    assert!(detail_body.contains("date, range, inline"));
     assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
 
     assert_eq!(empty_detail.status(), http::StatusCode::Ok);
-    assert!(empty_detail_body.contains("<title>2026-08-21 Fri</title>"));
+    assert!(empty_detail_body.contains("<title>Date 2026-08-21 Fri</title>"));
     assert!(empty_detail_body.contains("No date markers."));
 
     assert_eq!(property_detail.status(), http::StatusCode::Ok);
@@ -605,35 +598,69 @@ Target [2026-06-01]."#,
     fs::remove_dir_all(root).unwrap();
 
     assert_eq!(year.status(), http::StatusCode::Ok);
-    assert!(year_body.contains("<h3 id=\"ISO Weeks\">ISO Weeks</h3>"));
-    assert!(year_body.contains("<a href=\"/@/dates/2026-W23\">Week 2026-W23</a>"));
+    assert!(year_body.contains("<h3 id=\"Weeks\">Weeks</h3>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2026-W23\">2026-W23</a>"));
 
     assert_eq!(month.status(), http::StatusCode::Ok);
-    assert!(month_body.contains("<title>2026-08</title>"));
+    assert!(month_body.contains("<title>Month 2026-08</title>"));
     assert!(month_body.contains("date, month, inline"));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-08-01\">Date 2026-08-01 Sat</a>"));
+    assert!(!month_body.contains("href=\"/@/dates/2026-08-01\""));
 
     assert_eq!(week.status(), http::StatusCode::Ok);
-    assert!(week_body.contains("<title>2026-W23</title>"));
+    assert!(week_body.contains("<title>Week 2026-W23</title>"));
     assert!(week_body.contains("<a href=\"/@/dates/2026-W22\">← 2026-W22</a>"));
-    assert!(week_body.contains("<a href=\"/@/dates/2026-W24\">Week 2026-W24 →</a>"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026-W24\">2026-W24 →</a>"));
     assert!(week_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
     assert!(week_body.contains("date, week, inline"));
-    assert!(week_body.contains("<a href=\"/@/dates/2026-06-01\">Date 2026-06-01 Mon</a>"));
-    assert!(week_body.contains("<a href=\"/@/dates/2026-06-07\">Date 2026-06-07 Sun</a>"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026-06-01\">2026-06-01 Mon</a>"));
+    assert!(!week_body.contains("href=\"/@/dates/2026-06-07\""));
 
     assert_eq!(iso_weekday_alias.status(), http::StatusCode::Ok);
-    assert!(iso_weekday_alias_body.contains("<title>2026-06-01 Mon</title>"));
+    assert!(iso_weekday_alias_body.contains("<title>Date 2026-06-01 Mon</title>"));
 
     assert_eq!(day.status(), http::StatusCode::Ok);
     let specific_position = day_body.find("/home#date-inline-home-maki-3").unwrap();
     let target_position = day_body.find("/home#date-inline-home-maki-4").unwrap();
-    let week_day_position = day_body.find("date, week day, inline").unwrap();
-    assert!(specific_position < week_day_position);
-    assert!(target_position < week_day_position);
+    assert!(specific_position < target_position);
+    assert!(!day_body.contains("date, week day, inline"));
 
     assert_eq!(month_day.status(), http::StatusCode::Ok);
-    assert!(month_day_body.contains("date, month day, inline"));
+    assert!(month_day_body.contains("<title>Date 2026-08-01 Sat</title>"));
+    assert!(!month_day_body.contains("date, month day, inline"));
+}
+
+#[test]
+fn test_date_pages_keep_duplicate_note_titles_unsuffixed() {
+    let root =
+        std::env::temp_dir().join(format!("maki-duplicate-date-links-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("alpha.maki"),
+        r#"--^ title: Same
+
+Alpha [2026-08-15]."#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("beta.maki"),
+        r#"--^ title: Same
+
+Beta [2026-08-15]."#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let day = handle_request(&state, &http::Request::get("/@/dates/2026-08-15")).unwrap();
+    let day_body = String::from_utf8(day.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(day.status(), http::StatusCode::Ok);
+    assert_eq!(day_body.matches(">Same</a>").count(), 2);
+    assert!(day_body.contains("href=\"/alpha#"));
+    assert!(day_body.contains("href=\"/beta#"));
+    assert!(!day_body.contains("Same (2)"));
 }
 
 #[test]
@@ -644,8 +671,8 @@ fn test_date_index_hierarchy_is_ascending() {
     fs::write(
         root.join("home.maki"),
         r#"Old [2025-12-31].
-Months [2026-08] [2026-01-15] [2026-12-15].
-Weeks [2026-W40] [2026-W03].
+Months [2026-08] [2026-01-15] [2026-08-01] [2026-08-15] [2026-08-31] [2026-12-15].
+Weeks [2026-W40] [2026-W03] [2026-09-28] [2026-10-01] [2026-10-04].
 Future [2027-01-01]."#,
     )
     .unwrap();
@@ -667,17 +694,11 @@ Future [2027-01-01]."#,
     assert_text_order(&index_body, &[">2025</a>", ">2026</a>", ">2027</a>"]);
     assert_text_order(
         &year_body,
-        &["Month 2026-01", "Month 2026-08", "Month 2026-12"],
+        &[">2026-01</a>", ">2026-08</a>", ">2026-12</a>"],
     );
-    assert_text_order(&year_body, &["Week 2026-W03", "Week 2026-W40"]);
-    assert_text_order(
-        &month_body,
-        &["Date 2026-08-01", "Date 2026-08-15", "Date 2026-08-31"],
-    );
-    assert_text_order(
-        &week_body,
-        &["Date 2026-09-28", "Date 2026-10-01", "Date 2026-10-04"],
-    );
+    assert_text_order(&year_body, &[">2026-W03</a>", ">2026-W40</a>"]);
+    assert_text_order(&month_body, &[">2026-08-01", ">2026-08-15", ">2026-08-31"]);
+    assert_text_order(&week_body, &[">2026-09-28", ">2026-10-01", ">2026-10-04"]);
 }
 
 fn assert_text_order(haystack: &str, needles: &[&str]) {
