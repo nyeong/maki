@@ -157,3 +157,14 @@ instead of `git`.
 nix develop
 cargo test
 ```
+
+## CI
+
+Forgejo Actions runs `.forgejo/workflows/ci.yml` for pull requests targeting
+`main`, pushes to `main`, and manual dispatches. The workflow uses the shared
+local entrypoint and expects a Forgejo self-hosted runner labeled
+`self-hosted` and `nixbox` with Nix flakes enabled:
+
+```bash
+bash scripts/ci/check-maki.sh
+```

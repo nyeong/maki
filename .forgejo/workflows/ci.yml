@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  maki:
+    name: Maki checks
+    runs-on:
+      - self-hosted
+      - nixbox
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          CHECKOUT_URL_OVERRIDE: ${{ vars.FORGEJO_CHECKOUT_URL }}
+          CHECKOUT_SSH_KEY: ${{ secrets.FORGEJO_CHECKOUT_SSH_KEY }}
+          CHECKOUT_SSH_KNOWN_HOSTS: ${{ secrets.FORGEJO_CHECKOUT_SSH_KNOWN_HOSTS }}
+          EVENT_CLONE_URL: ${{ github.event.repository.clone_url }}
+          EVENT_HTML_URL: ${{ github.event.repository.html_url }}
+          EVENT_SSH_URL: ${{ github.event.repository.ssh_url }}
+          FETCH_SHA: ${{ github.sha }}
+          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config --global --add safe.directory "$PWD"
+
+          repo_url="${CHECKOUT_URL_OVERRIDE:-}"
+          if [[ -z "$repo_url" && -n "${CHECKOUT_SSH_KEY:-}" && -n "${EVENT_SSH_URL:-}" ]]; then
+            repo_url="${EVENT_SSH_URL}"
+          fi
+          if [[ -z "$repo_url" ]]; then
+            repo_url="${EVENT_CLONE_URL:-}"
+          fi
+          if [[ -z "$repo_url" ]]; then
+            repo_url="${EVENT_HTML_URL:-${SERVER_URL}/${REPOSITORY}}"
+          fi
+          case "$repo_url" in
+            *.git) ;;
+            *) repo_url="${repo_url}.git" ;;
+          esac
+
+          echo "Using checkout URL: ${repo_url}"
+          auth_args=()
+          if [[ "$repo_url" == ssh://* || "$repo_url" == git@* ]]; then
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+
+            if [[ -n "${CHECKOUT_SSH_KEY:-}" ]]; then
+              printf '%s\n' "$CHECKOUT_SSH_KEY" > "$HOME/.ssh/forgejo_checkout"
+              chmod 600 "$HOME/.ssh/forgejo_checkout"
+              export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/forgejo_checkout -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+            else
+              export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes"
+            fi
+
+            if [[ -n "${CHECKOUT_SSH_KNOWN_HOSTS:-}" ]]; then
+              printf '%s\n' "$CHECKOUT_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+            else
+              ssh_host="$(printf '%s' "$repo_url" | sed -E 's#^ssh://([^@]+@)?([^/:]+).*#\2#; s#^[^@]+@([^:]+):.*#\1#')"
+              ssh-keyscan -H "$ssh_host" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+            fi
+          fi
+
+          if [[ "$repo_url" != ssh://* && "$repo_url" != git@* && -n "${AUTH_TOKEN:-}" ]]; then
+            basic_auth="$(printf 'x-access-token:%s' "$AUTH_TOKEN" | base64 | tr -d '\n')"
+            auth_args=(-c "http.extraHeader=Authorization: Basic ${basic_auth}")
+          fi
+
+          fetch_sha="${PULL_REQUEST_HEAD_SHA:-$FETCH_SHA}"
+
+          git init -b main .
+          git remote add origin "$repo_url"
+          git "${auth_args[@]}" fetch --depth=1 --no-tags origin "$fetch_sha"
+          git checkout --detach "$fetch_sha"
+
+      - name: Nix version
+        run: nix --version
+
+      - name: Run checks
+        env:
+          NIX_CONFIG: experimental-features = nix-command flakes
+        run: bash scripts/ci/check-maki.sh

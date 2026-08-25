@@ -1,0 +1,118 @@
+--^ title: CI/CD Foundation
+--^ date: [2026-08-26]
+--^ status: in_progress
+
+Maki의 개발 루프는 local test, Forgejo PR, main merge, dogfood deploy까지 문서화되어 있다.
+하지만 현재까지는 많은 검증이 사람이 기억해서 실행하는 절차에 가깝다.
+이 마일스톤은 PR, main, release, dogfood deploy의 상태 전이를 기계적으로 검증 가능한 pipeline으로 묶는다.
+
+= 목표
+
+- Maki PR과 `main` push마다 기본 검증을 자동 실행한다.
+- 세 저장소 `maki`, `tree-sitter-maki`, `maki-zed`의 통합 검증을 CI-friendly하게 만든다.
+- end-user release에 필요한 version, artifact, checksum, provenance를 자동 생성할 수 있게 한다.
+- dogfood deploy는 검증된 revision만 반영하고, 배포 후 smoke 결과를 남긴다.
+- public publishing으로 가기 전에 공개/비공개 경계 누수를 회귀 테스트로 막는다.
+
+= 비목표
+
+- PR 자동 merge
+- secret 없는 환경에서 production deploy 강제 실행
+- Zed registry submission 자동화 전체
+- Grafana dashboard나 alert rule 작성
+- 모든 platform의 완전한 release signing
+
+= 작업 순서
+
+--v status: done
+== 1. Maki PR/main CI
+
+Forgejo Actions를 우선 사용한다.
+Forgejo workflow가 불가능한 mirror나 public repository에서는 같은 체크 스크립트를 GitHub Actions에서 재사용할 수 있다.
+
+- [x] `.forgejo/workflows/ci.yml`을 추가한다.
+- [x] `pull_request` to `main`에서 CI를 실행한다.
+- [x] `main` push에서 CI를 실행한다.
+- [x] 수동 재실행용 `workflow_dispatch`를 둔다.
+- [x] CI와 로컬에서 공유하는 `scripts/ci/check-maki.sh`를 둔다.
+- [x] 기본 검증은 `nix flake check`를 canonical gate로 사용한다.
+- [x] flake check는 package build, rustfmt, clippy, cargo test, docs build smoke, NixOS module evaluation을 포함한다.
+- [x] Forgejo self-hosted `nixbox` runner와 Nix flakes 사용을 전제로 문서화한다.
+
+--v status: todo
+== 2. Cross-repository integration CI
+
+현재 `maki-zed/scripts/verify-stack.sh`는 sibling checkout과 `direnv`를 전제로 한다.
+CI에서는 특정 revision 조합을 명시적으로 checkout하고 Nix shell 또는 flake check만으로 재현할 수 있어야 한다.
+
+- [ ] `maki`, `tree-sitter-maki`, `maki-zed` revision tuple을 입력으로 받는 CI entrypoint를 만든다.
+- [ ] local `file://` flake input 없이 public 또는 CI checkout path를 사용한다.
+- [ ] Tree-sitter generate/corpus/query/binding test를 실행한다.
+- [ ] Zed adapter unit/WASI check와 LSP initialize/shutdown smoke를 실행한다.
+- [ ] grammar revision mismatch를 명확한 실패로 보고한다.
+
+--v status: todo
+== 3. Release blocker guard
+
+End-user release branch에서는 로컬 개발 전용 설정이 남아 있으면 안 된다.
+
+- [ ] `extension.toml`의 grammar repository가 `file://`이면 release guard가 실패한다.
+- [ ] `maki-zed` flake input이 `/Users/...` 같은 local path이면 release guard가 실패한다.
+- [ ] 세 저장소의 license file 존재와 허용 license를 확인한다.
+- [ ] Maki CLI, grammar, extension version과 compatibility table이 서로 맞는지 확인한다.
+- [ ] release candidate가 source commit과 pinned grammar revision을 기록하는지 확인한다.
+
+--v status: todo
+== 4. Maki artifact release
+
+태그 기반 release pipeline을 만든다.
+
+- [ ] `maki --version --json` 또는 동등한 machine-readable version contract를 추가한다.
+- [ ] `maki-vX.Y.Z` tag에서 macOS aarch64/x86_64, Linux aarch64/x86_64 artifact를 build한다.
+- [ ] versioned archive와 SHA-256 checksum을 생성한다.
+- [ ] Cargo.lock, flake.lock, source commit, build system 정보를 provenance로 남긴다.
+- [ ] 가능하면 Nix build result와 CI artifact hash를 비교한다.
+
+--v status: todo
+== 5. Dogfood CD
+
+현재 `scripts/deploy-dogfood.sh`는 `main`, clean worktree, remote main 동일성을 확인한다.
+다음 단계는 이 안전장치를 CI와 dotfiles 변경 흐름에 연결하는 것이다.
+
+- [ ] `main` CI 통과 후 dotfiles Maki flake input update PR을 만들 수 있게 한다.
+- [ ] dotfiles PR에서 deploy-rs evaluation 또는 dry-run에 해당하는 검증을 실행한다.
+- [ ] 승인 후 deploy-rs activation을 실행한다.
+- [ ] 배포 후 `/`, `/sitemap.xml`, `/.maki/project-index.json`, `/.maki/search-index.json`, metrics endpoint smoke를 실행한다.
+- [ ] 실패 시 이전 flake lock revision으로 rollback하는 절차를 자동화 가능한 runbook으로 남긴다.
+
+--v status: todo
+== 6. Public publishing regression gate
+
+[[v3]] public publishing 전에 route별 공개 경계 테스트가 필요하다.
+
+- [ ] public/private fixture project를 만든다.
+- [ ] public mode에서 비공개 note page가 404인지 검증한다.
+- [ ] 비공개 source route가 열리지 않는지 검증한다.
+- [ ] search, sitemap, project-index, diagnostics에 비공개 path/title/link가 섞이지 않는지 검증한다.
+- [ ] 공개 note에서 비공개 note로 향하는 link redaction 정책을 snapshot test로 고정한다.
+
+--v status: todo
+== 7. GitHub Actions fallback
+
+Forgejo Actions를 우선 사용한다.
+Forgejo runner를 쓸 수 없는 mirror나 public repository가 생기면 같은 `scripts/ci/check-maki.sh`를 GitHub Actions에서 재사용한다.
+
+- [ ] GitHub mirror가 필요해지는 조건을 정한다.
+- [ ] GitHub Actions workflow에서 Nix 설치와 cache 정책을 문서화한다.
+- [ ] Forgejo와 GitHub의 required check 이름이 같은 의미를 갖도록 맞춘다.
+- [ ] 두 CI가 같은 flake check gate를 실행하는지 확인한다.
+
+= 성공기준
+
+- [x] Maki PR과 `main` push마다 기본 CI가 실행된다.
+- [ ] 세 저장소 통합 검증이 CI runner에서 local checkout layout 없이 실행된다.
+- [ ] release branch에 local-only path와 미확정 license/version metadata가 남아 있으면 실패한다.
+- [ ] release artifact는 version, platform, checksum, source commit을 함께 제공한다.
+- [ ] dogfood deploy는 검증된 revision만 반영하고 smoke 결과를 남긴다.
+- [ ] public publishing 회귀 테스트가 비공개 자료 노출을 막는다.
+- [ ] Forgejo가 불가능한 mirror에서도 같은 gate를 GitHub Actions로 실행할 수 있다.
