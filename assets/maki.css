@@ -506,6 +506,16 @@ li > ol {
   margin: 0.35em 0;
 }
 
+.maki-todo-item {
+  list-style: none;
+}
+
+.maki-todo-checkbox {
+  margin: 0 0.55em 0 -1.45rem;
+  vertical-align: -0.1em;
+  accent-color: #0b6b5f;
+}
+
 pre {
   margin: 1.25em 0;
   padding: 1em;

@@ -176,6 +176,7 @@ fn build_list_item<'a>(
     ListItem {
         body: parse_inline_with_references(draft.body, references),
         kind: draft.kind,
+        todo: draft.todo,
         children: build_blocks(&draft.children, references),
     }
 }

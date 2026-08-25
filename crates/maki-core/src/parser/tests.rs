@@ -58,6 +58,69 @@ fn nested_unordered_list() {
 }
 
 #[test]
+fn parse_todo_list_item_states_and_strict_fallbacks() {
+    let parsed = parse(
+        r#"- [ ]
+- [x] done
+- [x]
+- [ ]  one leading space remains
+- [X] uppercase stays text
+- [ ]attached stays text
+- ordinary
+
+1. [ ] ordered stays text"#,
+    );
+
+    let BlockKind::List { items } = &parsed.document.blocks[0].kind else {
+        panic!("expected an unordered list");
+    };
+    assert_eq!(items.len(), 7);
+    assert_eq!(items[0].todo, Some(TodoState::Todo));
+    assert!(items[0].body.is_empty());
+    assert_eq!(items[1].todo, Some(TodoState::Done));
+    assert_eq!(items[1].body, vec![Inline::Text("done")]);
+    assert_eq!(items[2].todo, Some(TodoState::Done));
+    assert!(items[2].body.is_empty());
+    assert_eq!(items[3].todo, Some(TodoState::Todo));
+    assert_eq!(
+        items[3].body,
+        vec![Inline::Text(" one leading space remains")]
+    );
+    assert_eq!(items[4].todo, None);
+    assert_eq!(
+        items[4].body,
+        vec![Inline::Text("[X] uppercase stays text")]
+    );
+    assert_eq!(items[5].todo, None);
+    assert_eq!(items[5].body, vec![Inline::Text("[ ]attached stays text")]);
+    assert_eq!(items[6].todo, None);
+
+    let BlockKind::List { items } = &parsed.document.blocks[1].kind else {
+        panic!("expected an ordered list");
+    };
+    assert_eq!(items[0].todo, None);
+    assert_eq!(items[0].body, vec![Inline::Text("[ ] ordered stays text")]);
+}
+
+#[test]
+fn parse_nested_todo_list_items() {
+    let parsed = parse(
+        r#"- [ ] parent
+  - [x] child"#,
+    );
+
+    let BlockKind::List { items } = &parsed.document.blocks[0].kind else {
+        panic!("expected an unordered list");
+    };
+    assert_eq!(items[0].todo, Some(TodoState::Todo));
+    let BlockKind::List { items } = &items[0].children[0].kind else {
+        panic!("expected a nested unordered list");
+    };
+    assert_eq!(items[0].todo, Some(TodoState::Done));
+    assert_eq!(items[0].body, vec![Inline::Text("child")]);
+}
+
+#[test]
 fn parse_document_resolves_forward_reference_links_and_footnotes() {
     let parsed = parse(
         r#"Read [djot], [[Maki]], and this note[^source].
@@ -319,11 +382,13 @@ plain text"#;
             BlockDraft::List {
                 items: vec![ListItemDraft {
                     kind: ListKind::Unordered,
+                    todo: None,
                     indent: 0,
                     body: "list",
                     children: vec![BlockDraft::List {
                         items: vec![ListItemDraft {
                             kind: ListKind::Unordered,
+                            todo: None,
                             indent: 0,
                             body: "nested list",
                             children: vec![],

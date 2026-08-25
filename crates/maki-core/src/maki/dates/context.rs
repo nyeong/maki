@@ -189,16 +189,18 @@ fn heading_date_context(level: usize, body: &str) -> String {
     format!("{} {body}", "=".repeat(level))
 }
 
-fn list_item_marker_prefix(kind: parser::ListKind) -> &'static str {
-    match kind {
-        parser::ListKind::Unordered => "- ",
-        parser::ListKind::Ordered => "1. ",
+fn list_item_marker_prefix(item: &parser::ListItem<'_>) -> &'static str {
+    match (item.kind, item.todo) {
+        (parser::ListKind::Unordered, Some(parser::TodoState::Todo)) => "- [ ] ",
+        (parser::ListKind::Unordered, Some(parser::TodoState::Done)) => "- [x] ",
+        (parser::ListKind::Unordered, None) => "- ",
+        (parser::ListKind::Ordered, _) => "1. ",
     }
 }
 
 pub(super) fn list_item_line_date_context(item: &parser::ListItem<'_>) -> String {
     let mut context = String::new();
-    context.push_str(list_item_marker_prefix(item.kind));
+    context.push_str(list_item_marker_prefix(item));
     context.push_str(&inline_date_context(&item.body));
 
     truncate_date_context(context)
@@ -206,7 +208,7 @@ pub(super) fn list_item_line_date_context(item: &parser::ListItem<'_>) -> String
 
 fn list_item_date_context(item: &parser::ListItem<'_>) -> String {
     let mut context = String::new();
-    context.push_str(list_item_marker_prefix(item.kind));
+    context.push_str(list_item_marker_prefix(item));
     context.push_str(&inline_date_context(&item.body));
 
     for child in &item.children {

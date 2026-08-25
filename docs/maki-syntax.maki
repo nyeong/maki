@@ -300,6 +300,30 @@ Unordered List는 순서 의미가 없는 list item sequence를 나타낸다.
 : - one
 : - two
 
+=== Todo List
+
+: - [ ] [<item body>]
+: - [x] [<item body>]
+
+Todo List는 Unordered List item에 todo state를 부여한다.
+`[ ]`는 todo, `[x]`는 done state이다. State는 List Item AST에 보존해야한다.
+
+Marker는 unordered list marker 바로 뒤에서만 해석한다.
+Todo marker 뒤에는 EOL 또는 `<whitespace>`가 와야한다. Body가 있으면 marker 뒤 첫 whitespace 하나를 제외한 나머지를 Inline으로 파싱한다.
+
+Todo item의 body는 비어 있을 수 있다.
+Todo item과 일반 Unordered List item은 같은 List 안에서 섞일 수 있고, 다른 List와 마찬가지로 중첩할 수 있다.
+
+`[X]`, `[ ]body`, Ordered List의 `[ ]`와 `[x]`는 todo marker가 아니며 일반 item body로 파싱한다.
+
+예:
+
+--v lang: maki
+: - [ ] write parser
+: - [x] define syntax
+: - ordinary item
+:   - [ ] nested todo
+
 === Ordered List
 
 : <digits>. <item body>

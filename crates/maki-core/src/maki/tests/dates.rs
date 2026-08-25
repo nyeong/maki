@@ -246,6 +246,38 @@ fn date_index_context_includes_parent_heading_and_top_list_item() {
 }
 
 #[test]
+fn date_index_context_preserves_todo_state() {
+    let project = temp_project("todo-date-context");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"- [ ] Release on [2026-08-25]
+- [x] Reviewed on [2026-08-24]"#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let todo = Date::parse("2026-08-25").unwrap();
+    let done = Date::parse("2026-08-24").unwrap();
+    let todo_backlinks = maki.date_index().backlinks_for(&todo).unwrap();
+    let done_backlinks = maki.date_index().backlinks_for(&done).unwrap();
+
+    assert_eq!(
+        maki.date_index()
+            .occurrence(todo_backlinks[0].occurrence_id())
+            .unwrap()
+            .context(),
+        "- [ ] Release on [2026-08-25]"
+    );
+    assert_eq!(
+        maki.date_index()
+            .occurrence(done_backlinks[0].occurrence_id())
+            .unwrap()
+            .context(),
+        "- [x] Reviewed on [2026-08-24]"
+    );
+}
+
+#[test]
 fn date_index_context_for_table_dates_includes_heading_row_and_table_header() {
     let project = temp_project("date-index-table-context");
     write_note_with_content(

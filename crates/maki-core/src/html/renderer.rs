@@ -2,7 +2,7 @@ use crate::{
     maki::{self, NoteLinkResolution},
     parser::{
         self, BlockKind, DateRange, DateStamp, Document, Inline, ListItem, ListKind,
-        TableColumnAlignment, TableRow,
+        TableColumnAlignment, TableRow, TodoState,
     },
 };
 
@@ -519,7 +519,7 @@ impl<'a> Renderer<'a> {
         self.html.push_str(tag);
         self.html.push('>');
         for item in items {
-            self.html.push_str("<li>");
+            self.render_list_item_start(item.todo);
             self.render_inlines(&item.body);
             if !item.children.is_empty() {
                 for block in &item.children {
@@ -531,6 +531,29 @@ impl<'a> Renderer<'a> {
         self.html.push_str("</");
         self.html.push_str(tag);
         self.html.push('>');
+    }
+
+    fn render_list_item_start(&mut self, state: Option<TodoState>) {
+        let Some(state) = state else {
+            self.html.push_str("<li>");
+            return;
+        };
+
+        let (state_name, checked) = match state {
+            TodoState::Todo => ("todo", false),
+            TodoState::Done => ("done", true),
+        };
+        self.html
+            .push_str("<li class=\"maki-todo-item\" data-todo-state=\"");
+        self.html.push_str(state_name);
+        self.html
+            .push_str("\"><input class=\"maki-todo-checkbox\" type=\"checkbox\" disabled");
+        if checked {
+            self.html.push_str(" checked");
+        }
+        self.html.push_str(" aria-label=\"");
+        self.html.push_str(state_name);
+        self.html.push_str("\">");
     }
 
     fn render_heading(&mut self, level: usize, body: &str) {

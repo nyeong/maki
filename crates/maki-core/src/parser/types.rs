@@ -435,6 +435,7 @@ pub enum TableRowKind {
 pub struct ListItem<'a> {
     pub body: Vec<Inline<'a>>,
     pub kind: ListKind,
+    pub todo: Option<TodoState>,
     pub children: Vec<Block<'a>>, // List를 포함하기 위함
 }
 
@@ -442,4 +443,10 @@ pub struct ListItem<'a> {
 pub enum ListKind {
     Unordered,
     Ordered,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum TodoState {
+    Todo,
+    Done,
 }

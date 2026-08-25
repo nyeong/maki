@@ -1,6 +1,6 @@
 use super::diagnostic::{ParseDiagnostic, ParseDiagnosticKind};
 use super::line::{LinePrefix, LineToken, scan_line};
-use super::types::{ListKind, TableRowKind};
+use super::types::{ListKind, TableRowKind, TodoState};
 use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq)]
@@ -98,6 +98,7 @@ pub(super) struct TableRowDraft<'a> {
 #[derive(Debug, PartialEq)]
 pub(super) struct ListItemDraft<'a> {
     pub(super) kind: ListKind,
+    pub(super) todo: Option<TodoState>,
     pub(super) indent: usize,
     pub(super) body: &'a str,
     pub(super) children: Vec<BlockDraft<'a>>,
@@ -508,18 +509,41 @@ fn parse_list_item_draft<'a>(
     let line = cursor.peek()?;
     let (kind, indent, content_indent) = list_marker(line)?;
     let body = line.body()?;
+    let (todo, body) = parse_todo_item(kind, body);
 
     cursor.next();
 
     Some((
         ListItemDraft {
             kind,
+            todo,
             indent,
             body,
             children: vec![],
         },
         content_indent,
     ))
+}
+
+fn parse_todo_item(kind: ListKind, body: &str) -> (Option<TodoState>, &str) {
+    if kind != ListKind::Unordered {
+        return (None, body);
+    }
+
+    for (marker, state) in [("[ ]", TodoState::Todo), ("[x]", TodoState::Done)] {
+        let Some(rest) = body.strip_prefix(marker) else {
+            continue;
+        };
+
+        if rest.is_empty() {
+            return (Some(state), rest);
+        }
+        if let Some(body) = rest.strip_prefix(' ') {
+            return (Some(state), body);
+        }
+    }
+
+    (None, body)
 }
 
 fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {

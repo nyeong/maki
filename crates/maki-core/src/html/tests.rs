@@ -83,6 +83,25 @@ fn render_ordered_list_with_child_paragraph() {
 }
 
 #[test]
+fn render_todo_list_items_as_disabled_checkboxes() {
+    let parsed = parser::parse(
+        r#"- [ ] todo
+- [x] done
+- ordinary"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains(
+        "<li class=\"maki-todo-item\" data-todo-state=\"todo\"><input class=\"maki-todo-checkbox\" type=\"checkbox\" disabled aria-label=\"todo\">todo</li>"
+    ));
+    assert!(html.contains(
+        "<li class=\"maki-todo-item\" data-todo-state=\"done\"><input class=\"maki-todo-checkbox\" type=\"checkbox\" disabled checked aria-label=\"done\">done</li>"
+    ));
+    assert!(html.contains("<li>ordinary</li>"));
+}
+
+#[test]
 fn render_table_with_inline_cells_and_numeric_alignment() {
     let parsed = parser::parse(
         r#"| 이름 | 점수 |

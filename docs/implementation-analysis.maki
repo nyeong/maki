@@ -64,6 +64,7 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 - paragraph
 - unordered nested list
 - ordered list
+- `[ ]`/`[x]` todo state를 가진 unordered list item
 - colon-prefixed code
 - quote line과 quote container
 - hyphen-fenced container
@@ -99,12 +100,14 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 internal identity는 확장자를 제거한 root-relative canonical path다.
 `NoteIndex`는 exact path, normalized path, project-wide normalized stem, sibling normalized stem lookup을 가진다.
 Document reference definition target 중 local Maki note 후보는 같은 resolution을 사용하고, HTTP/HTTPS target과 Hyper Link는 external link index에 들어간다.
+Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index에 들어가며, occurrence context는 `[ ]` 또는 `[x]` state를 보존한다.
 
 근거:
 
 - `crates/maki-core/src/maki/note.rs`: `NoteRef`, `Note`, `SearchEntry`, `RecentEntry`.
 - `crates/maki-core/src/maki/project.rs`: `Maki`, project load, search, render, route resolution.
 - `crates/maki-core/src/maki/links.rs`: `NoteIndex`, wikilink normalization, external link collection.
+- `crates/maki-core/src/maki/dates/context.rs`, `crates/maki-core/src/maki/tests/dates.rs`: list item date context와 todo state 보존.
 - `crates/maki-core/src/maki/config.rs`: project config parser, source directory validation.
 - `crates/maki-core/src/maki/files.rs`: project file listing and relative path handling.
 
@@ -145,6 +148,7 @@ Document reference definition target 중 local Maki note 후보는 같은 resolu
 HTML 렌더러는 `Document`와 `RenderContext`를 받아 문자열을 생성한다.
 project context가 있으면 wikilink를 resolve하고, 없으면 target 그대로 링크를 만든다.
 Reference link, Hyper Link, footnote area, italic/strong/superscript/subscript/highlight를 새 Inline AST에서 직접 렌더링하며 Reference Definition block 본문은 숨긴다.
+Todo List item은 semantic state를 보존한 disabled checkbox로 렌더링한다.
 project page에는 nav shell, search input, meta index link, TOC/search scripts가 들어간다.
 `/@/` 아래의 사람이 읽는 meta page는 `include_str!`로 embed한 `templates/*.maki`를 기반으로 가상 maki source를 만든 뒤 같은 maki -> HTML renderer를 통과시킨다.
 최근 수정 목록, 날짜 navigation/list/backlink와 diagnostics summary/item처럼 데이터에 따라 달라지는 조각은 Rust helper가 maki snippet으로 생성하고 template placeholder에 삽입한다.
