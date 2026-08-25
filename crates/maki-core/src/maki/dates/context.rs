@@ -125,12 +125,20 @@ fn push_inline_date_context(context: &mut String, inlines: &[Inline<'_>]) {
                 context.push_str(target);
                 context.push_str("]]");
             }
-            Inline::Link { title, target } => {
+            Inline::Link { title, .. } => {
                 context.push('[');
                 context.push_str(title);
-                context.push_str("](");
+                context.push(']');
+            }
+            Inline::Footnote { label } => {
+                context.push_str("[^");
+                context.push_str(label);
+                context.push(']');
+            }
+            Inline::HyperLink { target } => {
+                context.push('<');
                 context.push_str(target);
-                context.push(')');
+                context.push('>');
             }
             Inline::DateStamp(stamp) => context.push_str(&date_stamp_raw(*stamp)),
             Inline::DateRange(range) => context.push_str(&date_range_raw(*range)),
@@ -141,10 +149,30 @@ fn push_inline_date_context(context: &mut String, inlines: &[Inline<'_>]) {
                 context.push_str(text);
                 context.push('`');
             }
+            Inline::Italic(body) => {
+                context.push('/');
+                push_inline_date_context(context, body);
+                context.push('/');
+            }
             Inline::Strong(body) => {
                 context.push('*');
                 push_inline_date_context(context, body);
                 context.push('*');
+            }
+            Inline::Superscript(text) => {
+                context.push_str("^{");
+                context.push_str(text);
+                context.push('}');
+            }
+            Inline::Subscript(text) => {
+                context.push_str("_{");
+                context.push_str(text);
+                context.push('}');
+            }
+            Inline::Highlight(body) => {
+                context.push('=');
+                push_inline_date_context(context, body);
+                context.push('=');
             }
         }
     }
@@ -240,7 +268,9 @@ pub(super) fn block_date_context(block: &parser::Block<'_>) -> String {
     let context = match &block.kind {
         BlockKind::Paragraph { body } => inline_date_context(body),
         BlockKind::Code { lines, .. } => lines.join("\n"),
-        BlockKind::Heading { level, body } => heading_date_context(*level, body),
+        BlockKind::Heading {
+            level, raw_body, ..
+        } => heading_date_context(*level, raw_body),
         BlockKind::List { items } => items
             .iter()
             .map(list_item_date_context)
@@ -261,6 +291,7 @@ pub(super) fn block_date_context(block: &parser::Block<'_>) -> String {
             }
             context
         }
+        BlockKind::ReferenceDefinition { .. } => String::new(),
     };
 
     truncate_date_context(context)

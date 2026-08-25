@@ -115,6 +115,65 @@ Plan *<2026-08-21> and [2026-08-22]--[2026-08-23]*."#,
 }
 
 #[test]
+fn date_index_collects_dates_from_footnote_definitions() {
+    let project = temp_project("footnote-date-index");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"--^ title: Start
+
+Body[^release].
+
+[^release]: Released on [2026-08-24]."#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let date = Date::parse("2026-08-24").unwrap();
+    let backlinks = maki.date_index().backlinks_for(&date).unwrap();
+    let occurrence = maki
+        .date_index()
+        .occurrence(backlinks[0].occurrence_id())
+        .unwrap();
+
+    assert_eq!(
+        occurrence.context(),
+        "[^release]: Released on [2026-08-24]."
+    );
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert!(html.contains("id=\"date-inline-start-maki-1\""));
+    assert!(html.contains("<section class=\"footnotes\">"));
+}
+
+#[test]
+fn date_index_ignores_dates_inside_plain_quotes() {
+    let project = temp_project("plain-quote-date-index");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"--v mode: plain
+> [2026-08-24]
+
+--v mode: plain
+---quote
+[2026-08-25]
+---"#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert!(
+        maki.date_index()
+            .backlinks_for(&Date::parse("2026-08-24").unwrap())
+            .is_none()
+    );
+    assert!(
+        maki.date_index()
+            .backlinks_for(&Date::parse("2026-08-25").unwrap())
+            .is_none()
+    );
+}
+
+#[test]
 fn date_index_orders_range_middle_backlinks_after_direct_dates() {
     let project = temp_project("date-index-priority");
     write_note_with_content(

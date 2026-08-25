@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map::Entry},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -118,6 +118,76 @@ fn render_maki_template(template: &str, replacements: &[(&str, &str)]) -> String
     source
 }
 
+#[derive(Default)]
+struct MakiReferences {
+    definitions: BTreeMap<String, String>,
+    order: Vec<String>,
+}
+
+impl MakiReferences {
+    fn push_link(&mut self, source: &mut String, title: &str, href: &str) {
+        let base_title = reference_safe_title(title);
+        let mut reference_title = base_title.clone();
+        let mut suffix = 2;
+
+        loop {
+            match self.definitions.entry(reference_title.clone()) {
+                Entry::Vacant(entry) => {
+                    self.order.push(reference_title.clone());
+                    entry.insert(href.to_string());
+                    break;
+                }
+                Entry::Occupied(entry) if entry.get() == href => break,
+                Entry::Occupied(_) => {
+                    reference_title = format!("{base_title} ({suffix})");
+                    suffix += 1;
+                }
+            }
+        }
+
+        source.push('[');
+        push_maki_single_line(source, &reference_title);
+        source.push(']');
+    }
+
+    fn append_to(self, source: &mut String) {
+        if self.definitions.is_empty() {
+            return;
+        }
+
+        while source.ends_with('\n') {
+            source.pop();
+        }
+        source.push_str("\n\n");
+        for title in self.order {
+            let href = self
+                .definitions
+                .get(&title)
+                .expect("reference order should contain known titles");
+            source.push('[');
+            push_maki_single_line(source, &title);
+            source.push_str("]: ");
+            push_maki_single_line(source, href);
+            source.push('\n');
+        }
+    }
+}
+
+fn reference_safe_title(title: &str) -> String {
+    let date_prefix = title.get(..10).and_then(Date::parse);
+    let date_suffix = title.get(10..).unwrap_or_default();
+    let conflicts_with_date =
+        date_prefix.is_some() && date_suffix.chars().next().is_none_or(char::is_whitespace);
+
+    if conflicts_with_date {
+        format!("Date {title}")
+    } else if title.starts_with('^') {
+        format!("Link {title}")
+    } else {
+        title.replace(['[', ']'], "")
+    }
+}
+
 fn render_project_maki_source(
     source: &str,
     asset_mode: AssetMode,
@@ -134,6 +204,7 @@ fn render_project_maki_source(
 
 fn recents_page_body_source(entries: &[RecentEntry]) -> String {
     let mut source = String::new();
+    let mut references = MakiReferences::default();
 
     if entries.is_empty() {
         source.push_str("No notes.\n");
@@ -145,10 +216,11 @@ fn recents_page_body_source(entries: &[RecentEntry]) -> String {
         let modified = modified_time_kst_label(entry.modified());
         push_maki_single_line(&mut source, &modified);
         source.push(' ');
-        push_maki_closed_link(&mut source, entry.title(), entry.path());
+        references.push_link(&mut source, entry.title(), entry.path());
         source.push('\n');
     }
 
+    references.append_to(&mut source);
     source
 }
 
@@ -199,6 +271,7 @@ fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
 
 fn date_index_page_body_source(date_index: &DateIndex) -> String {
     let mut source = String::new();
+    let mut references = MakiReferences::default();
     let mut year_counts = BTreeMap::new();
     for (date, _backlinks) in date_index.dates() {
         *year_counts.entry(date.year()).or_insert(0) += 1;
@@ -213,61 +286,70 @@ fn date_index_page_body_source(date_index: &DateIndex) -> String {
     for (year, count) in year_counts.iter().rev() {
         push_maki_link_item_with_count(
             &mut source,
+            &mut references,
             &format!("{year:04}"),
             &maki::date_year_page_path(*year),
             *count,
         );
     }
 
+    references.append_to(&mut source);
     source
 }
 
 fn date_period_page_source(period: DatePeriod, date_index: &DateIndex) -> String {
-    let navigation = date_period_navigation_source(period);
-    let body = date_period_page_body_source(period, date_index);
+    let mut references = MakiReferences::default();
+    let navigation = date_period_navigation_source(period, &mut references);
+    let body = date_period_page_body_source(period, date_index, &mut references);
     let title = date_period_title(period);
-    render_maki_template(
+    let mut source = render_maki_template(
         DATE_PERIOD_TEMPLATE,
         &[
             ("{{title}}", &title),
             ("{{navigation}}", &navigation),
             ("{{body}}", &body),
         ],
-    )
+    );
+    references.append_to(&mut source);
+    source
 }
 
-fn date_period_page_body_source(period: DatePeriod, date_index: &DateIndex) -> String {
+fn date_period_page_body_source(
+    period: DatePeriod,
+    date_index: &DateIndex,
+    references: &mut MakiReferences,
+) -> String {
     let mut source = String::new();
     match period {
-        DatePeriod::Year(year) => push_date_year_source(&mut source, date_index, year),
+        DatePeriod::Year(year) => push_date_year_source(&mut source, references, date_index, year),
         DatePeriod::Month { year, month } => {
-            push_date_month_source(&mut source, date_index, year, month)
+            push_date_month_source(&mut source, references, date_index, year, month)
         }
-        DatePeriod::Day(date) => push_date_day_source(&mut source, date_index, date),
+        DatePeriod::Day(date) => push_date_day_source(&mut source, references, date_index, date),
     }
 
     source
 }
 
-fn date_period_navigation_source(period: DatePeriod) -> String {
+fn date_period_navigation_source(period: DatePeriod, references: &mut MakiReferences) -> String {
     let mut source = String::new();
 
     if let Some(previous) = period.previous() {
-        push_maki_closed_link(
+        references.push_link(
             &mut source,
             &format!("← {}", date_period_navigation_label(previous)),
             &previous.path(),
         );
         source.push(' ');
     }
-    push_maki_closed_link(
+    references.push_link(
         &mut source,
         &format!("↑ {}", date_period_parent_label(period)),
         &period.parent_path(),
     );
     if let Some(next) = period.next() {
         source.push(' ');
-        push_maki_closed_link(
+        references.push_link(
             &mut source,
             &format!("{} →", date_period_navigation_label(next)),
             &next.path(),
@@ -300,7 +382,12 @@ fn date_label(date: Date) -> String {
     format!("{date} {}", date.weekday_abbrev())
 }
 
-fn push_date_year_source(source: &mut String, date_index: &DateIndex, year: u16) {
+fn push_date_year_source(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    year: u16,
+) {
     let mut month_counts = BTreeMap::new();
     for (date, _backlinks) in date_index.dates() {
         if date.year() == year {
@@ -319,11 +406,17 @@ fn push_date_year_source(source: &mut String, date_index: &DateIndex, year: u16)
             year,
             month: *month,
         };
-        push_maki_link_item_with_count(source, &period.title(), &period.path(), *count);
+        push_maki_link_item_with_count(source, references, &period.title(), &period.path(), *count);
     }
 }
 
-fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16, month: u8) {
+fn push_date_month_source(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    year: u16,
+    month: u8,
+) {
     let dates = date_index
         .dates()
         .filter(|(date, _backlinks)| date.year() == year && date.month() == month)
@@ -338,24 +431,34 @@ fn push_date_month_source(source: &mut String, date_index: &DateIndex, year: u16
 
     for date in dates.iter().rev() {
         source.push_str("=== ");
-        push_maki_closed_link(source, &date_label(*date), &maki::date_page_path(*date));
+        references.push_link(source, &date_label(*date), &maki::date_page_path(*date));
         source.push_str("\n\n");
-        if !push_date_backlinks_for_date(source, date_index, *date) {
+        if !push_date_backlinks_for_date(source, references, date_index, *date) {
             source.push_str("No date markers.\n");
         }
         source.push('\n');
     }
 }
 
-fn push_date_day_source(source: &mut String, date_index: &DateIndex, date: Date) {
+fn push_date_day_source(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    date: Date,
+) {
     source.push_str("== Backlinks\n\n");
 
-    if !push_date_backlinks_for_date(source, date_index, date) {
+    if !push_date_backlinks_for_date(source, references, date_index, date) {
         source.push_str("No date markers.\n");
     }
 }
 
-fn push_date_backlinks_for_date(source: &mut String, date_index: &DateIndex, date: Date) -> bool {
+fn push_date_backlinks_for_date(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    date: Date,
+) -> bool {
     let Some(backlinks) = date_index.backlinks_for(&date) else {
         return false;
     };
@@ -366,7 +469,7 @@ fn push_date_backlinks_for_date(source: &mut String, date_index: &DateIndex, dat
             continue;
         };
         has_backlinks = true;
-        push_date_backlink_source(source, occurrence, backlink.relation());
+        push_date_backlink_source(source, references, occurrence, backlink.relation());
     }
 
     has_backlinks
@@ -374,13 +477,14 @@ fn push_date_backlinks_for_date(source: &mut String, date_index: &DateIndex, dat
 
 fn push_date_backlink_source(
     source: &mut String,
+    references: &mut MakiReferences,
     occurrence: &DateOccurrence,
     relation: DateRelation,
 ) {
     let target_href = format!("{}#{}", occurrence.note_ref().web_path(), occurrence.id());
 
     source.push_str("- ");
-    push_maki_closed_link(source, occurrence.note_title(), &target_href);
+    references.push_link(source, occurrence.note_title(), &target_href);
     source.push(' ');
     push_date_labels(source, occurrence, relation);
     source.push('\n');
@@ -404,24 +508,18 @@ fn push_date_labels(source: &mut String, occurrence: &DateOccurrence, relation: 
     }
 }
 
-fn push_maki_link_item_with_count(source: &mut String, title: &str, href: &str, count: usize) {
+fn push_maki_link_item_with_count(
+    source: &mut String,
+    references: &mut MakiReferences,
+    title: &str,
+    href: &str,
+    count: usize,
+) {
     source.push_str("- ");
-    push_maki_closed_link(source, title, href);
+    references.push_link(source, title, href);
     source.push(' ');
     push_maki_inline_code(source, &count.to_string());
     source.push('\n');
-}
-
-fn push_maki_closed_link(source: &mut String, title: &str, href: &str) {
-    push_maki_link(source, title, href);
-    source.push(')');
-}
-
-fn push_maki_link(source: &mut String, title: &str, href: &str) {
-    source.push('[');
-    push_maki_single_line(source, title);
-    source.push_str("](");
-    push_maki_single_line(source, href);
 }
 
 fn push_maki_inline_code(source: &mut String, input: &str) {
@@ -495,6 +593,7 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
         "No diagnostics.".to_string()
     } else {
         let mut body = String::new();
+        let mut references = MakiReferences::default();
         let mut by_source: BTreeMap<PathBuf, Vec<&ProjectDiagnostic>> = BTreeMap::new();
         for diagnostic in diagnostics {
             by_source
@@ -505,11 +604,9 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
 
         for (source_path, diagnostics) in by_source {
             let source_href = format!("/{}", source_path.with_extension("").display());
-            body.push_str("== [");
-            push_maki_single_line(&mut body, &source_path.display().to_string());
-            body.push_str("](");
-            push_maki_single_line(&mut body, &source_href);
-            body.push_str(")\n\n");
+            body.push_str("== ");
+            references.push_link(&mut body, &source_path.display().to_string(), &source_href);
+            body.push_str("\n\n");
 
             for diagnostic in diagnostics {
                 body.push_str("- ");
@@ -519,7 +616,9 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
             body.push('\n');
         }
 
-        body.trim_end().to_string()
+        let mut body = body.trim_end().to_string();
+        references.append_to(&mut body);
+        body
     };
 
     render_maki_template(

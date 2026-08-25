@@ -87,6 +87,15 @@ impl<'a> Renderer<'a> {
         self.html.push_str("</span>");
     }
 
+    fn render_footnote_reference(&mut self, label: &str) {
+        self.html
+            .push_str("<sup class=\"footnote-ref\"><a href=\"#fn-");
+        self.escape_html_attr_into(label);
+        self.html.push_str("\">[");
+        self.escape_html_into(label);
+        self.html.push_str("]</a></sup>");
+    }
+
     fn render_note_link_with_title(&mut self, target: &str, title: Option<&str>) {
         let Some(context) = &self.context.project else {
             self.render_anchor(target, title.unwrap_or(target));
@@ -191,12 +200,11 @@ impl<'a> Renderer<'a> {
                         self.render_date_location(&occurrence_id);
                     }
                 }
-                Inline::Strong(body) => self.render_property_inline_date_locations(body),
-                Inline::NoteLink { .. }
-                | Inline::Link { .. }
-                | Inline::Text(_)
-                | Inline::SoftBreak
-                | Inline::Code(_) => {}
+                _ => {
+                    if let Some(body) = inline.nested_inlines() {
+                        self.render_property_inline_date_locations(body);
+                    }
+                }
             }
         }
     }
@@ -227,14 +235,36 @@ impl<'a> Renderer<'a> {
         match inline {
             Inline::NoteLink { target } => self.render_note_link(target),
             Inline::Link { title, target } => self.render_link(title, target),
+            Inline::Footnote { label } => self.render_footnote_reference(label),
+            Inline::HyperLink { target } => self.render_anchor(target, target),
             Inline::DateStamp(stamp) => self.render_date_stamp(*stamp),
             Inline::DateRange(range) => self.render_date_range(*range),
             Inline::SoftBreak => self.html.push(' '),
             Inline::Text(text) => self.escape_html_into(text),
+            Inline::Italic(body) => {
+                self.html.push_str("<em>");
+                self.render_inlines(body);
+                self.html.push_str("</em>");
+            }
             Inline::Strong(body) => {
                 self.html.push_str("<strong>");
                 self.render_inlines(body);
                 self.html.push_str("</strong>");
+            }
+            Inline::Superscript(text) => {
+                self.html.push_str("<sup>");
+                self.escape_html_into(text);
+                self.html.push_str("</sup>");
+            }
+            Inline::Subscript(text) => {
+                self.html.push_str("<sub>");
+                self.escape_html_into(text);
+                self.html.push_str("</sub>");
+            }
+            Inline::Highlight(body) => {
+                self.html.push_str("<mark>");
+                self.render_inlines(body);
+                self.html.push_str("</mark>");
             }
             Inline::Code(text) => {
                 self.html.push_str("<code>");
@@ -280,13 +310,29 @@ impl<'a> Renderer<'a> {
         self.html.push_str("</pre>");
     }
 
-    fn render_quote(&mut self, lines: &[&str]) {
+    fn render_quote(
+        &mut self,
+        lines: &[&str],
+        mode: Option<&str>,
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
+        if mode == Some("plain") {
+            self.html.push_str("<blockquote>");
+            self.render_pre(lines);
+            self.html.push_str("</blockquote>");
+            return;
+        }
+
         let source = lines.join("\n");
-        let parsed = parser::parse(&source);
+        let parsed = parser::parse_with_references(&source, references);
 
         self.html.push_str("<blockquote>");
         self.render_document_date_locations(&parsed.document);
-        self.render_blocks(&parsed.document.blocks);
+        self.render_blocks(
+            &parsed.document.blocks,
+            parsed.document.reference_definitions(),
+        );
+        self.render_footnotes(&parsed.document);
         self.html.push_str("</blockquote>");
     }
 
@@ -315,21 +361,50 @@ impl<'a> Renderer<'a> {
         self.html.push_str("</code></pre>");
     }
 
-    fn render_container(&mut self, kind: &str, args: &[&str], lines: &[&str]) {
+    fn render_container(
+        &mut self,
+        kind: &str,
+        args: &[&str],
+        lines: &[&str],
+        lang: Option<&str>,
+        mode: Option<&str>,
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         match kind {
-            "code" => self.render_code(lines, args.first().copied()),
+            "code" => self.render_code(lines, args.first().copied().or(lang)),
             "pre" | "text" => self.render_pre(lines),
-            "quote" => self.render_quote(lines),
+            "quote" => self.render_quote(lines, mode, references),
             _ => self.render_unknown_container(kind, args, lines),
         }
     }
 
-    fn render_block(&mut self, block: &parser::Block<'_>) {
+    fn render_block(
+        &mut self,
+        block: &parser::Block<'_>,
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         self.render_property_date_locations(block.properties());
-        self.render_block_kind(&block.kind);
+        match &block.kind {
+            BlockKind::Quote { lines } => {
+                self.render_quote(lines, block.property("mode"), references)
+            }
+            BlockKind::Container { kind, args, lines } => self.render_container(
+                kind,
+                args,
+                lines,
+                block.property("lang"),
+                block.property("mode"),
+                references,
+            ),
+            kind => self.render_block_kind(kind, references),
+        }
     }
 
-    fn render_block_kind(&mut self, block: &BlockKind<'_>) {
+    fn render_block_kind(
+        &mut self,
+        block: &BlockKind<'_>,
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         match block {
             BlockKind::Paragraph { body } => {
                 self.html.push_str("<p>");
@@ -337,18 +412,24 @@ impl<'a> Renderer<'a> {
                 self.html.push_str("</p>");
             }
             BlockKind::Code { lines, lang } => self.render_code(lines, *lang),
-            BlockKind::Heading { level, body } => {
+            BlockKind::Heading {
+                level,
+                body,
+                raw_body,
+            } => {
                 // 문서의 title이 h1이 될 거라서 하나씩 올려줌
-                self.render_heading_with_inlines(level + 1, body);
+                self.render_heading_with_inlines(level + 1, raw_body, body);
             }
-            BlockKind::List { items } => self.render_list(items),
-            BlockKind::Quote { lines } => self.render_quote(lines),
+            BlockKind::List { items } => self.render_list(items, references),
+            BlockKind::Quote { .. } | BlockKind::Container { .. } => {
+                unreachable!("property-aware blocks are rendered by render_block")
+            }
             BlockKind::Table {
                 header,
                 alignments,
                 rows,
             } => self.render_table(header, alignments, rows),
-            BlockKind::Container { kind, args, lines } => self.render_container(kind, args, lines),
+            BlockKind::ReferenceDefinition { .. } => {}
         }
     }
 
@@ -424,7 +505,11 @@ impl<'a> Renderer<'a> {
         self.html.push_str("</table>");
     }
 
-    fn render_list(&mut self, items: &[ListItem<'_>]) {
+    fn render_list(
+        &mut self,
+        items: &[ListItem<'_>],
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         let tag = match items.first().map(|item| item.kind) {
             Some(ListKind::Ordered) => "ol",
             Some(ListKind::Unordered) | None => "ul",
@@ -438,7 +523,7 @@ impl<'a> Renderer<'a> {
             self.render_inlines(&item.body);
             if !item.children.is_empty() {
                 for block in &item.children {
-                    self.render_block(block);
+                    self.render_block(block, references);
                 }
             }
             self.html.push_str("</li>");
@@ -454,12 +539,31 @@ impl<'a> Renderer<'a> {
         self.end_heading(tag);
     }
 
-    fn render_heading_with_inlines(&mut self, level: usize, body: &str) {
-        let inlines = parser::parse_inline(body);
-        let tag = self.begin_heading(level, body);
+    fn render_heading_with_inlines(&mut self, level: usize, raw_body: &str, body: &[Inline<'_>]) {
+        let tag = self.begin_heading(level, raw_body);
 
-        self.render_inlines(&inlines);
+        self.render_inlines(body);
         self.end_heading(tag);
+    }
+
+    fn render_footnotes(&mut self, document: &Document<'_>) {
+        let mut footnotes = document.reference_definitions().footnotes().peekable();
+        if footnotes.peek().is_none() {
+            return;
+        }
+
+        self.html.push_str("<section class=\"footnotes\"><ol>");
+        for definition in footnotes {
+            let parser::ReferenceDefinition::Footnote { label, body, .. } = definition else {
+                continue;
+            };
+            self.html.push_str("<li id=\"fn-");
+            self.escape_html_attr_into(label);
+            self.html.push_str("\">");
+            self.render_inlines(body);
+            self.html.push_str("</li>");
+        }
+        self.html.push_str("</ol></section>");
     }
 
     fn begin_heading(&mut self, level: usize, body: &str) -> HeadingTag {
@@ -503,7 +607,8 @@ impl<'a> Renderer<'a> {
         if let Some(title) = title {
             self.render_heading(1, title);
         }
-        self.render_blocks(&document.blocks);
+        self.render_blocks(&document.blocks, document.reference_definitions());
+        self.render_footnotes(document);
 
         self.html.push_str("</body></html>");
         self.html.clone()
@@ -513,9 +618,13 @@ impl<'a> Renderer<'a> {
         self.render_property_date_locations(document.properties());
     }
 
-    fn render_blocks(&mut self, blocks: &[parser::Block<'_>]) {
+    fn render_blocks(
+        &mut self,
+        blocks: &[parser::Block<'_>],
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         for block in blocks {
-            self.render_block(block);
+            self.render_block(block, references);
         }
     }
 

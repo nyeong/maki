@@ -254,22 +254,17 @@ fn collect_inline_external_links(
 ) {
     for inline in inlines {
         match inline {
-            Inline::Link { target, .. } if is_checkable_external_href(target) => {
+            Inline::HyperLink { target } => {
                 external_links.insert(ExternalLinkRef {
                     source_path: source_path.to_path_buf(),
                     target: target.trim().to_string(),
                 });
             }
-            Inline::Strong(body) => {
-                collect_inline_external_links(external_links, source_path, body)
+            _ => {
+                if let Some(body) = inline.nested_inlines() {
+                    collect_inline_external_links(external_links, source_path, body);
+                }
             }
-            Inline::NoteLink { .. }
-            | Inline::Link { .. }
-            | Inline::DateStamp(_)
-            | Inline::DateRange(_)
-            | Inline::Text(_)
-            | Inline::SoftBreak
-            | Inline::Code(_) => {}
         }
     }
 }
@@ -291,26 +286,26 @@ fn collect_table_row_external_links(
 fn collect_block_external_links(
     external_links: &mut BTreeSet<ExternalLinkRef>,
     source_path: &Path,
-    block: &BlockKind<'_>,
+    block: &parser::Block<'_>,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
-    match block {
+    match &block.kind {
         BlockKind::Paragraph { body } => {
             collect_inline_external_links(external_links, source_path, body)
         }
         BlockKind::Heading { body, .. } => {
-            let inlines = parser::parse_inline(body);
-            collect_inline_external_links(external_links, source_path, &inlines);
+            collect_inline_external_links(external_links, source_path, body);
         }
         BlockKind::List { items } => {
             for item in items {
                 collect_inline_external_links(external_links, source_path, &item.body);
                 for child in &item.children {
-                    collect_block_external_links(external_links, source_path, &child.kind);
+                    collect_block_external_links(external_links, source_path, child, references);
                 }
             }
         }
-        BlockKind::Quote { lines } => {
-            collect_maki_lines_external_links(external_links, source_path, lines)
+        BlockKind::Quote { lines } if block.property("mode") != Some("plain") => {
+            collect_maki_lines_external_links(external_links, source_path, lines, references)
         }
         BlockKind::Table { header, rows, .. } => {
             collect_table_row_external_links(external_links, source_path, header);
@@ -318,10 +313,15 @@ fn collect_block_external_links(
                 collect_table_row_external_links(external_links, source_path, row);
             }
         }
-        BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
-            collect_maki_lines_external_links(external_links, source_path, lines)
+        BlockKind::Container { kind, lines, .. }
+            if *kind == "quote" && block.property("mode") != Some("plain") =>
+        {
+            collect_maki_lines_external_links(external_links, source_path, lines, references)
         }
-        BlockKind::Code { .. } | BlockKind::Container { .. } => {}
+        BlockKind::Quote { .. }
+        | BlockKind::Code { .. }
+        | BlockKind::Container { .. }
+        | BlockKind::ReferenceDefinition { .. } => {}
     }
 }
 
@@ -329,12 +329,43 @@ fn collect_maki_lines_external_links(
     external_links: &mut BTreeSet<ExternalLinkRef>,
     source_path: &Path,
     lines: &[&str],
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     let source = lines.join("\n");
-    let parsed = parser::parse(&source);
+    let parsed = parser::parse_with_references(&source, references);
 
-    for block in &parsed.document.blocks {
-        collect_block_external_links(external_links, source_path, &block.kind);
+    collect_document_external_links(external_links, source_path, &parsed.document);
+}
+
+fn collect_document_external_links(
+    external_links: &mut BTreeSet<ExternalLinkRef>,
+    source_path: &Path,
+    document: &parser::Document<'_>,
+) {
+    for definition in document.reference_definitions().iter() {
+        match definition {
+            parser::ReferenceDefinition::Link { target, .. }
+                if is_checkable_external_href(target) =>
+            {
+                external_links.insert(ExternalLinkRef {
+                    source_path: source_path.to_path_buf(),
+                    target: target.trim().to_string(),
+                });
+            }
+            parser::ReferenceDefinition::Footnote { body, .. } => {
+                collect_inline_external_links(external_links, source_path, body)
+            }
+            parser::ReferenceDefinition::Link { .. } => {}
+        }
+    }
+
+    for block in &document.blocks {
+        collect_block_external_links(
+            external_links,
+            source_path,
+            block,
+            document.reference_definitions(),
+        );
     }
 }
 
@@ -347,9 +378,7 @@ pub(super) fn collect_external_links(notes: &BTreeMap<NoteRef, Note>) -> Vec<Ext
         };
         let parsed = parser::parse(&source);
 
-        for block in &parsed.document.blocks {
-            collect_block_external_links(&mut external_links, note.source_path(), &block.kind);
-        }
+        collect_document_external_links(&mut external_links, note.source_path(), &parsed.document);
     }
 
     external_links.into_iter().collect()

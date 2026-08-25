@@ -62,7 +62,7 @@ fn maki_build_reports_project_diagnostic_summary_to_stderr() {
     .unwrap();
     fs::write(
         project.root.join("home.maki"),
-        "--^ title: Home\n\nSee [[missing]] and [Ghost](ghost).\n",
+        "--^ title: Home\n\nSee [[missing]] and [Ghost].\n\n[Ghost]: ghost\n",
     )
     .unwrap();
 

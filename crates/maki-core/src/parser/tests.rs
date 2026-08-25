@@ -58,37 +58,66 @@ fn nested_unordered_list() {
 }
 
 #[test]
-fn parse_inline_supports_markdown_style_links() {
+fn parse_document_resolves_forward_reference_links_and_footnotes() {
+    let parsed = parse(
+        r#"Read [djot], [[Maki]], and this note[^source].
+[djot]: https://github.com/jgm/djot
+[^source]: Published on [2026-08-25]."#,
+    );
+
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(parsed.document.blocks.len(), 2);
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
     assert_eq!(
-        parse_inline("Read [djot](https://github.com/jgm/djot) and [[Maki]]."),
-        vec![
+        body,
+        &vec![
             Inline::Text("Read "),
             Inline::Link {
                 title: "djot",
-                target: "https://github.com/jgm/djot"
+                target: "https://github.com/jgm/djot",
             },
-            Inline::Text(" and "),
+            Inline::Text(", "),
             Inline::NoteLink { target: "Maki" },
+            Inline::Text(", and this note"),
+            Inline::Footnote { label: "source" },
+            Inline::Text("."),
+        ]
+    );
+    assert_eq!(
+        parsed.document.link_target("djot"),
+        Some("https://github.com/jgm/djot")
+    );
+    let Some(ReferenceDefinition::Footnote { body, .. }) = parsed.document.footnote("source")
+    else {
+        panic!("expected a footnote definition");
+    };
+    assert!(matches!(
+        body.as_slice(),
+        [
+            Inline::Text("Published on "),
+            Inline::DateStamp(_),
             Inline::Text(".")
         ]
+    ));
+}
+
+#[test]
+fn parse_missing_references_and_legacy_links_as_text() {
+    assert_eq!(
+        parse_inline("[missing] [^missing] [title](target)"),
+        vec![Inline::Text("[missing] [^missing] [title](target)")]
     );
 }
 
 #[test]
 fn parse_inline_supports_star_delimited_strong_text() {
     assert_eq!(
-        parse_inline("Use *bold `code` and [link](/target)* now."),
+        parse_inline("Use *bold `code`* now."),
         vec![
             Inline::Text("Use "),
-            Inline::Strong(vec![
-                Inline::Text("bold "),
-                Inline::Code("code"),
-                Inline::Text(" and "),
-                Inline::Link {
-                    title: "link",
-                    target: "/target"
-                }
-            ]),
+            Inline::Strong(vec![Inline::Text("bold "), Inline::Code("code"),]),
             Inline::Text(" now.")
         ]
     );
@@ -103,19 +132,43 @@ fn parse_inline_keeps_loose_stars_as_text() {
 }
 
 #[test]
-fn parse_inline_autolinks_plain_http_urls() {
+fn parse_inline_supports_hyper_links_but_not_bare_urls() {
     assert_eq!(
-        parse_inline("Read https://example.com/docs, then `https://example.com/code`."),
+        parse_inline("Read <https://example.com/docs>, not https://example.com/bare."),
         vec![
             Inline::Text("Read "),
-            Inline::Link {
-                title: "https://example.com/docs",
+            Inline::HyperLink {
                 target: "https://example.com/docs"
             },
-            Inline::Text(", then "),
-            Inline::Code("https://example.com/code"),
-            Inline::Text(".")
+            Inline::Text(", not https://example.com/bare.")
         ]
+    );
+}
+
+#[test]
+fn parse_inline_supports_stable_formatting_syntax() {
+    assert_eq!(
+        parse_inline("/italic `code`/ *strong* ^{sup} _{sub} =highlight="),
+        vec![
+            Inline::Italic(vec![Inline::Text("italic "), Inline::Code("code")]),
+            Inline::Text(" "),
+            Inline::Strong(vec![Inline::Text("strong")]),
+            Inline::Text(" "),
+            Inline::Superscript("sup"),
+            Inline::Text(" "),
+            Inline::Subscript("sub"),
+            Inline::Text(" "),
+            Inline::Highlight(vec![Inline::Text("highlight")]),
+        ]
+    );
+    assert_eq!(parse_inline("//italic//"), vec![Inline::Text("//italic//")]);
+}
+
+#[test]
+fn parse_inline_keeps_standalone_unix_path_as_text() {
+    assert_eq!(
+        parse_inline("/usr/local/bin"),
+        vec![Inline::Text("/usr/local/bin")]
     );
 }
 
@@ -250,6 +303,8 @@ plain text"#;
         build_drafts(&lines, &mut diagnostics),
         vec![
             BlockDraft::Property {
+                line: 1,
+                raw_line: "--^ title: Maki",
                 indent: 0,
                 kind: PropertyKind::Previous,
                 items: vec![
@@ -335,6 +390,35 @@ fn parse_table_with_inline_cells_and_numeric_alignment() {
             body: "2026-08-15",
         })]
     );
+}
+
+#[test]
+fn parse_table_accepts_pipe_separator_columns() {
+    let parsed = parse(
+        r#"| Name | Score |
+|---|---|
+| Alice | 10 |"#,
+    );
+
+    assert!(parsed.diagnostics.is_empty());
+    let BlockKind::Table { rows, .. } = &parsed.document.blocks[0].kind else {
+        panic!("expected a table block");
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].cells[0].body, vec![Inline::Text("Alice")]);
+}
+
+#[test]
+fn parse_table_rejects_mixed_separator_columns() {
+    let parsed = parse(
+        r#"| Name | Score | Owner |
+|---+---|---|"#,
+    );
+
+    assert!(matches!(
+        parsed.document.blocks[0].kind,
+        BlockKind::Paragraph { .. }
+    ));
 }
 
 #[test]
@@ -520,27 +604,117 @@ body
 }
 
 #[test]
-fn parse_treats_headerless_hyphen_run_as_paragraph() {
+fn parse_treats_empty_kind_container_as_unknown_container() {
     let parsed = parse(
         r#"---
-plain"#,
+plain
+---"#,
     );
 
     assert!(parsed.diagnostics.is_empty());
     assert_eq!(parsed.document.blocks.len(), 1);
 
-    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
-        panic!("expected a paragraph block");
+    let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
+        panic!("expected a container block");
     };
+    assert_eq!(*kind, "");
+    assert!(args.is_empty());
+    assert_eq!(lines, &vec!["plain"]);
+}
 
+#[test]
+fn parse_container_kind_without_header_whitespace() {
+    let parsed = parse(
+        r#"---code rust
+fn main() {}
+---"#,
+    );
+
+    assert!(parsed.diagnostics.is_empty());
+    let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
+        panic!("expected a container block");
+    };
+    assert_eq!(*kind, "code");
+    assert_eq!(args, &vec!["rust"]);
+    assert_eq!(lines, &vec!["fn main() {}"]);
+}
+
+#[test]
+fn parse_removes_escape_before_block_start_prefixes() {
+    let parsed = parse(
+        r#"\= heading text
+\- list text
+\[link]: target
+\---"#,
+    );
+
+    assert!(parsed.diagnostics.is_empty());
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected escaped prefixes to remain a paragraph");
+    };
     assert_eq!(
         body,
         &vec![
-            Inline::Text("---"),
+            Inline::Text("= heading text"),
             Inline::SoftBreak,
-            Inline::Text("plain")
+            Inline::Text("- list text"),
+            Inline::SoftBreak,
+            Inline::Text("[link]: target"),
+            Inline::SoftBreak,
+            Inline::Text("---"),
         ]
     );
+}
+
+#[test]
+fn parse_reports_property_on_property_and_ignores_the_second_property() {
+    let parsed = parse(
+        r#"--v title: pending
+--^ title: ignored
+= Heading"#,
+    );
+
+    assert_eq!(
+        parsed.diagnostics,
+        vec![ParseDiagnostic {
+            line: 2,
+            kind: ParseDiagnosticKind::PropertyOnProperty {
+                raw_line: "--^ title: ignored",
+            },
+        }]
+    );
+    assert_eq!(
+        parsed.document.blocks[0].properties().next(),
+        Some(("title", "pending"))
+    );
+}
+
+#[test]
+fn parse_reports_duplicate_reference_definitions_and_uses_the_first() {
+    let parsed = parse(
+        r#"[link]
+[link]: first
+[link]: second
+[^note]: first
+[^note]: second"#,
+    );
+
+    assert_eq!(parsed.document.link_target("link"), Some("first"));
+    assert_eq!(parsed.diagnostics.len(), 2);
+    assert!(matches!(
+        parsed.diagnostics[0],
+        ParseDiagnostic {
+            line: 3,
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. }
+        }
+    ));
+    assert!(matches!(
+        parsed.diagnostics[1],
+        ParseDiagnostic {
+            line: 5,
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. }
+        }
+    ));
 }
 
 #[test]

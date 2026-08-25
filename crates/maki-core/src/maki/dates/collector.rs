@@ -109,12 +109,11 @@ fn collect_inline_dates(
         match inline {
             Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp, context),
             Inline::DateRange(range) => collector.push_inline_range(*range, context),
-            Inline::Strong(body) => collect_inline_dates(collector, body, context),
-            Inline::NoteLink { .. }
-            | Inline::Link { .. }
-            | Inline::Text(_)
-            | Inline::SoftBreak
-            | Inline::Code(_) => {}
+            _ => {
+                if let Some(body) = inline.nested_inlines() {
+                    collect_inline_dates(collector, body, context);
+                }
+            }
         }
     }
 }
@@ -129,12 +128,11 @@ fn collect_property_inline_dates(
         match inline {
             Inline::DateStamp(stamp) => collector.push_property_stamp(key, *stamp, context),
             Inline::DateRange(range) => collector.push_property_range(key, *range, context),
-            Inline::Strong(body) => collect_property_inline_dates(collector, key, body, context),
-            Inline::NoteLink { .. }
-            | Inline::Link { .. }
-            | Inline::Text(_)
-            | Inline::SoftBreak
-            | Inline::Code(_) => {}
+            _ => {
+                if let Some(body) = inline.nested_inlines() {
+                    collect_property_inline_dates(collector, key, body, context);
+                }
+            }
         }
     }
 }
@@ -155,6 +153,7 @@ fn collect_list_item_dates(
     collector: &mut DateIndexCollector<'_>,
     item: &parser::ListItem<'_>,
     context: &DateTraversalContext,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     let item_line_context = list_item_line_date_context(item);
     let mut item_context = context.with_top_list_item(item_line_context.clone());
@@ -162,7 +161,7 @@ fn collect_list_item_dates(
 
     collect_inline_dates(collector, &item.body, &occurrence_context);
     for child in &item.children {
-        collect_block_dates(collector, child, &mut item_context);
+        collect_block_dates(collector, child, &mut item_context, references);
     }
 }
 
@@ -184,6 +183,7 @@ fn collect_block_dates(
     collector: &mut DateIndexCollector<'_>,
     block: &parser::Block<'_>,
     context: &mut DateTraversalContext,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     let local_context = block_date_context(block);
     let block_context = match &block.kind {
@@ -194,17 +194,22 @@ fn collect_block_dates(
 
     match &block.kind {
         BlockKind::Paragraph { body } => collect_inline_dates(collector, body, &block_context),
-        BlockKind::Heading { level, body } => {
-            let inlines = parser::parse_inline(body);
-            collect_inline_dates(collector, &inlines, &block_context);
-            context.enter_heading(*level, body);
+        BlockKind::Heading {
+            level,
+            body,
+            raw_body,
+        } => {
+            collect_inline_dates(collector, body, &block_context);
+            context.enter_heading(*level, raw_body);
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_list_item_dates(collector, item, context);
+                collect_list_item_dates(collector, item, context, references);
             }
         }
-        BlockKind::Quote { lines } => collect_maki_lines_dates(collector, lines, context),
+        BlockKind::Quote { lines } if block.property("mode") != Some("plain") => {
+            collect_maki_lines_dates(collector, lines, context, references)
+        }
         BlockKind::Table { header, rows, .. } => {
             let table_header_context = table_row_date_context(header);
             let header_context = context.contextualize(&table_header_context);
@@ -215,10 +220,15 @@ fn collect_block_dates(
                 collect_table_row_dates(collector, row, &row_context);
             }
         }
-        BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
-            collect_maki_lines_dates(collector, lines, context)
+        BlockKind::Container { kind, lines, .. }
+            if *kind == "quote" && block.property("mode") != Some("plain") =>
+        {
+            collect_maki_lines_dates(collector, lines, context, references)
         }
-        BlockKind::Code { .. } | BlockKind::Container { .. } => {}
+        BlockKind::Quote { .. }
+        | BlockKind::Code { .. }
+        | BlockKind::Container { .. }
+        | BlockKind::ReferenceDefinition { .. } => {}
     }
 }
 
@@ -226,9 +236,10 @@ fn collect_maki_lines_dates(
     collector: &mut DateIndexCollector<'_>,
     lines: &[&str],
     context: &DateTraversalContext,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     let source = lines.join("\n");
-    let parsed = parser::parse(&source);
+    let parsed = parser::parse_with_references(&source, references);
     let mut nested_context = context.clone();
     collect_document_dates_with_context(collector, &parsed.document, &mut nested_context);
 }
@@ -243,7 +254,20 @@ fn collect_document_dates_with_context(
 
     collect_property_dates(collector, document.properties(), &document_context);
     for block in &document.blocks {
-        collect_block_dates(collector, block, context);
+        collect_block_dates(collector, block, context, document.reference_definitions());
+    }
+    for definition in document.reference_definitions().footnotes() {
+        let parser::ReferenceDefinition::Footnote {
+            label,
+            body,
+            raw_body,
+        } = definition
+        else {
+            continue;
+        };
+        let footnote_source = format!("[^{label}]: {raw_body}");
+        let footnote_context = context.contextualize(&footnote_source);
+        collect_inline_dates(collector, body, &footnote_context);
     }
 }
 

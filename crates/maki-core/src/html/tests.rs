@@ -48,12 +48,14 @@ fn test_render_heading_supports_inline_links() {
     let parsed = parser::parse(
         r#"--^ title: Diagnostics
 
-== [home.maki](/home)"#,
+== [home.maki]
+
+[home.maki]: /home"#,
     );
 
     let html = render_document(&parsed.document);
 
-    assert!(html.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>"));
+    assert!(html.contains("<h3 id=\"[home.maki]\"><a href=\"/home\">home.maki</a></h3>"));
 }
 
 #[test]
@@ -86,7 +88,9 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
         r#"| 이름 | 점수 |
 |---+---|
 | `Alice` | 10 |
-| [Bob](/bob) | 2 |"#,
+| [Bob] | 2 |
+
+[Bob]: /bob"#,
     );
 
     let html = render_document(&parsed.document);
@@ -94,6 +98,29 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
     assert!(html.contains(
             "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><a href=\"/bob\">Bob</a></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
         ));
+}
+
+#[test]
+fn render_stable_inline_and_footnote_syntax() {
+    let parsed = parser::parse(
+        r#"Use /italic/, *strong*, ^{sup}, _{sub}, and =highlight= with <https://example.com>.[^note]
+
+[^note]: Footnote *body*."#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<em>italic</em>"));
+    assert!(html.contains("<strong>strong</strong>"));
+    assert!(html.contains("<sup>sup</sup>"));
+    assert!(html.contains("<sub>sub</sub>"));
+    assert!(html.contains("<mark>highlight</mark>"));
+    assert!(html.contains(
+        "<a class=\"external-link\" href=\"https://example.com\">https://example.com</a>"
+    ));
+    assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-note\">[note]</a></sup>"));
+    assert!(html.contains("<section class=\"footnotes\"><ol><li id=\"fn-note\">Footnote <strong>body</strong>.</li></ol></section>"));
+    assert!(!html.contains("[^note]:"));
 }
 
 #[test]
@@ -237,6 +264,63 @@ fn quote_line_renders_inner_maki_blocks() {
     let expected = "<blockquote><h2 id=\"Quoted\">Quoted</h2><p>Body with <code>code</code></p><ul><li>item</li></ul><blockquote><p>nested</p></blockquote></blockquote>";
 
     assert!(html.contains(expected));
+}
+
+#[test]
+fn nested_maki_blocks_resolve_their_reference_definitions() {
+    let parsed = parser::parse(
+        r#"> [quoted]
+> [quoted]: https://quoted.example
+> [outer]
+> > [outer]
+
+--- quote
+[contained]
+[contained]: https://contained.example
+[outer]
+---
+
+[outer]: https://outer.example"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("href=\"https://quoted.example\">quoted</a>"));
+    assert!(html.contains("href=\"https://contained.example\">contained</a>"));
+    assert_eq!(
+        html.matches("href=\"https://outer.example\">outer</a>")
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn quote_plain_mode_and_container_properties_are_rendered() {
+    let parsed = parser::parse(
+        r#"--v mode: plain
+> = Raw heading
+> [site]
+
+--v lang: rust
+---code
+fn main() {}
+---
+
+--v mode: plain
+---quote
+= Raw container heading
+[site]
+---
+
+[site]: https://example.com"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<blockquote><pre>= Raw heading\n[site]</pre></blockquote>"));
+    assert!(html.contains("<pre><code class=\"language-rust\">fn main() {}</code></pre>"));
+    assert!(html.contains("<blockquote><pre>= Raw container heading\n[site]</pre></blockquote>"));
+    assert!(!html.contains("href=\"https://example.com\""));
 }
 
 #[test]

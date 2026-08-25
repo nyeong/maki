@@ -395,15 +395,15 @@ Task with property date.
     assert!(month_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
     assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
     assert!(month_body.contains(
-        "<h4 id=\"[2026-08-17 Mon](/@/dates/2026-08-17)\"><a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a></h4>"
+        "<h4 id=\"[Date 2026-08-17 Mon]\"><a href=\"/@/dates/2026-08-17\">Date 2026-08-17 Mon</a></h4>"
     ));
     assert!(!month_body.contains("href=\"/@/dates/2026-08-18\""));
     assert!(month_body.contains(
-        "<h4 id=\"[2026-08-19 Wed](/@/dates/2026-08-19)\"><a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a></h4>"
+        "<h4 id=\"[Date 2026-08-19 Wed]\"><a href=\"/@/dates/2026-08-19\">Date 2026-08-19 Wed</a></h4>"
     ));
     assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
     assert!(month_body.contains(
-        "<li><a href=\"/home#date-inline-home-maki-2\">Home</a> date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
+        "<li><a href=\"/home#date-inline-home-maki-2\">Home (2)</a> date, range start, inline<pre><code>Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19].</code></pre></li>"
     ));
     assert!(month_body.contains(
         "<li><a href=\"/home#date-property-home-maki-2\">Home</a> event, single, property:scheduled<pre><code>scheduled: &lt;2026-08-20 15:00&gt;\nTask with property date.</code></pre></li>"
@@ -430,7 +430,7 @@ Task with property date.
     assert_eq!(detail.status(), http::StatusCode::Ok);
     assert!(detail_body.contains("<title>2026-08-18 Tue</title>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">← 2026-08-17 Mon</a>"));
-    assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed →</a>"));
+    assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">Date 2026-08-19 Wed →</a>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">↑ 2026-08</a>"));
     assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
     assert!(detail_body.contains("range"));
@@ -462,7 +462,7 @@ fn test_diagnostics_page_lists_project_issues() {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("home.maki"),
-        "See [[missing]] and [Ghost](ghost).",
+        "See [[missing]] and [Ghost].\n\n[Ghost]: ghost",
     )
     .unwrap();
 
@@ -483,7 +483,7 @@ fn test_diagnostics_page_lists_project_issues() {
     assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
     assert!(body.contains("2 issue(s)"));
-    assert!(body.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>"));
+    assert!(body.contains("<h3 id=\"[home.maki]\"><a href=\"/home\">home.maki</a></h3>"));
     assert!(body.contains("broken link: missing"));
     assert!(body.contains("broken link: ghost"));
     assert!(!body.contains("maki-diagnostics-table"));

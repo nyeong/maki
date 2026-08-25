@@ -1,0 +1,57 @@
+--^ title: Maki에 대해
+
+Maki는 메타데이터를 추적할 수 있는 lightweight markup language이다.
+
+= 멘탈 모델
+
+== 필요성
+
+- Markdown은 단순하고 편리하지만 확장성이 낮고, 메타데이터 표현이 어렵다.
+- org는 확장성 좋고 풍부하지만 Emacs 의존성이 크다.
+
+maki는 그 사이 어딘가에서 개인적인 필요성을 해결한다.
+
+== 의미론
+
+- `maki` 파일은 소스이자 동시에 결과물이다.
+- 단일 파일로서는 불완전하게 기능하고, 프로젝트 단위로 완전하게 기능한다.
+- Line이 기본 단위이다
+  - Line이 모여서 Block을 형성한다
+  - Line 내에는 Inline이 있을 수 있다
+- 한정적인 용도로 Container Block을 사용한다
+- 불렛저널을 쓰듯 쓸 수 있어야
+- 도구의 도움 없어도 기본적으로 타이핑이 용이해야한다
+
+== Source-Result
+
+- 각 문서가 소스이자 결과면 좋겠음
+- 텍스트 문서만으로 의미가 완결되어야함
+- 예
+  - query block으로 쿼리한 결과를 별도 파일로 내보내지 않겠다면 문서 내에 포함되어야함
+  - result block 같은 개념이 있어야
+
+== Export와 Index
+
+- Maki source를 다른 도구에서 쓰려면 렌더링 결과가 아니라 구조화된 project index를 내보낼 수 있어야 한다.
+- JSON export는 AST/CST, note metadata, heading index, property occurrence, date occurrence, link occurrence처럼 순서와 중첩이 있는 자료에 적합하다.
+- TOML은 전체 AST export보다 `maki.toml`, property schema, query preset, container adapter 같은 설정과 관습 선언에 적합하다.
+- 따라서 `maki -> JSON`은 core data surface로 보고, `maki -> TOML`은 config/schema surface로 제한하는 편이 좋다.
+
+= 참고함
+
+- 명백히 참고함
+  - org
+  - markdown
+- 참고하기 위해 메모함
+  - asciidoc
+  - reStructuredText
+  - 나무위키
+  - gemtext
+  - typst
+  - obsidian
+  - logseq
+  - MFM; Markup language for Misskey
+  - [djot]
+  - 불렛저널
+
+[djot]: https://github.com/jgm/djot

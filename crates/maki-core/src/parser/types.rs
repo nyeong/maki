@@ -2,16 +2,118 @@ use std::{collections::BTreeMap, fmt};
 
 use super::draft::PropertyItemDraft;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Inline<'a> {
     NoteLink { target: &'a str },
     Link { title: &'a str, target: &'a str },
+    Footnote { label: &'a str },
+    HyperLink { target: &'a str },
+    Italic(Vec<Inline<'a>>),
     Strong(Vec<Inline<'a>>),
+    Superscript(&'a str),
+    Subscript(&'a str),
+    Highlight(Vec<Inline<'a>>),
     DateStamp(DateStamp<'a>),
     DateRange(DateRange<'a>),
     Text(&'a str),
     SoftBreak,
     Code(&'a str),
+}
+
+impl<'a> Inline<'a> {
+    pub(crate) fn nested_inlines(&self) -> Option<&[Inline<'a>]> {
+        match self {
+            Self::Italic(body) | Self::Strong(body) | Self::Highlight(body) => Some(body),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReferenceDefinition<'a> {
+    Link {
+        title: &'a str,
+        target: &'a str,
+    },
+    Footnote {
+        label: &'a str,
+        body: Vec<Inline<'a>>,
+        raw_body: &'a str,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReferenceDefinitions<'a> {
+    definitions: Vec<ReferenceDefinition<'a>>,
+    local_len: usize,
+    links: BTreeMap<&'a str, &'a str>,
+    footnotes: BTreeMap<&'a str, usize>,
+}
+
+impl<'a> ReferenceDefinitions<'a> {
+    pub(super) fn new(definitions: Vec<ReferenceDefinition<'a>>) -> Self {
+        let local_len = definitions.len();
+        Self::from_definitions(definitions, local_len)
+    }
+
+    pub(super) fn with_inherited<'parent>(
+        mut definitions: Vec<ReferenceDefinition<'a>>,
+        inherited: &ReferenceDefinitions<'parent>,
+    ) -> Self
+    where
+        'parent: 'a,
+    {
+        let local_len = definitions.len();
+        definitions.extend(inherited.definitions.iter().cloned());
+        Self::from_definitions(definitions, local_len)
+    }
+
+    fn from_definitions(definitions: Vec<ReferenceDefinition<'a>>, local_len: usize) -> Self {
+        let mut links = BTreeMap::new();
+        let mut footnotes = BTreeMap::new();
+
+        for (index, definition) in definitions.iter().enumerate() {
+            match definition {
+                ReferenceDefinition::Link { title, target } => {
+                    links.entry(*title).or_insert(*target);
+                }
+                ReferenceDefinition::Footnote { label, .. } => {
+                    footnotes.entry(*label).or_insert(index);
+                }
+            }
+        }
+
+        Self {
+            definitions,
+            local_len,
+            links,
+            footnotes,
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
+        self.definitions[..self.local_len].iter()
+    }
+
+    pub(super) fn all(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
+        self.definitions.iter()
+    }
+
+    pub fn link_target(&self, title: &str) -> Option<&'a str> {
+        self.links.get(title).copied()
+    }
+
+    pub fn footnote(&self, label: &str) -> Option<&ReferenceDefinition<'a>> {
+        self.footnotes
+            .get(label)
+            .and_then(|index| self.definitions.get(*index))
+    }
+
+    pub fn footnotes(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
+        self.definitions[..self.local_len]
+            .iter()
+            .filter(|definition| matches!(definition, ReferenceDefinition::Footnote { .. }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -223,6 +325,7 @@ impl<'a> Properties<'a> {
 #[derive(Debug, PartialEq)]
 pub struct Document<'a> {
     pub(super) props: Properties<'a>,
+    pub(super) references: ReferenceDefinitions<'a>,
     pub blocks: Vec<Block<'a>>,
 }
 
@@ -233,6 +336,18 @@ impl<'a> Document<'a> {
 
     pub fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
         self.props.iter()
+    }
+
+    pub fn reference_definitions(&self) -> &ReferenceDefinitions<'a> {
+        &self.references
+    }
+
+    pub fn link_target(&self, title: &str) -> Option<&'a str> {
+        self.references.link_target(title)
+    }
+
+    pub fn footnote(&self, label: &str) -> Option<&ReferenceDefinition<'a>> {
+        self.references.footnote(label)
     }
 }
 
@@ -245,6 +360,10 @@ pub struct Block<'a> {
 impl<'a> Block<'a> {
     pub fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
         self.props.iter()
+    }
+
+    pub fn property(&self, key: &str) -> Option<&'a str> {
+        self.props.get_one(key)
     }
 }
 
@@ -259,7 +378,8 @@ pub enum BlockKind<'a> {
     },
     Heading {
         level: usize,
-        body: &'a str,
+        body: Vec<Inline<'a>>,
+        raw_body: &'a str,
     },
     List {
         items: Vec<ListItem<'a>>,
@@ -276,6 +396,9 @@ pub enum BlockKind<'a> {
         kind: &'a str,
         args: Vec<&'a str>,
         lines: Vec<&'a str>,
+    },
+    ReferenceDefinition {
+        definitions: Vec<ReferenceDefinition<'a>>,
     },
 }
 

@@ -111,9 +111,13 @@ fn resolve_note_link_preserves_exact_path_priority() {
 }
 
 #[test]
-fn markdown_style_links_can_resolve_to_notes_with_custom_titles() {
-    let project = temp_project("markdown-style-note-link");
-    write_note_with_content(&project, "start.maki", "See [the page](page).");
+fn reference_links_can_resolve_to_notes_with_custom_titles() {
+    let project = temp_project("reference-note-link");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "See [the page].\n\n[the page]: page",
+    );
     write_note_with_content(&project, "page.maki", "--^ title: Page\n\nbody");
 
     let maki = Maki::load(&project.root).unwrap();
@@ -123,12 +127,12 @@ fn markdown_style_links_can_resolve_to_notes_with_custom_titles() {
 }
 
 #[test]
-fn markdown_style_external_links_render_as_plain_hrefs() {
-    let project = temp_project("markdown-style-external-link");
+fn reference_external_links_render_as_plain_hrefs() {
+    let project = temp_project("reference-external-link");
     write_note_with_content(
         &project,
         "start.maki",
-        "See [djot](https://github.com/jgm/djot).",
+        "See [djot].\n\n[djot]: https://github.com/jgm/djot",
     );
 
     let maki = Maki::load(&project.root).unwrap();
@@ -140,14 +144,19 @@ fn markdown_style_external_links_render_as_plain_hrefs() {
 }
 
 #[test]
-fn plain_external_urls_render_as_links() {
-    let project = temp_project("plain-external-link");
-    write_note_with_content(&project, "start.maki", "See https://example.com/docs.");
+fn angle_wrapped_external_urls_render_as_links_but_bare_urls_do_not() {
+    let project = temp_project("hyper-link");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "See <https://example.com/docs>, not https://example.com/bare.",
+    );
 
     let maki = Maki::load(&project.root).unwrap();
     let html = maki.render_html(Path::new("start.maki")).unwrap();
 
     assert!(html.contains(
-        "<a class=\"external-link\" href=\"https://example.com/docs\">https://example.com/docs</a>."
+        "<a class=\"external-link\" href=\"https://example.com/docs\">https://example.com/docs</a>, not https://example.com/bare."
     ));
+    assert!(!html.contains("href=\"https://example.com/bare\""));
 }

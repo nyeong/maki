@@ -1,6 +1,7 @@
 use super::diagnostic::{ParseDiagnostic, ParseDiagnosticKind};
 use super::line::{LinePrefix, LineToken, scan_line};
 use super::types::{ListKind, TableRowKind};
+use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq)]
 pub(super) enum PropertyKind {
@@ -12,6 +13,19 @@ pub(super) enum PropertyKind {
 pub(super) struct PropertyItemDraft<'a> {
     pub(super) key: &'a str,
     pub(super) value: &'a str,
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum ReferenceDefinitionDraftKind<'a> {
+    Link { title: &'a str, target: &'a str },
+    Footnote { label: &'a str, body: &'a str },
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) struct ReferenceDefinitionDraft<'a> {
+    pub(super) line: usize,
+    pub(super) raw_line: &'a str,
+    pub(super) kind: ReferenceDefinitionDraftKind<'a>,
 }
 
 impl<'a> PropertyItemDraft<'a> {
@@ -27,6 +41,8 @@ impl<'a> PropertyItemDraft<'a> {
 pub(super) enum BlockDraft<'a> {
     /// --^, --v
     Property {
+        line: usize,
+        raw_line: &'a str,
         indent: usize,
         kind: PropertyKind,
         items: Vec<PropertyItemDraft<'a>>,
@@ -67,6 +83,10 @@ pub(super) enum BlockDraft<'a> {
         header: Vec<&'a str>,
         rows: Vec<TableRowDraft<'a>>,
     },
+
+    ReferenceDefinition {
+        definitions: Vec<ReferenceDefinitionDraft<'a>>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -95,9 +115,8 @@ fn starts_block_after_paragraph(line: &LineToken<'_>) -> bool {
         | LinePrefix::NumberDot { .. }
         | LinePrefix::Colon
         | LinePrefix::Quote => *indent == 0,
-        LinePrefix::HyphenFence(_) => {
-            *indent == 0 && line.body().is_some_and(|body| !body.trim().is_empty())
-        }
+        LinePrefix::HyphenFence(_) => *indent == 0,
+        LinePrefix::Reference => *indent == 0 && parse_reference_definition_line(line, 0).is_some(),
         LinePrefix::None => false,
     }
 }
@@ -169,15 +188,38 @@ fn parse_paragraph_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDra
         {
             break;
         }
-        raw_lines.push(cursor.next()?.raw_line());
+        raw_lines.push(paragraph_line(cursor.next()?));
     }
 
     Some(BlockDraft::Paragraph { raw_lines })
 }
 
+fn paragraph_line<'a>(line: &LineToken<'a>) -> &'a str {
+    let LineToken::Line {
+        indent: 0,
+        kind: LinePrefix::None,
+        raw_line,
+    } = line
+    else {
+        return line.raw_line();
+    };
+    let Some(escaped) = raw_line.strip_prefix('\\') else {
+        return raw_line;
+    };
+    let escaped_token = scan_line(escaped);
+    let escapes_block_start = starts_block_after_paragraph(&escaped_token)
+        || matches!(escaped_token, LineToken::Line { raw_line, .. } if raw_line.starts_with('|'));
+
+    if escapes_block_start {
+        escaped
+    } else {
+        raw_line
+    }
+}
+
 fn parse_container_header(header: &str) -> Option<(&str, Vec<&str>)> {
     let mut parts = header.split_whitespace();
-    let kind = parts.next()?;
+    let kind = parts.next().unwrap_or("");
     let args = parts.collect();
 
     Some((kind, args))
@@ -258,6 +300,8 @@ fn parse_property_draft<'a>(
         return None;
     };
     let property_kind = kind.as_property_kind()?;
+    let line = cursor.line_number();
+    let raw_line = cursor.peek()?.raw_line();
     let kind = *kind;
     let indent = *indent;
     let mut items = vec![];
@@ -288,10 +332,76 @@ fn parse_property_draft<'a>(
     }
 
     Some(BlockDraft::Property {
+        line,
+        raw_line,
         indent,
         kind: property_kind,
         items,
     })
+}
+
+fn valid_reference_identifier(identifier: &str) -> bool {
+    !identifier.is_empty() && !identifier.contains(['[', ']'])
+}
+
+fn parse_reference_definition_line<'a>(
+    token: &LineToken<'a>,
+    line: usize,
+) -> Option<ReferenceDefinitionDraft<'a>> {
+    let LineToken::Line {
+        indent: 0,
+        kind: LinePrefix::Reference,
+        raw_line,
+    } = token
+    else {
+        return None;
+    };
+
+    let after_open = raw_line.strip_prefix('[')?;
+    let close = after_open.find(']')?;
+    let identifier = &after_open[..close];
+    let value = after_open[close + 1..].strip_prefix(':')?;
+    let value = value.trim_start();
+
+    let kind = if let Some(label) = identifier.strip_prefix('^') {
+        if !valid_reference_identifier(label) || label.chars().any(char::is_whitespace) {
+            return None;
+        }
+        ReferenceDefinitionDraftKind::Footnote { label, body: value }
+    } else {
+        if !valid_reference_identifier(identifier) || identifier.starts_with('^') {
+            return None;
+        }
+        let target = value.trim();
+        if target.is_empty() {
+            return None;
+        }
+        ReferenceDefinitionDraftKind::Link {
+            title: identifier,
+            target,
+        }
+    };
+
+    Some(ReferenceDefinitionDraft {
+        line,
+        raw_line,
+        kind,
+    })
+}
+
+fn parse_reference_definition_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+    parse_reference_definition_line(cursor.peek()?, cursor.line_number())?;
+    let mut definitions = vec![];
+
+    while let Some(definition) = cursor
+        .peek()
+        .and_then(|token| parse_reference_definition_line(token, cursor.line_number()))
+    {
+        cursor.next();
+        definitions.push(definition);
+    }
+
+    Some(BlockDraft::ReferenceDefinition { definitions })
 }
 
 fn parse_heading_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
@@ -464,7 +574,13 @@ fn is_table_separator_part(part: &str) -> bool {
 }
 
 fn parse_table_separator_columns(line: &LineToken<'_>) -> Option<usize> {
-    let parts = table_line_body(line)?.split('+').collect::<Vec<_>>();
+    let body = table_line_body(line)?;
+    let delimiter = match (body.contains('+'), body.contains('|')) {
+        (true, false) => '+',
+        (false, _) => '|',
+        (true, true) => return None,
+    };
+    let parts = body.split(delimiter).collect::<Vec<_>>();
 
     parts
         .iter()
@@ -559,28 +675,76 @@ pub(super) fn build_drafts<'a>(
     let mut drafts = vec![];
 
     while !cursor.is_eof() {
-        if let Some(draft) = parse_container_draft(&mut cursor, diagnostics) {
-            drafts.push(draft);
+        let draft = if let Some(draft) = parse_container_draft(&mut cursor, diagnostics) {
+            Some(draft)
         } else if let Some(draft) = parse_code_draft(&mut cursor) {
-            drafts.push(draft);
+            Some(draft)
         } else if let Some(draft) = parse_quote_draft(&mut cursor) {
-            drafts.push(draft);
+            Some(draft)
+        } else if let Some(draft) = parse_reference_definition_draft(&mut cursor) {
+            Some(draft)
         } else if let Some(draft) = parse_property_draft(&mut cursor, diagnostics) {
-            drafts.push(draft);
+            Some(draft)
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
-            drafts.push(draft);
+            Some(draft)
         } else if let Some(draft) = parse_list_draft(&mut cursor) {
-            drafts.push(draft);
+            Some(draft)
         } else if let Some(draft) = parse_table_draft(&mut cursor) {
-            drafts.push(draft);
+            Some(draft)
         } else if cursor.consume_blank() {
+            None
+        } else {
+            parse_paragraph_draft(&mut cursor)
+        };
+
+        let Some(draft) = draft else {
             continue;
-        } else if let Some(draft) = parse_paragraph_draft(&mut cursor) {
-            drafts.push(draft);
+        };
+
+        if let (BlockDraft::Property { line, raw_line, .. }, Some(BlockDraft::Property { .. })) =
+            (&draft, drafts.last())
+        {
+            diagnostics.push(ParseDiagnostic {
+                line: *line,
+                kind: ParseDiagnosticKind::PropertyOnProperty { raw_line },
+            });
+            continue;
         }
+
+        drafts.push(draft);
     }
 
     drafts
+}
+
+fn collect_duplicate_reference_diagnostics<'a>(
+    drafts: &[BlockDraft<'a>],
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) {
+    let mut links = BTreeSet::new();
+    let mut footnotes = BTreeSet::new();
+
+    for draft in drafts {
+        let BlockDraft::ReferenceDefinition { definitions } = draft else {
+            continue;
+        };
+
+        for definition in definitions {
+            let inserted = match &definition.kind {
+                ReferenceDefinitionDraftKind::Link { title, .. } => links.insert(*title),
+                ReferenceDefinitionDraftKind::Footnote { label, .. } => footnotes.insert(*label),
+            };
+
+            if !inserted {
+                diagnostics.push(ParseDiagnostic {
+                    line: definition.line,
+                    kind: ParseDiagnosticKind::DuplicateReferenceDefinition {
+                        raw_line: definition.raw_line,
+                    },
+                });
+            }
+        }
+    }
 }
 
 pub(super) fn parse_drafts<'a>(
@@ -588,6 +752,8 @@ pub(super) fn parse_drafts<'a>(
 ) -> (Vec<BlockDraft<'a>>, Vec<ParseDiagnostic<'a>>) {
     let mut diagnostics = vec![];
     let drafts = build_drafts(lines, &mut diagnostics);
+    collect_duplicate_reference_diagnostics(&drafts, &mut diagnostics);
+    diagnostics.sort_by_key(|diagnostic| diagnostic.line);
 
     (drafts, diagnostics)
 }

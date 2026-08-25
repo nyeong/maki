@@ -6,9 +6,10 @@ Line-based lightweight mark-up language and file based personal wiki runtime.
 
 - `.maki` 파일을 프로젝트 단위로 읽고 HTML로 렌더링한다.
 - `maki.toml`의 `[project] title`, `source`, `home`을 읽고, `title`이 있으면 serve HTML title을 `page title | project title`로 렌더링한다.
-- `[[note]]`, `[title](note)`, `[title](https://...)`, plain HTTP/HTTPS URL을 링크로 렌더링한다.
+- `[[note]]`, `[title]` + `[title]: target`, `<https://...>`를 각각 note link, reference link, Hyper Link로 렌더링한다.
+- `[^label]` + `[^label]: body` footnote와 italic, strong, superscript, subscript, highlight inline을 렌더링한다.
 - wikilink는 exact path를 우선하고, 그 다음 case-insensitive path/stem lookup을 사용한다.
-- paragraph, heading, property, quote, code, unordered/ordered list, hyphen-fenced container를 파싱한다.
+- paragraph, heading, property, reference definition, quote, code, unordered/ordered list, table, hyphen-fenced container를 파싱한다.
 - project page에는 home, meta, title search와 섹션 ToC가 있는 navigation shell이 붙는다.
 - 충분히 넓은 화면에서는 ToC가 왼쪽 overlay로 고정되고, 현재 화면의 섹션만 강조된다.
 - 데스크탑 1-column 화면에서는 기존 ToC와 별도로 오른쪽 스크롤 위치 지도를 표시하고, 점 hover/focus 시 해당 섹션 이름을 보여주며 라벨 hover 시 전체 섹션 이름을 일반 굵기로 펼친다. 겹치는 marker는 상위 섹션 레벨, 같은 레벨이면 문서상 위쪽 순서를 우선해 하나만 보여준다.

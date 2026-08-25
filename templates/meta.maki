@@ -1,5 +1,9 @@
 --^ title: Meta
 
-- [Recents](/@/recents)
-- [Diagnostics](/@/diagnostics)
-- [Dates](/@/dates)
+- [Recents]
+- [Diagnostics]
+- [Dates]
+
+[Recents]: /@/recents
+[Diagnostics]: /@/diagnostics
+[Dates]: /@/dates

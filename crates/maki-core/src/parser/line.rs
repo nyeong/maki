@@ -22,6 +22,7 @@ pub(super) enum LinePrefix {
     HyphenFence(usize),
     Colon,
     Quote,
+    Reference,
     NumberDot { width: usize }, // 1.
     None,
 }
@@ -66,8 +67,7 @@ fn parse_hyphen_fence_prefix(source: &str) -> Option<usize> {
         return None;
     }
 
-    let rest = &source[len..];
-    (rest.is_empty() || rest.starts_with(' ')).then_some(len)
+    Some(len)
 }
 
 /// Accepts a text trimmed of leading whitespace.
@@ -92,6 +92,9 @@ fn scan_line_prefix(raw_text: &str) -> LinePrefix {
     }
     if raw_text.starts_with(HYPHEN) {
         return LinePrefix::Hyphen;
+    }
+    if raw_text.starts_with('[') {
+        return LinePrefix::Reference;
     }
     if let Some(len) = count_prefix_run(raw_text, EQUALS, ' ') {
         return LinePrefix::EqualsRun(len);
@@ -141,6 +144,7 @@ impl LinePrefix {
             LinePrefix::HyphenFence(len) => *len,
             LinePrefix::Colon => COLON.len_utf8(),
             LinePrefix::Quote => QUOTE.len_utf8(),
+            LinePrefix::Reference => '['.len_utf8(),
             LinePrefix::NumberDot { width, .. } => *width,
             LinePrefix::None => 0,
         }

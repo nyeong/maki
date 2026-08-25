@@ -8,9 +8,13 @@ fn diagnostics_collect_parse_warnings_and_link_resolution_issues() {
         "start.maki",
         r#"--^ invalid-property
 
-See [[missing]], [Ghost](ghost), and [[same]].
+See [[missing]], [Ghost], and [[same]].
+
+[Ghost]: ghost
 
 > See [[quoted-missing]].
+> [quoted reference]
+> [quoted reference]: quoted-reference-missing
 
 --- quote
 See [[container-missing]].
@@ -28,6 +32,13 @@ See [[container-missing]].
             ProjectDiagnosticKind::ParseWarning { message }
                 if message == "invalid property: --^ invalid-property"
         ) && diagnostic.line() == Some(1)
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.kind(),
+            ProjectDiagnosticKind::BrokenLink { target }
+                if target == "quoted-reference-missing"
+        )
     }));
     assert!(diagnostics.iter().any(|diagnostic| {
         matches!(
@@ -72,7 +83,7 @@ fn diagnostics_without_external_links_skips_external_link_checks() {
     write_note_with_content(
         &project,
         "start.maki",
-        "See [Down](https://down.example/path) and [[missing]].",
+        "See [Down] and [[missing]].\n\n[Down]: https://down.example/path",
     );
 
     let maki = Maki::load(&project.root).unwrap();
@@ -96,10 +107,12 @@ fn diagnostics_collect_broken_external_links() {
     write_note_with_content(
         &project,
         "start.maki",
-        r#"See [Down](https://down.example/path), https://ok.example/docs, and `https://code.example`.
+        r#"See [Down], <https://ok.example/docs>, and `https://code.example`.
+
+[Down]: https://down.example/path
 
 --- quote
-See https://down.example/path.
+See <https://down.example/path>.
 ---"#,
     );
 
@@ -147,7 +160,9 @@ fn diagnostics_collect_links_inside_strong_inline() {
     write_note_with_content(
         &project,
         "start.maki",
-        r#"See *[[missing]] and [Missing](/missing-note) and [Down](https://down.example/path)*."#,
+        r#"See *[[missing]] and [Missing] and <https://down.example/path>*.
+
+[Missing]: /missing-note"#,
     );
 
     let maki = Maki::load(&project.root).unwrap();
@@ -182,4 +197,34 @@ fn diagnostics_collect_links_inside_strong_inline() {
                 if target == "https://down.example/path" && reason == "HTTP 404"
         )
     }));
+}
+
+#[test]
+fn diagnostics_do_not_report_missing_footnote_definitions() {
+    let project = temp_project("missing-footnote-diagnostics");
+    write_note_with_content(&project, "start.maki", "Missing [^note] stays text.");
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert!(maki.diagnostics_without_external_links().is_empty());
+}
+
+#[test]
+fn diagnostics_ignore_links_inside_plain_quotes() {
+    let project = temp_project("plain-quote-diagnostics");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"--v mode: plain
+> [[not-a-link]]
+
+--v mode: plain
+---quote
+[[also-not-a-link]]
+---"#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert!(maki.diagnostics_without_external_links().is_empty());
 }

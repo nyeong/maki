@@ -63,8 +63,10 @@ v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
 --v status: todo
 == Stable 문법 구현 상태 맞추기
 
-[[maki-syntax]]의 stable syntax와 구현 상태를 맞춘다.
-italic, underline, strike, highlight, footnote, inline container는 현재 stable syntax가 아니라 unsupported syntax로 둔다.
+아래 설명과 목록은 v2 당시 stable syntax와 구현 상태 기록이다.
+당시 italic, underline, strike, highlight, footnote, inline container는 stable syntax가 아니라 unsupported syntax로 두었다.
+
+현재 [[maki-syntax]]가 SoT 후보 문서로 확장되면서 이 작업은 [[syntax-sot]]로 이관한다.
 
 - [ ] Inline
   - [x] Strong

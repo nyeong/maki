@@ -60,15 +60,13 @@ impl Maki {
             }
 
             let current = note.note_ref();
-            for block in &parsed.document.blocks {
-                collect_block_link_diagnostics(
-                    &mut diagnostics,
-                    self,
-                    &current,
-                    source_path,
-                    &block.kind,
-                );
-            }
+            collect_document_link_diagnostics(
+                &mut diagnostics,
+                self,
+                &current,
+                source_path,
+                &parsed.document,
+            );
         }
 
         diagnostics
@@ -235,24 +233,11 @@ fn collect_inline_link_diagnostics(
                 maki.resolve_note_link(current, target),
                 target,
             ),
-            Inline::Link { target, .. } => {
-                if let Some(note_target) = note_link_target_for_href(target) {
-                    push_link_diagnostic(
-                        diagnostics,
-                        source_path,
-                        maki.resolve_note_link(current, &note_target),
-                        &note_target,
-                    );
+            _ => {
+                if let Some(body) = inline.nested_inlines() {
+                    collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
                 }
             }
-            Inline::Strong(body) => {
-                collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body)
-            }
-            Inline::DateStamp(_)
-            | Inline::DateRange(_)
-            | Inline::Text(_)
-            | Inline::SoftBreak
-            | Inline::Code(_) => {}
         }
     }
 }
@@ -278,15 +263,15 @@ fn collect_block_link_diagnostics(
     maki: &Maki,
     current: &NoteRef,
     source_path: &Path,
-    block: &BlockKind<'_>,
+    block: &parser::Block<'_>,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
-    match block {
+    match &block.kind {
         BlockKind::Paragraph { body } => {
             collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body)
         }
         BlockKind::Heading { body, .. } => {
-            let inlines = parser::parse_inline(body);
-            collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &inlines);
+            collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
         }
         BlockKind::List { items } => {
             for item in items {
@@ -303,13 +288,21 @@ fn collect_block_link_diagnostics(
                         maki,
                         current,
                         source_path,
-                        &child.kind,
+                        child,
+                        references,
                     );
                 }
             }
         }
-        BlockKind::Quote { lines } => {
-            collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)
+        BlockKind::Quote { lines } if block.property("mode") != Some("plain") => {
+            collect_maki_lines_link_diagnostics(
+                diagnostics,
+                maki,
+                current,
+                source_path,
+                lines,
+                references,
+            )
         }
         BlockKind::Table { header, rows, .. } => {
             collect_table_row_link_diagnostics(diagnostics, maki, current, source_path, header);
@@ -317,10 +310,22 @@ fn collect_block_link_diagnostics(
                 collect_table_row_link_diagnostics(diagnostics, maki, current, source_path, row);
             }
         }
-        BlockKind::Container { kind, lines, .. } if *kind == "quote" => {
-            collect_maki_lines_link_diagnostics(diagnostics, maki, current, source_path, lines)
+        BlockKind::Container { kind, lines, .. }
+            if *kind == "quote" && block.property("mode") != Some("plain") =>
+        {
+            collect_maki_lines_link_diagnostics(
+                diagnostics,
+                maki,
+                current,
+                source_path,
+                lines,
+                references,
+            )
         }
-        BlockKind::Code { .. } | BlockKind::Container { .. } => {}
+        BlockKind::Quote { .. }
+        | BlockKind::Code { .. }
+        | BlockKind::Container { .. }
+        | BlockKind::ReferenceDefinition { .. } => {}
     }
 }
 
@@ -330,12 +335,48 @@ fn collect_maki_lines_link_diagnostics(
     current: &NoteRef,
     source_path: &Path,
     lines: &[&str],
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     let source = lines.join("\n");
-    let parsed = parser::parse(&source);
+    let parsed = parser::parse_with_references(&source, references);
 
-    for block in &parsed.document.blocks {
-        collect_block_link_diagnostics(diagnostics, maki, current, source_path, &block.kind);
+    collect_document_link_diagnostics(diagnostics, maki, current, source_path, &parsed.document);
+}
+
+fn collect_document_link_diagnostics(
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+    maki: &Maki,
+    current: &NoteRef,
+    source_path: &Path,
+    document: &parser::Document<'_>,
+) {
+    for definition in document.reference_definitions().iter() {
+        match definition {
+            parser::ReferenceDefinition::Link { target, .. } => {
+                if let Some(note_target) = note_link_target_for_href(target) {
+                    push_link_diagnostic(
+                        diagnostics,
+                        source_path,
+                        maki.resolve_note_link(current, &note_target),
+                        &note_target,
+                    );
+                }
+            }
+            parser::ReferenceDefinition::Footnote { body, .. } => {
+                collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
+            }
+        }
+    }
+
+    for block in &document.blocks {
+        collect_block_link_diagnostics(
+            diagnostics,
+            maki,
+            current,
+            source_path,
+            block,
+            document.reference_definitions(),
+        );
     }
 }
 

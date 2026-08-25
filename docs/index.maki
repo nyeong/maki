@@ -1,19 +1,24 @@
 --^ title: Maki
 
-= Maki
+<https://github.com/nyeong/maki>
 
-현재 마일스톤: [[milestones/v2]]
+현재 마일스톤: [[milestones/syntax-sot]]
 
+- [[about-maki]]
+- core
+  - [[maki-syntax]]
+- serve
 - [[use-cases]]
 - [[issues]]
 - [[architecture]]
-- [[maki-syntax]]
 - [[implementation-analysis]]
+- 선행 마일스톤
+  - [[milestones/syntax-sot]]
 - 마일스톤
-  - [[milestones/later]]
   - [[milestones/v0]]
   - [[milestones/v1]]
   - [[milestones/v2]]
   - [[milestones/v3]]
   - [[milestones/v4]]
   - [[milestones/v5]]
+  - [[milestones/later]]
