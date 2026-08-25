@@ -22,9 +22,9 @@ fi
 git fetch "${remote}" main
 
 local_revision="$(git rev-parse HEAD)"
-remote_revision="$(git rev-parse "${remote}/main")"
+remote_revision="$(git rev-parse FETCH_HEAD)"
 if [[ "${local_revision}" != "${remote_revision}" ]]; then
-  echo "Refusing to deploy: local main does not match ${remote}/main." >&2
+  echo "Refusing to deploy: local main does not match fetched ${remote}/main." >&2
   exit 1
 fi
 
