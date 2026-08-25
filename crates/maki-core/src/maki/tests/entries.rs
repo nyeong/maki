@@ -103,6 +103,25 @@ fn recent_entries_sort_by_modified_descending_then_source_path() {
 }
 
 #[test]
+fn recent_entries_keep_snapshot_titles_after_modified_times_are_applied() {
+    let project = temp_project("snapshot-recents-title");
+    let modified = UNIX_EPOCH + Duration::from_secs(1_000);
+    write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
+
+    let mut maki = Maki::load(&project.root).unwrap();
+    maki.apply_recent_modified_times(&std::collections::BTreeMap::from([(
+        PathBuf::from("alpha.maki"),
+        modified,
+    )]));
+
+    assert!(maki.recent_entries().iter().any(|entry| {
+        entry.title() == "Alpha Note"
+            && entry.path() == "/alpha"
+            && entry.modified() == Some(modified)
+    }));
+}
+
+#[test]
 fn search_titles_matches_case_insensitive_title_substrings() {
     let project = temp_project("search-title-match");
     write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
