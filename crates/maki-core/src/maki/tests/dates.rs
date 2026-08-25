@@ -62,6 +62,38 @@ Track [2026-08-17]--[2026-08-19]."#,
 }
 
 #[test]
+fn date_occurrence_kind_labels_inline_and_property_dates() {
+    let project = temp_project("date-occurrence-kind");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"--^ scheduled: <2026-08-26>
+--^ deadline: [2026-08-27]
+--^ date: [2026-08-28]
+
+Reference [2026-08-29].
+Event <2026-08-30>."#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let kind_for = |raw: &str| {
+        let date = Date::parse(raw).unwrap();
+        let backlinks = maki.date_index().backlinks_for(&date).unwrap();
+        maki.date_index()
+            .occurrence(backlinks[0].occurrence_id())
+            .unwrap()
+            .kind()
+    };
+
+    assert_eq!(kind_for("2026-08-26"), DateOccurrenceKind::Scheduled);
+    assert_eq!(kind_for("2026-08-27"), DateOccurrenceKind::Deadline);
+    assert_eq!(kind_for("2026-08-28"), DateOccurrenceKind::Metadata);
+    assert_eq!(kind_for("2026-08-29"), DateOccurrenceKind::Reference);
+    assert_eq!(kind_for("2026-08-30"), DateOccurrenceKind::Event);
+    assert_eq!(DateOccurrenceKind::Scheduled.as_str(), "scheduled");
+}
+
+#[test]
 fn date_index_collects_month_week_and_iso_weekday_markers() {
     let project = temp_project("period-date-index");
     write_note_with_content(

@@ -24,6 +24,21 @@ pub struct Note {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchEntry {
+    kind: SearchEntryKind,
+    title: String,
+    path: String,
+    source_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchEntryKind {
+    Note,
+    File,
+    Heading,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SitemapEntry {
     title: String,
     path: String,
     source_path: String,
@@ -45,6 +60,48 @@ pub struct RecentEntry {
 }
 
 impl SearchEntry {
+    pub(super) fn new(
+        kind: SearchEntryKind,
+        title: impl Into<String>,
+        path: impl Into<String>,
+        source_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            title: title.into(),
+            path: path.into(),
+            source_path: source_path.into(),
+        }
+    }
+
+    pub fn kind(&self) -> SearchEntryKind {
+        self.kind
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn source_path(&self) -> &str {
+        &self.source_path
+    }
+}
+
+impl SearchEntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::File => "file",
+            Self::Heading => "heading",
+        }
+    }
+}
+
+impl SitemapEntry {
     pub fn title(&self) -> &str {
         &self.title
     }
@@ -161,7 +218,16 @@ impl Note {
 
 impl NoteMetadataEntry {
     pub(super) fn into_search_entry(self) -> SearchEntry {
-        SearchEntry {
+        SearchEntry::new(
+            SearchEntryKind::Note,
+            self.title,
+            self.path,
+            self.source_path,
+        )
+    }
+
+    pub(super) fn into_sitemap_entry(self) -> SitemapEntry {
+        SitemapEntry {
             title: self.title,
             path: self.path,
             source_path: self.source_path,

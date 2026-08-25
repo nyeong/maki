@@ -63,9 +63,12 @@ impl ProjectState {
 pub(super) enum ResponseCacheKey {
     MetaIndex,
     Recents,
+    Sitemap,
+    SitemapXml,
     Diagnostics,
     DatesIndex,
     DatePeriodPage(DatePeriod),
+    ProjectIndex,
     SearchIndex,
     NotePage(PathBuf),
 }
@@ -75,9 +78,12 @@ impl ResponseCacheKey {
         match self {
             Self::MetaIndex => "meta",
             Self::Recents => "recents",
+            Self::Sitemap => "sitemap",
+            Self::SitemapXml => "sitemap_xml",
             Self::Diagnostics => "diagnostics",
             Self::DatesIndex => "dates",
             Self::DatePeriodPage(_) => "date",
+            Self::ProjectIndex => "project_index",
             Self::SearchIndex => "search_index",
             Self::NotePage(_) => "note",
         }

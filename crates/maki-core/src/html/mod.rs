@@ -17,6 +17,7 @@ pub use context::{AssetMode, NoteInfo, RenderContext};
 pub use pages::{
     render_date_index_page, render_date_period_page, render_diagnostics_page,
     render_meta_index_page, render_not_found_page, render_recents_page, render_search_page,
+    render_sitemap_page,
 };
 
 use crate::parser::{self, Document};

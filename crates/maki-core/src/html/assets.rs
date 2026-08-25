@@ -13,7 +13,7 @@ pub(in crate::html) const PROJECT_NAVIGATION_HTML: &str = r#"<header class="maki
 <a class="maki-home-link" href="/">/</a>
 <a class="maki-meta-link" href="/@/">@</a>
 <form class="maki-search" action="/.maki/search" method="get" role="search" data-maki-search>
-<input class="maki-search-input" type="search" name="q" placeholder="Search title" aria-label="Search titles" autocomplete="off" spellcheck="false" data-maki-search-input>
+<input class="maki-search-input" type="search" name="q" placeholder="Search" aria-label="Search project entries" autocomplete="off" spellcheck="false" data-maki-search-input>
 <div class="maki-search-results" role="listbox" hidden data-maki-search-results></div>
 </form>
 </nav>

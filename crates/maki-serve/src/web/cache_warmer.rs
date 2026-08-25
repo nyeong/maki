@@ -11,10 +11,13 @@ use super::routes::cacheable_response;
 use super::state::{AppState, ResponseCacheKey};
 
 pub(super) fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
-    let mut keys = Vec::with_capacity(maki.notes_len() + 4);
+    let mut keys = Vec::with_capacity(maki.notes_len() + 8);
     keys.push(ResponseCacheKey::MetaIndex);
     keys.push(ResponseCacheKey::Recents);
+    keys.push(ResponseCacheKey::Sitemap);
+    keys.push(ResponseCacheKey::SitemapXml);
     keys.push(ResponseCacheKey::SearchIndex);
+    keys.push(ResponseCacheKey::ProjectIndex);
     keys.push(ResponseCacheKey::Diagnostics);
     keys.push(ResponseCacheKey::DatesIndex);
     let mut date_periods = BTreeSet::new();

@@ -81,7 +81,7 @@
       title.textContent = entry.title;
       const source = document.createElement("span");
       source.className = "maki-search-result-source";
-      source.textContent = entry.source_path;
+      source.textContent = `${entry.kind || "note"}: ${entry.source_path}`;
 
       link.append(title, source);
       return link;

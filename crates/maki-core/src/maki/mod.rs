@@ -35,7 +35,8 @@ mod project;
 
 pub use config::{HomeMode, MakiConfig, MakiConfigOverrides, PublishPolicy};
 pub use dates::{
-    DateBacklink, DateIndex, DateMarker, DateOccurrence, DateOrigin, DatePeriod, DateRelation,
+    DateBacklink, DateIndex, DateMarker, DateOccurrence, DateOccurrenceKind, DateOrigin,
+    DatePeriod, DateRelation,
 };
 pub(crate) use dates::{
     date_occurrence_href, date_page_path, date_year_page_path, inline_date_occurrence_id,
@@ -45,7 +46,7 @@ pub use diagnostics::{ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosti
 pub use error::Error;
 pub use links::NoteLinkResolution;
 pub(crate) use links::{is_external_href, note_link_target_for_href};
-pub use note::{Note, NoteRef, RecentEntry, SearchEntry};
+pub use note::{Note, NoteRef, RecentEntry, SearchEntry, SearchEntryKind, SitemapEntry};
 pub use project::{Maki, MakiRoute};
 
 #[cfg(test)]

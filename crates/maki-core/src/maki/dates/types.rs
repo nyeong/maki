@@ -46,6 +46,15 @@ pub enum DateMarker {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateOccurrenceKind {
+    Reference,
+    Event,
+    Scheduled,
+    Deadline,
+    Metadata,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateBacklink {
     occurrence_id: String,
@@ -245,8 +254,36 @@ impl DateOccurrence {
         &self.marker
     }
 
+    pub fn kind(&self) -> DateOccurrenceKind {
+        match &self.origin {
+            DateOrigin::Property { key } if key.eq_ignore_ascii_case("scheduled") => {
+                DateOccurrenceKind::Scheduled
+            }
+            DateOrigin::Property { key } if key.eq_ignore_ascii_case("deadline") => {
+                DateOccurrenceKind::Deadline
+            }
+            DateOrigin::Property { .. } => DateOccurrenceKind::Metadata,
+            DateOrigin::Inline if self.marker.kind() == DateStampKind::Event => {
+                DateOccurrenceKind::Event
+            }
+            DateOrigin::Inline => DateOccurrenceKind::Reference,
+        }
+    }
+
     pub fn context(&self) -> &str {
         &self.context
+    }
+}
+
+impl DateOccurrenceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reference => "reference",
+            Self::Event => "event",
+            Self::Scheduled => "scheduled",
+            Self::Deadline => "deadline",
+            Self::Metadata => "metadata",
+        }
     }
 }
 

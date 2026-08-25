@@ -4,7 +4,14 @@ use std::time::Instant;
 
 use crate::http;
 use maki_core::html::{self, AssetMode};
-use maki_core::{DatePeriod, Error as MakiError, HomeMode, Maki, MakiRoute, SearchEntry};
+use maki_core::parser::DateStampKind;
+use maki_core::{
+    DatePeriod, Error as MakiError, HomeMode, Maki, MakiRoute, SearchEntry, SitemapEntry,
+    analysis::{
+        AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin as AnalysisDateOrigin,
+        LinkResolution, ProjectAnalysis, PropertyDirection,
+    },
+};
 
 use super::error::Error;
 use super::state::{AppState, ProjectState, ResponseCacheKey};
@@ -13,13 +20,13 @@ use super::target::{
 };
 use super::{
     DATES_PATH, DATES_PATH_WITH_SLASH, DIAGNOSTICS_PATH, DIAGNOSTICS_PATH_WITH_SLASH,
-    LIVE_RELOAD_PATH, META_PATH, META_PATH_NO_SLASH, RECENTS_PATH, RECENTS_PATH_WITH_SLASH,
-    SEARCH_INDEX_PATH, SEARCH_PAGE_RESULT_LIMIT, SEARCH_PATH,
+    LIVE_RELOAD_PATH, META_PATH, META_PATH_NO_SLASH, PROJECT_INDEX_PATH, RECENTS_PATH,
+    RECENTS_PATH_WITH_SLASH, SEARCH_INDEX_PATH, SEARCH_PAGE_RESULT_LIMIT, SEARCH_PATH,
+    SITEMAP_PATH, SITEMAP_PATH_WITH_SLASH, SITEMAP_XML_PATH,
 };
 
-fn escape_json_string(input: &str) -> String {
-    let mut output = String::new();
-
+fn push_json_string(output: &mut String, input: &str) {
+    output.push('"');
     for ch in input.chars() {
         match ch {
             '"' => output.push_str("\\\""),
@@ -33,8 +40,7 @@ fn escape_json_string(input: &str) -> String {
             _ => output.push(ch),
         }
     }
-
-    output
+    output.push('"');
 }
 
 fn search_index_json(entries: &[SearchEntry]) -> String {
@@ -45,17 +51,266 @@ fn search_index_json(entries: &[SearchEntry]) -> String {
             json.push(',');
         }
 
-        json.push_str("{\"title\":\"");
-        json.push_str(&escape_json_string(entry.title()));
-        json.push_str("\",\"path\":\"");
-        json.push_str(&escape_json_string(entry.path()));
-        json.push_str("\",\"source_path\":\"");
-        json.push_str(&escape_json_string(entry.source_path()));
-        json.push_str("\"}");
+        json.push_str("{\"kind\":");
+        push_json_string(&mut json, entry.kind().as_str());
+        json.push_str(",\"title\":");
+        push_json_string(&mut json, entry.title());
+        json.push_str(",\"path\":");
+        push_json_string(&mut json, entry.path());
+        json.push_str(",\"source_path\":");
+        push_json_string(&mut json, entry.source_path());
+        json.push('}');
     }
 
     json.push(']');
     json
+}
+
+fn sitemap_xml(entries: &[SitemapEntry]) -> String {
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    xml.push_str("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    for entry in entries {
+        xml.push_str("  <url><loc>");
+        push_xml_escaped(&mut xml, entry.path());
+        xml.push_str("</loc></url>\n");
+    }
+    xml.push_str("</urlset>\n");
+    xml
+}
+
+fn push_xml_escaped(output: &mut String, input: &str) {
+    for ch in input.chars() {
+        match ch {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&apos;"),
+            _ => output.push(ch),
+        }
+    }
+}
+
+fn source_span_json(span: maki_core::source::SourceSpan) -> String {
+    format!("{{\"start\":{},\"end\":{}}}", span.start, span.end)
+}
+
+fn project_index_json(maki: &Maki) -> Result<String, MakiError> {
+    let analysis = maki.published_analysis()?;
+
+    Ok(project_analysis_json(&analysis))
+}
+
+fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
+    let mut json = String::from("{\"schema_version\":1,\"documents\":[");
+    for (index, document) in analysis.documents.values().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("{\"title\":");
+        push_json_string(&mut json, &document.title);
+        json.push_str(",\"path\":");
+        push_json_string(&mut json, &format!("/{}", document.canonical_path));
+        json.push_str(",\"source_path\":");
+        push_json_string(&mut json, &document.path.display().to_string());
+        json.push_str(",\"document_span\":");
+        json.push_str(&source_span_json(document.document_span));
+
+        json.push_str(",\"blocks\":[");
+        for (block_index, block) in document.blocks.iter().enumerate() {
+            if block_index > 0 {
+                json.push(',');
+            }
+            json.push_str("{\"kind\":");
+            push_json_string(&mut json, block_kind_label(block.kind));
+            json.push_str(",\"span\":");
+            json.push_str(&source_span_json(block.span));
+            json.push('}');
+        }
+        json.push(']');
+
+        json.push_str(",\"headings\":[");
+        for (heading_index, heading) in document.headings.iter().enumerate() {
+            if heading_index > 0 {
+                json.push(',');
+            }
+            json.push_str("{\"level\":");
+            let _ = write!(json, "{}", heading.level);
+            json.push_str(",\"title\":");
+            push_json_string(&mut json, &heading.title);
+            json.push_str(",\"anchor\":");
+            push_json_string(&mut json, &heading.anchor);
+            json.push_str(",\"span\":");
+            json.push_str(&source_span_json(heading.span));
+            json.push_str(",\"title_span\":");
+            json.push_str(&source_span_json(heading.title_span));
+            json.push('}');
+        }
+        json.push(']');
+
+        json.push_str(",\"links\":[");
+        for (link_index, link) in document.note_links.iter().enumerate() {
+            if link_index > 0 {
+                json.push(',');
+            }
+            json.push_str("{\"target\":");
+            push_json_string(&mut json, &link.target);
+            json.push_str(",\"span\":");
+            json.push_str(&source_span_json(link.span));
+            json.push_str(",\"target_span\":");
+            json.push_str(&source_span_json(link.target_span));
+            json.push_str(",\"resolution\":");
+            push_link_resolution_json(&mut json, link.resolution.as_ref());
+            json.push('}');
+        }
+        json.push(']');
+
+        json.push_str(",\"properties\":[");
+        for (property_index, property) in document.properties.iter().enumerate() {
+            if property_index > 0 {
+                json.push(',');
+            }
+            json.push_str("{\"direction\":");
+            push_json_string(&mut json, property_direction_label(property.direction));
+            json.push_str(",\"key\":");
+            push_json_string(&mut json, &property.key);
+            json.push_str(",\"value\":");
+            push_json_string(&mut json, &property.value);
+            json.push_str(",\"span\":");
+            json.push_str(&source_span_json(property.span));
+            json.push_str(",\"key_span\":");
+            json.push_str(&source_span_json(property.key_span));
+            json.push_str(",\"value_span\":");
+            json.push_str(&source_span_json(property.value_span));
+            json.push('}');
+        }
+        json.push(']');
+
+        json.push_str(",\"dates\":[");
+        for (date_index, date) in document.dates.iter().enumerate() {
+            if date_index > 0 {
+                json.push(',');
+            }
+            json.push_str("{\"kind\":");
+            push_json_string(&mut json, analysis_date_kind_label(date.kind, &date.origin));
+            json.push_str(",\"marker_kind\":");
+            push_json_string(&mut json, date_stamp_kind_label(date.kind));
+            json.push_str(",\"body\":");
+            push_json_string(&mut json, &date.body);
+            json.push_str(",\"origin\":");
+            push_json_string(&mut json, analysis_date_origin_label(&date.origin));
+            if let AnalysisDateOrigin::PropertyValue { key } = &date.origin {
+                json.push_str(",\"property_key\":");
+                push_json_string(&mut json, key);
+            }
+            json.push_str(",\"span\":");
+            json.push_str(&source_span_json(date.span));
+            json.push('}');
+        }
+        json.push(']');
+
+        json.push('}');
+    }
+    json.push_str("],\"diagnostics\":[");
+    for (index, diagnostic) in analysis.diagnostics.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("{\"path\":");
+        push_json_string(&mut json, &diagnostic.path.display().to_string());
+        json.push_str(",\"kind\":");
+        push_json_string(&mut json, diagnostic_kind_label(diagnostic.kind));
+        json.push_str(",\"message\":");
+        push_json_string(&mut json, &diagnostic.message);
+        json.push_str(",\"span\":");
+        json.push_str(&source_span_json(diagnostic.span));
+        json.push('}');
+    }
+    json.push_str("]}");
+    json
+}
+
+fn push_link_resolution_json(output: &mut String, resolution: Option<&LinkResolution>) {
+    let Some(resolution) = resolution else {
+        output.push_str("null");
+        return;
+    };
+
+    match resolution {
+        LinkResolution::Found(target) => {
+            output.push_str("{\"status\":\"found\",\"path\":");
+            push_json_string(output, &target.path.display().to_string());
+            output.push_str(",\"selection_span\":");
+            output.push_str(&source_span_json(target.selection_span));
+            if let Some(anchor) = &target.heading_anchor {
+                output.push_str(",\"heading_anchor\":");
+                push_json_string(output, anchor);
+            }
+            output.push('}');
+        }
+        LinkResolution::BrokenNote => output.push_str("{\"status\":\"broken_note\"}"),
+        LinkResolution::AmbiguousNote => output.push_str("{\"status\":\"ambiguous_note\"}"),
+        LinkResolution::BrokenHeading => output.push_str("{\"status\":\"broken_heading\"}"),
+        LinkResolution::AmbiguousHeading => output.push_str("{\"status\":\"ambiguous_heading\"}"),
+    }
+}
+
+fn block_kind_label(kind: AnalysisBlockKind) -> &'static str {
+    match kind {
+        AnalysisBlockKind::Paragraph => "paragraph",
+        AnalysisBlockKind::Code => "code",
+        AnalysisBlockKind::Heading => "heading",
+        AnalysisBlockKind::List => "list",
+        AnalysisBlockKind::Quote => "quote",
+        AnalysisBlockKind::Table => "table",
+        AnalysisBlockKind::Container => "container",
+        AnalysisBlockKind::ReferenceDefinition => "reference_definition",
+    }
+}
+
+fn property_direction_label(direction: PropertyDirection) -> &'static str {
+    match direction {
+        PropertyDirection::Previous => "previous",
+        PropertyDirection::Next => "next",
+    }
+}
+
+fn date_stamp_kind_label(kind: DateStampKind) -> &'static str {
+    match kind {
+        DateStampKind::Date => "date",
+        DateStampKind::Event => "event",
+    }
+}
+
+fn analysis_date_origin_label(origin: &AnalysisDateOrigin) -> &'static str {
+    match origin {
+        AnalysisDateOrigin::VisibleInline => "visible_inline",
+        AnalysisDateOrigin::PropertyValue { .. } => "property_value",
+    }
+}
+
+fn analysis_date_kind_label(kind: DateStampKind, origin: &AnalysisDateOrigin) -> &'static str {
+    match origin {
+        AnalysisDateOrigin::PropertyValue { key } if key.eq_ignore_ascii_case("scheduled") => {
+            "scheduled"
+        }
+        AnalysisDateOrigin::PropertyValue { key } if key.eq_ignore_ascii_case("deadline") => {
+            "deadline"
+        }
+        AnalysisDateOrigin::PropertyValue { .. } => "metadata",
+        AnalysisDateOrigin::VisibleInline if kind == DateStampKind::Event => "event",
+        AnalysisDateOrigin::VisibleInline => "reference",
+    }
+}
+
+fn diagnostic_kind_label(kind: AnalysisDiagnosticKind) -> &'static str {
+    match kind {
+        AnalysisDiagnosticKind::ParseWarning => "parse_warning",
+        AnalysisDiagnosticKind::BrokenNoteLink => "broken_note_link",
+        AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous_note_link",
+        AnalysisDiagnosticKind::BrokenHeadingLink => "broken_heading_link",
+        AnalysisDiagnosticKind::AmbiguousHeadingLink => "ambiguous_heading_link",
+    }
 }
 fn runtime_asset_response(asset: html::RuntimeAsset) -> http::Response {
     let body =
@@ -73,9 +328,12 @@ enum StaticRoute {
     RuntimeAsset(html::RuntimeAsset),
     MetaIndex,
     Recents,
+    Sitemap,
+    SitemapXml,
     Diagnostics,
     DatesIndex,
     DatePeriod(DatePeriod),
+    ProjectIndex,
     SearchIndex,
     Search,
 }
@@ -87,9 +345,12 @@ impl StaticRoute {
             Self::RuntimeAsset(_) => "asset",
             Self::MetaIndex => "meta",
             Self::Recents => "recents",
+            Self::Sitemap => "sitemap",
+            Self::SitemapXml => "sitemap_xml",
             Self::Diagnostics => "diagnostics",
             Self::DatesIndex => "dates",
             Self::DatePeriod(_) => "date",
+            Self::ProjectIndex => "project_index",
             Self::SearchIndex => "search_index",
             Self::Search => "search",
         }
@@ -109,6 +370,12 @@ fn static_route_for_path(path: &str) -> Option<StaticRoute> {
     if path == RECENTS_PATH || path == RECENTS_PATH_WITH_SLASH {
         return Some(StaticRoute::Recents);
     }
+    if path == SITEMAP_PATH || path == SITEMAP_PATH_WITH_SLASH {
+        return Some(StaticRoute::Sitemap);
+    }
+    if path == SITEMAP_XML_PATH {
+        return Some(StaticRoute::SitemapXml);
+    }
     if path == DIAGNOSTICS_PATH || path == DIAGNOSTICS_PATH_WITH_SLASH {
         return Some(StaticRoute::Diagnostics);
     }
@@ -120,6 +387,9 @@ fn static_route_for_path(path: &str) -> Option<StaticRoute> {
     }
     if path == SEARCH_INDEX_PATH {
         return Some(StaticRoute::SearchIndex);
+    }
+    if path == PROJECT_INDEX_PATH {
+        return Some(StaticRoute::ProjectIndex);
     }
     if path == SEARCH_PATH {
         return Some(StaticRoute::Search);
@@ -174,6 +444,19 @@ fn render_cacheable_response(
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(state.with_live_reload(html)))
         }
+        ResponseCacheKey::Sitemap => {
+            let html = html::render_sitemap_page(
+                maki.published_sitemap_entries(),
+                AssetMode::External,
+                site_title,
+            );
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(state.with_live_reload(html)))
+        }
+        ResponseCacheKey::SitemapXml => Ok(http::Response::new(http::StatusCode::Ok)
+            .set_header("Content-Type", "application/xml; charset=utf-8")
+            .set_body(sitemap_xml(maki.published_sitemap_entries()))),
         ResponseCacheKey::Diagnostics => {
             let diagnostics = maki.diagnostics_without_external_links();
             let html = html::render_diagnostics_page(
@@ -206,7 +489,10 @@ fn render_cacheable_response(
         }
         ResponseCacheKey::SearchIndex => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "application/json; charset=utf-8")
-            .set_body(search_index_json(maki.search_entries()))),
+            .set_body(search_index_json(maki.published_search_entries()))),
+        ResponseCacheKey::ProjectIndex => Ok(http::Response::new(http::StatusCode::Ok)
+            .set_header("Content-Type", "application/json; charset=utf-8")
+            .set_body(project_index_json(maki)?)),
         ResponseCacheKey::NotePage(path) => {
             let html = maki.render_html_with_site_title(path, AssetMode::External, site_title)?;
             Ok(http::Response::new(http::StatusCode::Ok)
@@ -253,6 +539,12 @@ pub(super) fn handle_request(
             StaticRoute::Recents => {
                 return cacheable_response(state, &project, ResponseCacheKey::Recents, true);
             }
+            StaticRoute::Sitemap => {
+                return cacheable_response(state, &project, ResponseCacheKey::Sitemap, true);
+            }
+            StaticRoute::SitemapXml => {
+                return cacheable_response(state, &project, ResponseCacheKey::SitemapXml, true);
+            }
             StaticRoute::Diagnostics => {
                 return cacheable_response(state, &project, ResponseCacheKey::Diagnostics, true);
             }
@@ -270,6 +562,9 @@ pub(super) fn handle_request(
             StaticRoute::SearchIndex => {
                 return cacheable_response(state, &project, ResponseCacheKey::SearchIndex, true);
             }
+            StaticRoute::ProjectIndex => {
+                return cacheable_response(state, &project, ResponseCacheKey::ProjectIndex, true);
+            }
             StaticRoute::Search => {
                 let query = query_param(target.query, "q")?.unwrap_or_default();
                 let results = maki.search_titles(&query, SEARCH_PAGE_RESULT_LIMIT);
@@ -277,7 +572,7 @@ pub(super) fn handle_request(
                 let html = html::render_search_page(
                     &query,
                     &results,
-                    maki.search_entries().len(),
+                    maki.published_search_entries().len(),
                     AssetMode::External,
                     maki.config().project_title(),
                 );

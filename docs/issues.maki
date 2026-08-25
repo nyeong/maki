@@ -217,7 +217,8 @@ command는 shell string이 아니라 argv 배열로 받는다.
 
 v4에서 별도 sans IO `DocumentAnalysis`/`ProjectAnalysis`가 block, heading, note link, property, date occurrence와 source range를 제공하기 시작했다.
 note/heading link resolution과 LSP 자동완성·symbol도 이 surface를 사용한다.
-다만 기존 `Maki` runtime의 render/search/diagnostics와 JSON export는 아직 이를 공유하지 않는다.
+`Maki` runtime은 검색, 사이트맵, 프로젝트 인덱스 JSON의 공개 표면을 이 metadata/analysis 경계에 연결하기 시작했다.
+다만 render/diagnostics 전체가 parse 결과를 공유하는 구조, alias index, `{date}` timestamp 문법은 아직 남아 있다.
 
 == 의도
 
@@ -325,22 +326,24 @@ quote에는 `url`, `from`, `mode`가 특히 중요하다.
 
 == 성공 기준
 
-- [ ] `/.maki/search-index.json`에 note 외 heading/file/alias entry가 포함된다.
-- [ ] `maki serve` 자동완성에서 heading과 file name을 찾을 수 있다.
+- [x] `/.maki/search-index.json`에 note 외 heading/file entry가 포함된다.
+- [x] `maki serve` 자동완성에서 heading과 file name을 찾을 수 있다.
+- [ ] alias entry가 포함된다.
 - [x] `[[#heading]]`과 `[[target#heading]]`이 heading index로 resolve된다.
 - [x] 중복 heading은 `id` property로 구분할 수 있다.
-- [ ] JSON export가 note AST와 project index 중 적어도 하나를 안정적인 schema로 내보낸다.
-- [ ] date occurrence가 reference/timestamp/scheduled로 구분되어 agenda와 timeline을 분리할 수 있다.
+- [x] JSON export가 `schema_version`이 있는 project index schema를 내보낸다.
+- [x] date occurrence가 reference/event/scheduled/deadline/metadata로 구분된다.
+- [ ] `{date}` timestamp 문법으로 timeline 의미를 별도 표현한다.
 
---v status: todo
+--v status: done
 --v type: feature
 = sitemap 추가
 
-- [ ] sitemap.xml
-- [ ] /@/sitemap
+- [x] sitemap.xml
+- [x] /@/sitemap
   - 사람이 읽을 수 있게
 
-주의: 현재 `/@/`은 meta index이고 diagnostics는 `/@/diagnostics`다. sitemap은 별도 route로 남아 있다.
+`/@/`은 meta index이고 diagnostics는 `/@/diagnostics`다. sitemap은 `/@/sitemap` 별도 route로 제공한다.
 
 --v status: done
 --v type: bug

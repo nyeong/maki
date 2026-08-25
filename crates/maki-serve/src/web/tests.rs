@@ -94,7 +94,7 @@ fn test_source_note_does_not_include_live_reload_script() {
 }
 
 #[test]
-fn test_search_index_returns_note_titles() {
+fn test_search_index_returns_project_entries() {
     let maki = Maki::load(repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/.maki/search-index.json");
@@ -106,8 +106,36 @@ fn test_search_index_returns_note_titles() {
         response.get_header("Content-Type"),
         Some("application/json; charset=utf-8")
     );
+    assert!(body.contains("\"kind\":\"note\""));
     assert!(body.contains("\"title\":\"Maki Syntax\""));
     assert!(body.contains("\"path\":\"/maki-syntax\""));
+}
+
+#[test]
+fn test_search_index_includes_files_and_headings() {
+    let root = std::env::temp_dir().join(format!("maki-search-entries-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("alpha.maki"),
+        r#"--^ title: Alpha Note
+
+= Overview
+
+body"#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let response = handle_request(&state, &http::Request::get("/.maki/search-index.json")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert!(body.contains("\"kind\":\"note\",\"title\":\"Alpha Note\""));
+    assert!(body.contains("\"kind\":\"file\",\"title\":\"alpha.maki\""));
+    assert!(body.contains("\"kind\":\"heading\",\"title\":\"Overview\""));
+    assert!(body.contains("\"path\":\"/alpha#Overview\""));
 }
 
 #[test]
@@ -321,8 +349,92 @@ fn test_meta_index_links_internal_indexes() {
     assert_eq!(response.status(), http::StatusCode::Ok);
     assert!(body.contains("<title>Meta</title>"));
     assert!(body.contains("<a href=\"/@/recents\">Recents</a>"));
+    assert!(body.contains("<a href=\"/@/sitemap\">Sitemap</a>"));
     assert!(body.contains("<a href=\"/@/diagnostics\">Diagnostics</a>"));
     assert!(body.contains("<a href=\"/@/dates\">Dates</a>"));
+    assert!(body.contains("<a href=\"/.maki/project-index.json\">Project Index JSON</a>"));
+}
+
+#[test]
+fn test_sitemap_routes_list_notes() {
+    let root = std::env::temp_dir().join(format!("maki-sitemap-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("alpha.maki"), "--^ title: Alpha\n").unwrap();
+    fs::create_dir_all(root.join("notes")).unwrap();
+    fs::write(root.join("notes/beta.maki"), "--^ title: Beta\n").unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let page = handle_request(&state, &http::Request::get("/@/sitemap")).unwrap();
+    let page_body = String::from_utf8(page.body().to_vec()).unwrap();
+    let xml = handle_request(&state, &http::Request::get("/sitemap.xml")).unwrap();
+    let xml_body = String::from_utf8(xml.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(page.status(), http::StatusCode::Ok);
+    assert_eq!(
+        page.get_header("Content-Type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert!(page_body.contains("<title>Sitemap</title>"));
+    assert!(page_body.contains("<a href=\"/alpha\">Alpha</a>"));
+    assert!(page_body.contains("<code>alpha.maki</code>"));
+    assert!(page_body.contains("<a href=\"/notes/beta\">Beta</a>"));
+
+    assert_eq!(xml.status(), http::StatusCode::Ok);
+    assert_eq!(
+        xml.get_header("Content-Type"),
+        Some("application/xml; charset=utf-8")
+    );
+    assert!(xml_body.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+    assert!(xml_body.contains("<loc>/alpha</loc>"));
+    assert!(xml_body.contains("<loc>/notes/beta</loc>"));
+    assert!(!xml_body.contains("EventSource"));
+}
+
+#[test]
+fn test_project_index_json_exports_analysis() {
+    let root = std::env::temp_dir().join(format!("maki-project-index-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        r#"--^ title: Home
+--^ scheduled: <2026-08-26>
+
+= Intro
+
+See [[other#Target]] on [2026-08-25]."#,
+    )
+    .unwrap();
+    fs::write(root.join("other.maki"), "= Target\n").unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let response =
+        handle_request(&state, &http::Request::get("/.maki/project-index.json")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert_eq!(
+        response.get_header("Content-Type"),
+        Some("application/json; charset=utf-8")
+    );
+    assert!(body.contains("\"schema_version\":1"));
+    assert!(body.contains("\"documents\":["));
+    assert!(body.contains("\"source_path\":\"home.maki\""));
+    assert!(body.contains("\"headings\":["));
+    assert!(body.contains("\"title\":\"Intro\""));
+    assert!(body.contains("\"links\":["));
+    assert!(body.contains("\"target\":\"other#Target\""));
+    assert!(body.contains("\"target_span\":"));
+    assert!(body.contains("\"resolution\":{\"status\":\"found\""));
+    assert!(body.contains("\"dates\":["));
+    assert!(body.contains("\"kind\":\"scheduled\""));
+    assert!(body.contains("\"property_key\":\"scheduled\""));
+    assert!(body.contains("\"kind\":\"reference\""));
 }
 
 #[test]

@@ -348,9 +348,14 @@ impl Server {
             .iter()
             .find(|date| span_touches(date.span, offset))
         {
-            let origin = match date.origin {
+            let origin = match &date.origin {
                 DateOrigin::VisibleInline => "visible inline",
-                DateOrigin::PropertyValue => "property value",
+                DateOrigin::PropertyValue { key } => {
+                    return hover_markdown(
+                        format!("Maki date: `{}` (property:{key})", date.body),
+                        lsp_range(source, date.span),
+                    );
+                }
             };
             return hover_markdown(
                 format!("Maki date: `{}` ({origin})", date.body),

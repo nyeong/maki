@@ -9,14 +9,59 @@ fn search_entries_use_title_property_or_file_stem() {
     let maki = Maki::load(&project.root).unwrap();
 
     assert!(maki.search_entries().iter().any(|entry| {
-        entry.title() == "Alpha Note"
+        entry.kind() == SearchEntryKind::Note
+            && entry.title() == "Alpha Note"
             && entry.path() == "/alpha"
             && entry.source_path() == "alpha.maki"
     }));
     assert!(maki.search_entries().iter().any(|entry| {
-        entry.title() == "beta-note"
+        entry.kind() == SearchEntryKind::Note
+            && entry.title() == "beta-note"
             && entry.path() == "/beta-note"
             && entry.source_path() == "beta-note.maki"
+    }));
+}
+
+#[test]
+fn search_entries_include_source_files_and_headings() {
+    let project = temp_project("search-entry-kinds");
+    write_note_with_content(
+        &project,
+        "alpha.maki",
+        r#"--^ title: Alpha Note
+
+= Overview
+
+== Stable Heading
+--^ id: stable-heading
+
+body"#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert!(maki.search_entries().iter().any(|entry| {
+        entry.kind() == SearchEntryKind::File
+            && entry.title() == "alpha.maki"
+            && entry.path() == "/alpha"
+            && entry.source_path() == "alpha.maki"
+    }));
+    assert!(maki.search_entries().iter().any(|entry| {
+        entry.kind() == SearchEntryKind::Heading
+            && entry.title() == "Overview"
+            && entry.path() == "/alpha#Overview"
+            && entry.source_path() == "alpha.maki#Overview"
+    }));
+    assert!(maki.search_entries().iter().any(|entry| {
+        entry.kind() == SearchEntryKind::Heading
+            && entry.title() == "Stable Heading"
+            && entry.path() == "/alpha#stable-heading"
+            && entry.source_path() == "alpha.maki#Stable Heading"
+    }));
+
+    let results = maki.search_titles("stable", 10);
+    assert!(results.iter().any(|entry| {
+        entry.kind() == SearchEntryKind::Heading && entry.path() == "/alpha#stable-heading"
     }));
 }
 

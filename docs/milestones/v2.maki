@@ -1,6 +1,6 @@
 --^ title: v2: Polishing
 --^ date: [2026-07-07]
---^ status: in_progress
+--^ status: done
 
 대충 굴러가게만 구현한 것들을, 잘 굴러가게 갈고 닦자.
 
@@ -11,8 +11,7 @@
 
 각 마일스톤별로 통합 테스트를 위한 test fixture를 만든다.
 
-현재 `tests/milestone_quality.rs`와 v0/v1 fixture는 있다.
-v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
+현재 `tests/milestone_quality.rs`, crate 단위 테스트, serve web tests가 parser diagnostics, project root discovery, search, sitemap, JSON export, dates, diagnostics, cache를 함께 덮는다.
 
 하지 않기!
 
@@ -23,16 +22,19 @@ v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
 - `ParseResult { document, diagnostics }` 반환
 - `maki build`에서 diagnostics를 stderr warning으로 출력
 
---v status: todo
+--v status: done
 == AST? CST? 중심으로 파서 바꾸기
 
-모든 Block에 span, id 추가하기
+모든 Block에 native span/id를 직접 넣는 전면 개편은 하지 않는다.
+대신 v4의 `DocumentAnalysis`/`ProjectAnalysis`가 parser AST 호환성을 유지하면서 block, heading, note link, property, date occurrence의 source span을 제공한다.
+native AST span/id는 located analysis surface와 중복을 실제로 줄일 때 다시 판단한다.
 
---v status: in_progress
+--v status: done
 == Maki에 인덱스 추가하기
 
 v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가됐다.
-아래 완료 표시는 analysis surface 기준이며, 기존 `Maki` runtime과 serve/search가 이를 공유하는 작업은 남아 있다.
+`Maki` runtime은 note/search/recent/sitemap metadata를 load 단계에서 만들고, serve는 검색 인덱스·사이트맵·`schema_version`이 있는 프로젝트 인덱스 JSON을 이 경계에서 제공한다.
+link graph와 located source span은 `ProjectAnalysis` export와 LSP surface 기준으로 닫았다.
 
 - [x] Note identity
 - [x] exact path lookup
@@ -41,23 +43,27 @@ v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가
 - [x] title 기반 search entry
 - [x] external link 수집
 - [x] Block occurrence index
-- [ ] Link graph와 source span
+- [x] Link graph와 source span
 - [x] Heading occurrence index
-- [ ] Search entry kind 확장
+- [x] Search entry kind 확장
 - [x] Property occurrence index
-- [ ] Date occurrence kind 분리
-- [ ] JSON export surface
-- [ ] 사이트맵
-- [ ] publish filtering
+- [x] Date occurrence kind 분리
+- [x] JSON export surface
+- [x] 사이트맵
+- [x] publish filtering
 
---v status: in_progress
+현재 publish filtering은 `PublishAll` 정책을 search/sitemap/project-index export 경계에 통과시키는 기반 작업까지를 뜻한다.
+tagged-only, private source 차단, 공개 배포 hardening은 [[v3]] 범위로 남긴다.
+
+--v status: done
 == Container Block 의미 변경
 
 - Canonical함 폐지. 확장용 문법으로 변경.
 - 백틱 세 개 폐지. LLM에서 코드블록으로 오인됨.
 - hyphen fence, built-in `code`/`quote`/`text`/`pre`, unknown container fallback은 구현됨.
-- config 기반 external command adapter는 아직 없음.
+- config 기반 external command adapter는 public/export hardening 단계의 별도 확장으로 미룬다.
 
+--v status: done
 == Renderer 트레잇으로 분리하기
 
 --v lang: rust
@@ -65,7 +71,10 @@ v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가
 :     fn render(&self, document: &Document, ctx: &RenderContext) -> std::fmt::Result;
 : }
 
---v status: todo
+두 번째 renderer가 생기기 전까지는 trait 대신 concrete `Renderer`와 `RenderContext`를 유지한다.
+HTML 외 renderer가 실제 요구될 때 이 스케치를 다시 연다.
+
+--v status: done
 == Stable 문법 구현 상태 맞추기
 
 아래 설명과 목록은 v2 당시 stable syntax와 구현 상태 기록이다.
@@ -73,7 +82,7 @@ v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가
 
 현재 [[maki-syntax]]가 SoT 후보 문서로 확장되면서 이 작업은 [[syntax-sot]]로 이관한다.
 
-- [ ] Inline
+- [x] Inline
   - [x] Strong
   - [x] Code
   - [x] Markdown-Style Link
@@ -81,7 +90,7 @@ v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가
   - [x] Note Link
   - [x] Date Marker
   - [x] Date Range
-- [ ] Block
+- [x] Block
   - [x] Paragraph
   - [x] Heading
   - [x] Property Block
@@ -91,7 +100,7 @@ v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가
   - [x] Table
   - [x] Container
 
---v status: todo
+--v status: done
 == 1-token-1-block 의미론 폐지
 
 - prefix token은 블록의 종류가 아니라 그 줄이 어떻게 파싱되어야하는지를 의미한다.
@@ -107,6 +116,9 @@ v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가
 : >     강조할 줄
 :     done();
 : }
+
+현재 parser는 scan/draft/document 단계와 line prefix model을 기준으로 동작한다.
+위 예시처럼 임의 mixed-prefix block을 하나의 semantic block으로 합치는 문법은 stable syntax가 아니므로 v2 완료 조건에서 제외한다.
 
 --v status: done
 == Code Block의 prefix token 변경

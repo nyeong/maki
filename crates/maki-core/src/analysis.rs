@@ -83,10 +83,10 @@ pub struct PropertyOccurrence {
     pub value_span: SourceSpan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateOrigin {
     VisibleInline,
-    PropertyValue,
+    PropertyValue { key: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,7 +177,9 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         collect_inlines(
             source,
             &parsed_value,
-            DateOrigin::PropertyValue,
+            DateOrigin::PropertyValue {
+                key: property.key.clone(),
+            },
             &mut note_links,
             &mut dates,
         );
@@ -440,15 +442,15 @@ fn collect_inlines(
                     });
                 }
             }
-            Inline::DateStamp(stamp) => collect_date(source, *stamp, origin, dates),
+            Inline::DateStamp(stamp) => collect_date(source, *stamp, origin.clone(), dates),
             Inline::DateRange(range) => {
                 for stamp in [range.start(), range.end()] {
-                    collect_date(source, stamp, origin, dates);
+                    collect_date(source, stamp, origin.clone(), dates);
                 }
             }
             _ => {
                 if let Some(children) = inline.nested_inlines() {
-                    collect_inlines(source, children, origin, note_links, dates);
+                    collect_inlines(source, children, origin.clone(), note_links, dates);
                 }
             }
         }

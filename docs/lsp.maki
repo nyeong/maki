@@ -81,6 +81,21 @@ Marketplace 배포 전에는 public repository URL과 공개된 commit revision�
 
 extension MVP 범위는 [[milestones/zed-local]], 반복 개발 절차는 [[milestones/zed-dev-loop]]에 기록한다.
 
+== VS Code
+
+VS Code는 임의 stdio language server를 `settings.json`만으로 바로 등록하는 모델이 아니다.
+Maki 쪽 실행 계약은 아래처럼 단순하게 유지한다.
+
+- command: `maki`
+- arguments: `["lsp"]`
+- language id: `maki`
+- file pattern: `**/*.maki`
+- transport: stdio
+- document sync: full document sync
+
+따라서 VS Code에서 쓰려면 최소 extension 또는 generic LSP client extension이 이 계약을 `maki lsp`에 연결하면 된다.
+공식 VS Code extension packaging과 marketplace 배포는 현재 v4 범위가 아니며, 필요하면 Zed end-user release 이후 별도 마일스톤으로 분리한다.
+
 - [Zed Developing Extensions]
 - [Zed Language Extensions]
 

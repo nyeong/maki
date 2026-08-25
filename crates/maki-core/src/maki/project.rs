@@ -3,13 +3,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::{
+    analysis::{self, ProjectAnalysis, SourceSnapshot},
     html::{self, AssetMode, NoteInfo, RenderContext},
     parser,
 };
 
 use super::{
     Error, MAKI_SOURCE_EXTENSION, NoopProjectLoadMeter, PROJECT_FILE_NAME, ProjectLoadMeter,
-    config::MakiConfig,
+    SearchEntryKind, SitemapEntry,
+    config::{MakiConfig, PublishPolicy},
     dates::{DateIndex, collect_date_index},
     files::{get_relative_path, list_maki_files},
     links::{
@@ -31,6 +33,7 @@ pub struct Maki {
     pub(super) external_links: Vec<ExternalLinkRef>,
     pub(super) search_entries: Vec<SearchEntry>,
     pub(super) recent_entries: Vec<RecentEntry>,
+    pub(super) sitemap_entries: Vec<SitemapEntry>,
     pub(super) config: MakiConfig,
 }
 
@@ -188,8 +191,24 @@ impl Maki {
         &self.search_entries
     }
 
+    pub fn published_search_entries(&self) -> &[SearchEntry] {
+        match self.config.publish_policy() {
+            PublishPolicy::PublishAll => &self.search_entries,
+        }
+    }
+
     pub fn recent_entries(&self) -> &[RecentEntry] {
         &self.recent_entries
+    }
+
+    pub fn sitemap_entries(&self) -> &[SitemapEntry] {
+        &self.sitemap_entries
+    }
+
+    pub fn published_sitemap_entries(&self) -> &[SitemapEntry] {
+        match self.config.publish_policy() {
+            PublishPolicy::PublishAll => &self.sitemap_entries,
+        }
     }
 
     #[allow(dead_code)]
@@ -197,15 +216,46 @@ impl Maki {
         &self.date_index
     }
 
+    pub fn analysis(&self) -> Result<ProjectAnalysis, Error> {
+        let mut sources = Vec::new();
+        for note in self.notes.values() {
+            sources.push((
+                note.source_path().to_path_buf(),
+                std::fs::read_to_string(&note.absolute_path)
+                    .map_err(|_source| Error::ReadNoteFailed(note.absolute_path.clone()))?,
+            ));
+        }
+        let snapshots = sources
+            .iter()
+            .map(|(path, source)| SourceSnapshot {
+                path: path.as_path(),
+                source,
+            })
+            .collect::<Vec<_>>();
+
+        Ok(analysis::analyze_project(&snapshots))
+    }
+
+    pub fn published_analysis(&self) -> Result<ProjectAnalysis, Error> {
+        match self.config.publish_policy() {
+            PublishPolicy::PublishAll => self.analysis(),
+        }
+    }
+
     pub fn search_titles(&self, query: &str, limit: usize) -> Vec<SearchEntry> {
         let query = normalize_key(query.trim());
 
         if query.is_empty() {
-            return self.search_entries.iter().take(limit).cloned().collect();
+            return self
+                .published_search_entries()
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect();
         }
 
         let mut matches = self
-            .search_entries
+            .published_search_entries()
             .iter()
             .filter_map(|entry| search_match_rank(entry.title(), &query).map(|rank| (rank, entry)))
             .collect::<Vec<_>>();
@@ -264,12 +314,13 @@ impl Maki {
         let date_index = collect_date_index(&notes);
         let external_links = collect_external_links(&notes);
         let note_metadata_entries = notes.values().map(Note::metadata_entry).collect::<Vec<_>>();
-        let search_entries = note_metadata_entries
-            .iter()
-            .cloned()
-            .map(NoteMetadataEntry::into_search_entry)
-            .collect();
+        let search_entries = collect_search_entries(&notes, &note_metadata_entries);
         let recent_entries = collect_recent_entries(note_metadata_entries);
+        let sitemap_entries = notes
+            .values()
+            .map(Note::metadata_entry)
+            .map(NoteMetadataEntry::into_sitemap_entry)
+            .collect();
         metrics.record_project_load_phase("metadata", started.elapsed());
 
         Ok(Self {
@@ -280,6 +331,7 @@ impl Maki {
             external_links,
             search_entries,
             recent_entries,
+            sitemap_entries,
             config,
         })
     }
@@ -375,4 +427,47 @@ impl Maki {
 
         self.resolve_note_route(target)
     }
+}
+
+fn collect_search_entries(
+    notes: &BTreeMap<NoteRef, Note>,
+    metadata_entries: &[NoteMetadataEntry],
+) -> Vec<SearchEntry> {
+    let mut entries = metadata_entries
+        .iter()
+        .cloned()
+        .map(NoteMetadataEntry::into_search_entry)
+        .collect::<Vec<_>>();
+
+    for note in notes.values() {
+        let source_path = note.source_path().display().to_string();
+        entries.push(SearchEntry::new(
+            SearchEntryKind::File,
+            source_path.clone(),
+            note.note_ref().web_path(),
+            source_path.clone(),
+        ));
+
+        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+            continue;
+        };
+        let parsed = parser::parse(&source);
+        for block in &parsed.document.blocks {
+            let parser::BlockKind::Heading { raw_body, .. } = &block.kind else {
+                continue;
+            };
+            let anchor = block
+                .property("id")
+                .filter(|id| !id.is_empty())
+                .unwrap_or(raw_body);
+            entries.push(SearchEntry::new(
+                SearchEntryKind::Heading,
+                *raw_body,
+                format!("{}#{anchor}", note.note_ref().web_path()),
+                format!("{source_path}#{}", *raw_body),
+            ));
+        }
+    }
+
+    entries
 }

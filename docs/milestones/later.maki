@@ -27,10 +27,11 @@
 
 = 검색 확장
 
-v2에서 title 기반 검색은 들어왔으므로, 남은 검색 확장은 project index를 기준으로 넓힌다.
+v2에서 title, heading, file name 검색은 들어왔으므로, 남은 검색 확장은 project index를 기준으로 품질을 높인다.
 
-1. heading까지도
-2. file name, alias 자동완성까지도
+1. alias 자동완성
+2. property/tag 기반 검색
+3. kind별 ranking과 filter
 
 = org TODO percentage 옮기기
 

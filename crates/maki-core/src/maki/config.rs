@@ -19,6 +19,10 @@ impl MakiConfig {
         &self.home_mode
     }
 
+    pub fn publish_policy(&self) -> &PublishPolicy {
+        &self.publish_policy
+    }
+
     pub fn project_source_root(&self, project_root: &Path) -> PathBuf {
         project_root.join(&self.source_dir)
     }

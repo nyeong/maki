@@ -29,7 +29,7 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - heading occurrence: level, title, anchor, marker span, title span
 - property occurrence: direction, key/value, line/key/value span
 - note link occurrence: 전체 span, target span, resolution
-- date occurrence: visible inline/property value origin, kind, span
+- date occurrence: visible inline/property value origin, property key, kind, span
 - diagnostic: source path, span, kind, message
 
 = Range Rules

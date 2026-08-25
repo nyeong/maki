@@ -1,5 +1,5 @@
 --^ title: v4: Tooling
---^ status: doing
+--^ status: done
 
 편하게 maki를 작성하기 위한 주변 도구 세팅
 
@@ -150,17 +150,18 @@ LSP와 HTML/search/diagnostics가 함께 쓸 수 있는 sans IO 분석 API를 �
 - [x] `workspace/symbol`로 note title과 heading을 검색한다.
 - [x] `textDocument/hover`로 property 의미, link resolve 결과, date marker 의미를 보여준다.
 
---v status: doing
+--v status: done
 == Editor 연동
 
 초기 editor 연동은 로컬 설정 수준으로 둔다.
 
 - [x] `maki lsp` 실행 방법을 문서화한다.
 - [x] Zed local development extension에 `.maki` language와 `maki lsp` 연결 설정을 추가한다.
-- [ ] 필요하면 VS Code용 최소 설정 예시를 문서화한다.
+- [x] VS Code용 최소 연결 계약을 문서화한다.
 - [x] `tree-sitter-maki` 기반 syntax highlighting과 heading outline 설정을 추가한다.
 
-Zed dev extension의 자동 검증은 통과했지만, 실제 Zed UI에서 highlighting과 LSP 기능을 확인하는 수동 검증은 [[zed-local]]에 남아 있다.
+Zed dev extension의 자동 검증과 실제 Zed UI 수동 검증은 [[zed-local]]에서 닫았다.
+VS Code는 공식 extension packaging 없이 `maki lsp` stdio 연결 계약만 v4 범위로 둔다.
 
 = 성공기준
 

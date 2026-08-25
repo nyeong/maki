@@ -7,7 +7,7 @@ use std::{
 use crate::{
     maki::{
         self, DateIndex, DateOccurrence, DateOrigin, DatePeriod, DateRelation, ProjectDiagnostic,
-        ProjectDiagnosticKind, ProjectDiagnosticSummary, RecentEntry, SearchEntry,
+        ProjectDiagnosticKind, ProjectDiagnosticSummary, RecentEntry, SearchEntry, SitemapEntry,
     },
     parser::{Date, DateStampTarget, IsoWeek},
 };
@@ -24,6 +24,7 @@ const RECENTS_TEMPLATE: &str = include_str!("../../../../templates/recents.maki"
 const DATES_INDEX_TEMPLATE: &str = include_str!("../../../../templates/dates-index.maki");
 const DATE_PERIOD_TEMPLATE: &str = include_str!("../../../../templates/date-period.maki");
 const DIAGNOSTICS_TEMPLATE: &str = include_str!("../../../../templates/diagnostics.maki");
+const SITEMAP_TEMPLATE: &str = include_str!("../../../../templates/sitemap.maki");
 const KST_OFFSET_SECONDS: u64 = 9 * 60 * 60;
 
 pub fn render_search_page(
@@ -42,7 +43,7 @@ pub fn render_search_page(
     renderer.push_raw("<main class=\"maki-search-page\">");
     renderer.push_raw("<p class=\"maki-search-summary\">");
     if query.trim().is_empty() {
-        renderer.push_raw(&format!("Showing {total_entries} titles."));
+        renderer.push_raw(&format!("Showing {total_entries} entries."));
     } else {
         renderer.push_raw(&format!("{} matches for ", results.len()));
         renderer.push_raw("<code>");
@@ -52,7 +53,7 @@ pub fn render_search_page(
     renderer.push_raw("</p>");
 
     if results.is_empty() {
-        renderer.push_raw("<p class=\"maki-search-empty\">No matching titles.</p>");
+        renderer.push_raw("<p class=\"maki-search-empty\">No matching entries.</p>");
     } else {
         renderer.push_raw("<ul class=\"maki-search-page-results\">");
         for entry in results {
@@ -61,6 +62,8 @@ pub fn render_search_page(
             renderer.push_raw("\">");
             renderer.escape_html_into(entry.title());
             renderer.push_raw("</a><span>");
+            renderer.escape_html_into(entry.kind().as_str());
+            renderer.push_raw(": ");
             renderer.escape_html_into(entry.source_path());
             renderer.push_raw("</span></li>");
         }
@@ -73,6 +76,17 @@ pub fn render_search_page(
 
 pub fn render_meta_index_page(asset_mode: AssetMode, site_title: Option<&str>) -> String {
     render_project_maki_source(META_TEMPLATE, asset_mode, site_title)
+}
+
+pub fn render_sitemap_page(
+    entries: &[SitemapEntry],
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+) -> String {
+    let body = sitemap_page_body_source(entries);
+    let source = render_maki_template(SITEMAP_TEMPLATE, &[("{{body}}", &body)]);
+
+    render_project_maki_source(&source, asset_mode, site_title)
 }
 
 pub fn render_recents_page(
@@ -227,6 +241,29 @@ fn recents_page_body_source(entries: &[RecentEntry]) -> String {
         push_maki_single_line(&mut source, &modified);
         source.push(' ');
         references.push_link(&mut source, entry.title(), entry.path());
+        source.push('\n');
+    }
+
+    references.append_to(&mut source);
+    source
+}
+
+fn sitemap_page_body_source(entries: &[SitemapEntry]) -> String {
+    let mut source = String::new();
+    let mut references = MakiReferences::default();
+
+    if entries.is_empty() {
+        source.push_str("No notes.\n");
+        return source;
+    }
+
+    for entry in entries {
+        source.push_str("- ");
+        references.push_link(&mut source, entry.title(), entry.path());
+        source.push(' ');
+        source.push('`');
+        push_maki_single_line(&mut source, entry.source_path());
+        source.push('`');
         source.push('\n');
     }
 
