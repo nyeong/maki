@@ -239,8 +239,8 @@ Docs consistency 검토에서 원래 차이 목록에 빠졌던 stable syntax를
 
 = 나중에 할 것
 
-- heading fragment resolution
-- source span/range 기반 diagnostics
+- heading fragment resolution: [[v4]]에서 완료
+- source span/range 기반 diagnostics: [[v4]]에서 첫 located analysis surface 완료
 - reference definition completion
 - footnote backlink/index page
 - syntax migration command

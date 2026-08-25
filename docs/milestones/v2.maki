@@ -31,17 +31,20 @@ v2 전체를 닫기 위한 fixture coverage는 아직 남아 있다.
 --v status: in_progress
 == Maki에 인덱스 추가하기
 
+v4에서 sans IO `DocumentAnalysis`/`ProjectAnalysis` occurrence index가 추가됐다.
+아래 완료 표시는 analysis surface 기준이며, 기존 `Maki` runtime과 serve/search가 이를 공유하는 작업은 남아 있다.
+
 - [x] Note identity
 - [x] exact path lookup
 - [x] case-insensitive path lookup
 - [x] sibling/project-wide stem lookup
 - [x] title 기반 search entry
 - [x] external link 수집
-- [ ] Block index
+- [x] Block occurrence index
 - [ ] Link graph와 source span
-- [ ] Heading index
+- [x] Heading occurrence index
 - [ ] Search entry kind 확장
-- [ ] Property occurrence index
+- [x] Property occurrence index
 - [ ] Date occurrence kind 분리
 - [ ] JSON export surface
 - [ ] 사이트맵

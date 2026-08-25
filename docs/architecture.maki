@@ -2,15 +2,17 @@
 
 = 코드 구조
 
-Maki는 workspace 안의 네 crate 경계로 나뉜다.
+Maki는 workspace 안의 다섯 crate 경계로 나뉜다.
 
 - root `maki` binary: CLI parsing, command 실행, stderr 출력 포맷.
-- `maki-core`: parser, HTML renderer, project domain, note/link/date/diagnostics/search metadata.
+- `maki-core`: parser, source map, sans IO analysis, HTML renderer, project domain, note/link/date/diagnostics/search metadata.
 - `maki-http`: Maki 의미를 모르는 raw HTTP request/response parsing and serialization.
+- `maki-lsp`: stdio LSP message 처리와 editor buffer cache를 맡는 protocol adapter.
 - `maki-serve`: Maki web route handling, live reload, watcher, response cache, git source runtime, Prometheus metrics.
 
 crate 경계는 "대체 가능성"을 기준으로 둔다.
 `maki-http`는 나중에 `hyper`/`axum` 같은 외부 HTTP stack으로 바뀔 수 있는 얇은 계층이고, `maki-serve`는 Maki route/cache/reload/metrics 정책을 담는다.
+`maki-lsp`는 filesystem/editor IO를 맡고, 문서 분석과 source position 변환은 `maki-core`를 사용한다.
 
 = 파싱
 
@@ -78,3 +80,12 @@ crate 경계는 "대체 가능성"을 기준으로 둔다.
 - Note Link resolve
 - HTML 렌더링
 - ...
+
+= 분석
+
+기존 parser AST는 HTML renderer의 compatibility surface로 유지한다.
+`maki-core::analysis`는 AST가 빌린 원문 slice와 `SourceMap`을 사용해 block, heading, note link, property, date occurrence의 byte span을 계산한다.
+`analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 note/heading link를 resolve하고 semantic diagnostic을 만든다.
+
+`maki-lsp`는 workspace의 source와 열린 editor buffer를 snapshot으로 구성한 뒤 이 analysis API를 호출한다.
+현재는 snapshot 전체를 다시 분석하며 incremental index는 아직 없다.

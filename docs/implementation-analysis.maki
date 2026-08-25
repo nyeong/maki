@@ -3,19 +3,20 @@
 
 = 결론
 
-현재 maki는 v0/v1의 목표였던 "부분 파싱, HTML 렌더링, 프로젝트 단위 서빙, live reload"를 넘어서 v2 polishing과 운영 기반의 일부까지 구현된 상태다.
-특히 syntax SoT에 맞춘 reference link/footnote/Hyper Link와 inline model, `NoteIndex`, case-insensitive wikilink, paragraph boundary, ordered list, project diagnostics, title search, navigation shell, runtime assets, git source serving, Prometheus metrics listener가 이미 들어와 있다.
+현재 maki는 v0/v1의 프로젝트 단위 렌더링·서빙을 넘어 v2 polishing, v5 관측성, v4 분석/LSP의 첫 vertical slice까지 구현한 상태다.
+syntax SoT에 맞춘 parser와 HTML renderer, `NoteIndex`, project diagnostics/search/runtime assets/git source serving/Prometheus metrics에 더해 `SourceMap`, `DocumentAnalysis`/`ProjectAnalysis`, stdio `maki lsp`가 들어와 있다.
 
-이제 병목은 "NoteIndex를 세우기"가 아니라, 현재 흩어져 있는 note lookup, title loading, diagnostics, search metadata를 안정적인 project index로 정리하는 것이다.
-현재 구현은 동작하지만 note title을 여러 경로에서 다시 읽고 파싱하며, diagnostics는 link graph/source span 없이 재파싱한다.
-external link check는 serve의 기본 diagnostics에서는 빠져 있지만, full/build diagnostics에는 아직 동기적으로 붙어 있다.
+v4 분석 surface는 heading, note link, property, date와 parser/semantic diagnostic의 source range를 제공하고 note/heading link를 snapshot 안에서 resolve한다.
+다만 기존 `Maki` runtime index와 새 `ProjectAnalysis`는 아직 별도 경로이며, located occurrence는 기존 AST가 빌린 source slice에서 range를 복원하므로 nested Maki body와 reference definition target까지 완전히 다루지는 않는다.
+external link check는 serve의 기본 diagnostics에서는 빠져 있지만 full/build diagnostics에는 아직 동기적으로 붙어 있다.
 
 추천 순서:
 
-- P0: `NoteIndex`를 `ProjectIndex`에 가깝게 확장해 note title/search metadata/link diagnostics의 중복 파싱을 줄인다.
+- P0: `ProjectAnalysis`를 serve/build의 project runtime과 연결해 note title/search metadata/link diagnostics의 중복 파싱을 줄인다.
+- P0: nested Maki body와 reference definition target까지 located occurrence 범위를 넓힌다.
 - P0: external link diagnostics를 명시 옵션 또는 캐시/타임아웃 정책 뒤로 옮긴다.
 - P1: `/@/sitemap`과 `sitemap.xml`을 추가한다. 현재 `/@/`은 meta index이고 diagnostics는 `/@/diagnostics`다.
-- P1: Block span/id와 heading/property/date occurrence를 최소 도입해 line-precise link diagnostics, stable heading id, 검색 확장, agenda/timeline 기반을 준비한다.
+- P1: 현재 analysis occurrence를 검색·agenda/timeline·JSON export의 공통 data surface로 확장한다.
 - P1: `PublishPolicy`를 route/render/search/diagnostics boundary에 실제로 연결한다.
 - P2: TBD/미구현 문법 fallback의 의미를 별도 fallback block으로 보존한다.
 - P2 이후: Renderer trait과 큰 AST/CST 개편.
@@ -25,17 +26,19 @@ external link check는 serve의 기본 diagnostics에서는 빠져 있지만, fu
 
 == CLI
 
-`maki serve`와 `maki build` 두 명령이 있다.
+`maki serve`, `maki build`, `maki lsp` 세 명령이 있다.
 `serve`는 local path 또는 `--git` source를 받을 수 있다.
 local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없으면 입력 path를 root로 보는 fallback을 유지한다.
 `build`도 파일 기준으로 `maki.toml`을 찾아 프로젝트 컨텍스트에서 링크를 해석하고, 없으면 단일 파일 렌더링으로 떨어진다.
 `serve --metrics HOST:PORT`를 주면 별도 listener에서 Prometheus text exposition을 제공한다.
+`lsp`는 stdio language server를 실행하고 workspace 또는 `maki.toml`의 project source를 읽는다.
 
 근거:
 
 - `src/cli.rs`: serve/build CLI parsing과 option validation.
 - `src/commands.rs`: path serve, git serve, build command 실행.
 - `src/output.rs`: parse warning과 project diagnostics summary 출력 포맷.
+- `crates/maki-lsp/src/lib.rs`: stdio protocol loop, editor buffer cache, LSP feature adapter.
 - `crates/maki-serve/src/git_source.rs`: git mirror/checkout/update runtime.
 - `crates/maki-serve/src/metrics/`: low-cardinality Prometheus metric registry와 text exposition serialization.
 - `tests/milestone_quality.rs`, `tests/milestone_quality/`: project root discovery, source directory, git serve polling, build diagnostics.
@@ -89,9 +92,9 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 
 - [[maki-syntax]]의 reference definition, reference link/footnote, Hyper Link와 새 inline AST는 현재 parser와 일치한다.
 - prefix escape, quote `mode`, whitespace 없는 container header, built-in container property, `|` table separator, nested Maki의 바깥 reference scope도 구현과 테스트가 있다.
-- v2 이후에는 source span, block id, fallback block kind가 필요하다.
-- 현재 `BlockKind`는 reference definition까지 보존하지만 source span이 없어 lint, query, precise diagnostics에는 아직 얕다.
-- paragraph boundary, NumberDot width, reference definition boundary는 안정화되었으므로 다음 parser 기반 작업은 span/id가 맞다.
+- `ParseDiagnostic`과 line/draft 단계는 byte span을 보존한다.
+- renderer가 쓰는 `BlockKind` AST는 native span을 갖지 않으며, 별도 `DocumentAnalysis`가 AST의 borrowed source slice에서 top-level occurrence range를 복원한다.
+- 다음 parser 기반 작업은 nested Maki body와 reference definition target의 위치를 보존하고, 필요성이 확인되면 native AST span/id로 수렴하는 것이다.
 
 == Domain
 
@@ -101,6 +104,7 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 `NoteIndex`는 exact path, normalized path, project-wide normalized stem, sibling normalized stem lookup을 가진다.
 Document reference definition target 중 local Maki note 후보는 같은 resolution을 사용하고, HTTP/HTTPS target과 Hyper Link는 external link index에 들어간다.
 Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index에 들어가며, occurrence context는 `[ ]` 또는 `[x]` state를 보존한다.
+별도 sans IO `ProjectAnalysis`는 source snapshot 목록에서 document metadata, block/heading/note-link/property/date occurrence와 semantic diagnostics를 계산한다.
 
 근거:
 
@@ -110,12 +114,14 @@ Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index
 - `crates/maki-core/src/maki/dates/context.rs`, `crates/maki-core/src/maki/tests/dates.rs`: list item date context와 todo state 보존.
 - `crates/maki-core/src/maki/config.rs`: project config parser, source directory validation.
 - `crates/maki-core/src/maki/files.rs`: project file listing and relative path handling.
+- `crates/maki-core/src/source.rs`, `crates/maki-core/src/analysis.rs`: source position 변환과 snapshot analysis.
 
 평가:
 
 - "프로젝트 전체가 의미 단위"라는 멘탈 모델의 최소 형태는 구현되어 있다.
-- 그러나 아직 index라기보다 lookup table과 derived metadata 묶음에 가깝다.
-- title/search metadata는 만들어지지만, link graph, block index, heading index, publish boundary는 없다.
+- `Maki` runtime 자체는 아직 index라기보다 lookup table과 derived metadata 묶음에 가깝다.
+- `ProjectAnalysis`에는 block/heading/link/property/date occurrence가 있지만 serve의 search/render/diagnostics는 아직 이 surface를 공유하지 않는다.
+- publish boundary와 JSON export는 없다.
 - link 렌더링 때 대상 note title을 다시 파일에서 읽고 파싱한다.
 - diagnostics도 response cache miss나 warm 단계에서는 각 note를 다시 읽고 파싱한다.
 
@@ -124,12 +130,14 @@ Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index
 현재 link resolution 순서:
 
 - target에서 leading slash와 `.maki` suffix를 정규화한다.
+- 첫 `#` 앞의 note target을 먼저 resolve하고, 뒤의 heading anchor를 선택된 note에서 찾는다.
+- note target이 비어 있으면 현재 note를 선택한다.
 - target을 exact `NoteRef`로 본다. exact match가 최우선이다.
-- `#heading` 단독 target은 ambiguous로 둔다.
 - slash가 있는 target은 normalized path로 본다.
 - slash가 없는 target은 현재 문서 sibling stem을 먼저 본다.
 - 마지막으로 project-wide normalized file stem을 본다.
 - 여러 후보가 있으면 ambiguous다.
+- heading은 `id` property가 있으면 그 값을, 없으면 raw heading text를 anchor로 쓰며 exact match 뒤 case-insensitive match를 시도한다.
 
 근거:
 
@@ -141,7 +149,8 @@ Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index
 
 - `wikilink가 case-insensitive하지 않음` 이슈는 구현상 해결되어 있다.
 - 현재 normalization은 `to_lowercase()` 기반이다. Unicode normalization/NFC-NFD 문제는 아직 별도 정책이 없다.
-- heading anchor resolution은 아직 구현되지 않았다.
+- heading anchor resolution은 `Maki` runtime과 `ProjectAnalysis` 양쪽에 구현되어 있다.
+- 두 resolution 구현이 중복되어 있으므로 장기적으로 같은 analysis/index 경계를 사용해야 한다.
 
 == HTML Renderer
 
@@ -169,7 +178,8 @@ project page에는 nav shell, search input, meta index link, TOC/search scripts�
 - search page와 diagnostics page는 구현되어 있다.
 - `code`, `pre`/`text`, `quote` container는 renderer가 직접 처리한다.
 - unknown container는 `pre.maki-container-unknown`로 보존한다.
-- 다만 heading id가 heading text 그대로이고 중복/slug/anchor 안정성이 없다.
+- heading의 비어 있지 않은 `id` property는 HTML anchor에 반영된다. `id`가 없으면 raw heading text를 사용하므로 rename 안정성은 없다.
+- 중복 anchor는 link resolution에서는 ambiguous지만 HTML 문서 안에는 중복 id가 생길 수 있다.
 - full Renderer trait 분리는 아직 이르다. HTML 외 렌더러가 생길 때 분리해도 늦지 않다.
 
 == Web
@@ -203,6 +213,9 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 - Parser의 scan/draft/document 3단계는 현재 문서화된 architecture와 잘 맞는다.
 - `maki-core`, `maki-http`, `maki-serve`가 분리되어 parser/render/project domain이 serving runtime과 HTTP wire format에 의존하지 않는다.
+- `maki-lsp`가 protocol/filesystem IO만 맡고 sans IO 분석은 `maki-core`에 둔다.
+- `SourceMap`이 byte/line/UTF-16 position 변환을 한 곳에 모은다.
+- `DocumentAnalysis`/`ProjectAnalysis`가 기존 renderer AST를 깨지 않고 located tooling surface를 제공한다.
 - `maki` domain과 `html` renderer가 core crate 안에서 분리되어 있어 project-aware render를 구현하기 쉽다.
 - `maki-http` crate가 Maki route 정책을 모르도록 분리한 점은 좋다.
 - `RenderContext`가 이미 있어 renderer가 project lookup을 직접 알 필요가 없다.
@@ -213,10 +226,10 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 == 부족한 추상화
 
-- `Maki`가 아직 "project index"가 아니라 note map, note lookup index, date index, external links, search entries, recent entries를 직접 들고 있다.
+- `Maki`와 `ProjectAnalysis`가 별도 project model이라 parse/index 결과를 공유하지 않는다.
 - `NoteRef`가 case, unicode, slash, extension normalization 정책을 타입 차원에서 갖지 않는다.
-- `Block`에 span/id가 없어 lint, heading link, precise diagnostics, query가 어렵다.
-- link diagnostics에 line number가 거의 없다. parser diagnostics만 line을 가진다.
+- 기존 `Block` AST는 native span/id가 없고 located analysis는 nested body/reference target까지 완전하지 않다.
+- LSP note-link diagnostics는 정확한 target range가 있지만 기존 serve/build diagnostics는 같은 occurrence index를 쓰지 않는다.
 - route, render, search, diagnostics, sitemap, publish policy가 공유할 "public note set" 개념이 없다.
 - response cache는 `web` 계층에 있어 HTTP 응답 재사용만 해결한다. `maki` 계층의 raw/source/AST/metadata 재사용 경계는 아직 없다.
 - external link check 정책이 diagnostics 수집에 직접 붙어 있다.
@@ -243,7 +256,23 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 남은 점:
 
 - Unicode normalization 정책은 없다.
-- heading target은 아직 link target으로 resolve되지 않는다.
+- `Maki` runtime과 `ProjectAnalysis`의 note/heading resolution 구현이 중복되어 있다.
+
+== Source analysis와 LSP
+
+완료:
+
+- byte offset 기반 `SourceSpan`과 LF/CRLF line index가 있다.
+- byte column과 UTF-16 code unit position을 상호 변환하며 한글/일본어/emoji 테스트가 있다.
+- document/block/heading/note-link/property/date occurrence와 parser/semantic diagnostic range가 있다.
+- stdio LSP가 open/change/close, diagnostics, definition, completion, document/workspace symbol, hover를 처리한다.
+- editor의 저장하지 않은 전체 buffer가 source snapshot을 대체한다.
+
+남은 점:
+
+- nested Maki body와 reference definition target의 located occurrence가 없다.
+- LSP는 full document sync와 project 전체 재분석을 사용한다.
+- Zed 연결에는 최소 grammar와 local extension이 필요해 보류되어 있다.
 
 == Paragraph boundary와 NumberDot width
 
@@ -278,11 +307,12 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 = 고칠 점
 
-== P0: ProjectIndex 정리
+== P0: ProjectAnalysis runtime 통합
 
 권장 구현:
 
-- `Maki` 내부의 `notes`, `index`, `date_index`, `external_links`, `search_entries`, `recent_entries`를 `ProjectIndex` 또는 유사 구조로 묶는다.
+- `Maki` load 결과와 `ProjectAnalysis`가 같은 source snapshot과 parsed result를 공유하도록 경계를 정한다.
+- `Maki` 내부의 `notes`, `index`, `date_index`, `external_links`, `search_entries`, `recent_entries`를 `ProjectAnalysis` 또는 유사 project index와 연결한다.
 - note title은 load/index 단계에서 한 번만 읽고 재사용한다.
 - search entries도 note, heading, file name, alias metadata에서 파생한다.
 - link diagnostics는 가능하면 link occurrence와 source span을 함께 저장한다.
@@ -323,15 +353,16 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 - `/sitemap.xml`은 XML로 canonical web path를 나열한다.
 - 초기는 `PublishAll` 기준으로 구현하고, publish policy 연결 후 filtering을 추가한다.
 
-== P1: Block span/id 최소 도입
+== P1: Located surface 완성
 
-v2 milestone에는 AST/CST 중심 파서와 모든 block span/id가 적혀 있다.
-전면 재작성보다, 먼저 `Block`에 source line span만 넣는 작은 단계가 낫다.
+v4에서 top-level block/heading/note-link/property/date occurrence의 span은 추가됐다.
+다음 단계는 nested Maki body와 reference definition target을 같은 source coordinate에 놓고 property owner relation을 명시하는 것이다.
+native AST span/id는 이 과정에서 별도 located surface의 중복을 실제로 줄일 때 도입한다.
 
 효과:
 
-- diagnostics가 더 정확해진다.
-- heading anchor 중복 처리와 heading link의 기반이 생긴다.
+- nested quote/container와 reference link diagnostics/definition이 정확해진다.
+- block property와 owner 관계를 query/LSP가 재구성하지 않아도 된다.
 - 추후 query/lint가 block 단위로 동작할 수 있다.
 
 == P1: PublishPolicy 연결
@@ -373,11 +404,11 @@ v2의 `1-token-1-block 의미론 폐지`는 방향은 맞다.
 
 == 제일 먼저
 
-`ProjectIndex` 정리와 external link diagnostics 정책 분리를 먼저 한다.
+`ProjectAnalysis`의 runtime 통합과 located surface의 남은 범위를 먼저 정리한다.
 
 이유:
 
-- 현재 기능은 늘었지만 note title, diagnostics, search metadata가 같은 사실을 각자 다시 만든다.
+- 현재 기능은 늘었지만 `Maki`와 `ProjectAnalysis`가 note title, diagnostics, link resolution을 각자 다시 만든다.
 - public publishing으로 가려면 route/search/diagnostics가 같은 note set을 봐야 한다.
 - external link check는 사용자 체감 성능과 offline behavior를 흔들 수 있다.
 
@@ -403,9 +434,9 @@ diagnostics page와 search가 이미 있기 때문에 sitemap은 같은 project 
 
 추천 작업 묶음:
 
-- 작업 A: `ProjectIndex`로 note title/search metadata를 공유하고 regression tests를 유지한다.
-- 작업 B: external link diagnostics를 옵션/캐시 정책 뒤로 옮긴다.
-- 작업 C: block line span을 넣고 internal link diagnostics line number를 개선한다.
+- 작업 A: `ProjectAnalysis`를 project load/render/search/diagnostics가 공유하고 regression tests를 유지한다.
+- 작업 B: nested/reference occurrence range를 추가한다.
+- 작업 C: external link diagnostics를 옵션/캐시 정책 뒤로 옮긴다.
 - 작업 D: `/@/sitemap`과 `sitemap.xml`을 추가한다.
 - 작업 E: publish runtime에서 public note set을 route/search/source/diagnostics에 연결한다.
 - 작업 F: `Unsupported` block kind와 TBD fallback hover를 구현한다.

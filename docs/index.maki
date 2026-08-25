@@ -2,19 +2,21 @@
 
 <https://github.com/nyeong/maki>
 
-현재 마일스톤: [[milestones/syntax-sot]]
+현재 마일스톤: [[milestones/v4]]
 
 - [[about-maki]]
 - core
   - [[maki-syntax]]
+  - [[core-analysis]]
 - serve
+- tooling
+  - [[lsp]]
 - [[use-cases]]
 - [[issues]]
 - [[architecture]]
 - [[implementation-analysis]]
-- 선행 마일스톤
-  - [[milestones/syntax-sot]]
 - 마일스톤
+  - [[milestones/syntax-sot]]
   - [[milestones/v0]]
   - [[milestones/v1]]
   - [[milestones/v2]]
