@@ -114,7 +114,7 @@ binary 자동 설치는 로컬 연결이 검증된 뒤 별도 마일스톤으로
 - [x] representative stable syntax corpus와 회귀 fixture를 추가한다.
 - [x] generated parser와 binding을 갱신한다.
 
---v status: doing
+--v status: done
 == 3. Zed extension MVP
 
 - [x] `extension.toml`과 Rust extension crate를 만든다.
