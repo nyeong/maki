@@ -21,6 +21,69 @@ TBD 블록 만들어서 구현 안 된 문법들 짬때리자
 현재 unknown container는 `pre.maki-container-unknown`로 보존된다.
 analysis surface에는 container occurrence span이 있지만, 아직 별도 `Unsupported`/`Fallback` block kind와 native AST span은 없다.
 
+--v status: todo
+--v type: design
+= reference link의 표시 text와 lookup key 분리
+
+현재 reference link 문법에서 `[title]`의 `title`은 화면에 보이는 text이면서 동시에 reference definition lookup key다.
+이 때문에 같은 표시 text가 서로 다른 URL을 가리키는 경우 한 문서 안에서 같은 reference label을 재사용할 수 없다.
+생성 페이지에서는 이를 피하려고 `(2)`, `(3)` 같은 suffix나 `Date`, `Month`, `Week` 같은 접두어를 붙였지만, 이는 문서 의미가 아니라 내부 충돌 회피가 화면에 새는 문제다.
+
+== 후보 1. 기존 `[title]` 유지 + `[title][key]` 추가
+
+평범한 link는 지금처럼 쓴다.
+충돌이 있을 때만 표시 text와 lookup key를 분리한다.
+
+--v lang: maki
+: - [Maki]
+: - [Same][alpha]
+: - [Same][beta]
+:
+: [Maki]: https://example.com/maki
+: [alpha]: /alpha
+: [beta]: /beta
+
+- 장점: 기존 문서 호환성이 높고, key를 매번 만들 필요가 없다.
+- 장점: source를 읽을 때 표시 text가 그대로 보인다.
+- 단점: inline parser에 `[title][key]` 우선순위가 추가된다.
+
+== 후보 2. 참고문헌식 label 중심 문법
+
+reference definition이 표시 text와 URL을 모두 가진다.
+
+--v lang: maki
+: - [good]
+: - [^good]
+:
+: [good]: "dddd" https://example.com
+
+- 장점: `[AC93]` 같은 citation-style 표지에는 잘 맞는다.
+- 단점: 일반 link에서는 source에 표시 text가 보이지 않는다.
+- 단점: 모든 link에 별도 표지를 지어야 해서 문서 작성 비용이 늘 수 있다.
+
+== 후보 3. citation 전용 namespace 추가
+
+일반 link와 별개로 citation만 label 중심으로 둔다.
+
+--v lang: maki
+: See [@AC93].
+:
+: [@AC93]: "A Calculus of Mobile Processes" https://example.com/ac93
+
+- 장점: 참고문헌 용도와 일반 link 용도를 분리할 수 있다.
+- 단점: citation이 실제로 필요해질 때까지는 문법 면적이 늘어난다.
+
+== 컨벤션. 사용 block 근처에 reference definition 두기
+
+강제하지 않고, 긴 문서에서 읽기 쉽게 만드는 작성 관습으로 둔다.
+
+--v lang: maki
+: - [Same][alpha]
+:   [alpha]: /alpha
+
+초기 결정은 보류한다.
+우선순위는 기존 `[title]`을 살리고, 충돌이 필요한 경우에만 `[title][key]`를 추가하는 쪽이 가장 낮은 비용으로 보인다.
+
 --v status: done
 --v type: feature
 = `maki.toml` 중심으로 프로젝트 루트 인식 개편

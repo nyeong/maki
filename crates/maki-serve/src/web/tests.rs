@@ -575,7 +575,9 @@ fn test_dates_pages_list_month_and_iso_week_markers() {
 Month [2026-08].
 Week [2026-W23].
 Specific [2026-W23-1].
-Target [2026-06-01]."#,
+Target [2026-06-01].
+MonthWeek [2026-W32].
+MixedTarget [2026-08-04]."#,
     )
     .unwrap();
 
@@ -595,6 +597,8 @@ Target [2026-06-01]."#,
     let day_body = String::from_utf8(day.body().to_vec()).unwrap();
     let month_day = handle_request(&state, &http::Request::get("/@/dates/2026-08-01")).unwrap();
     let month_day_body = String::from_utf8(month_day.body().to_vec()).unwrap();
+    let contained_day = handle_request(&state, &http::Request::get("/@/dates/2026-08-04")).unwrap();
+    let contained_day_body = String::from_utf8(contained_day.body().to_vec()).unwrap();
     fs::remove_dir_all(root).unwrap();
 
     assert_eq!(year.status(), http::StatusCode::Ok);
@@ -604,6 +608,7 @@ Target [2026-06-01]."#,
     assert_eq!(month.status(), http::StatusCode::Ok);
     assert!(month_body.contains("<title>Month 2026-08</title>"));
     assert!(month_body.contains("date, month, inline"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-W32\">2026-W32</a>"));
     assert!(!month_body.contains("href=\"/@/dates/2026-08-01\""));
 
     assert_eq!(week.status(), http::StatusCode::Ok);
@@ -619,14 +624,33 @@ Target [2026-06-01]."#,
     assert!(iso_weekday_alias_body.contains("<title>Date 2026-06-01 Mon</title>"));
 
     assert_eq!(day.status(), http::StatusCode::Ok);
+    assert!(day_body.contains("<a href=\"/@/dates/2026-W23\">↗ 2026-W23</a>"));
     let specific_position = day_body.find("/home#date-inline-home-maki-3").unwrap();
     let target_position = day_body.find("/home#date-inline-home-maki-4").unwrap();
     assert!(specific_position < target_position);
+    assert!(day_body.contains("<h3 id=\"Containing Periods\">Containing Periods</h3>"));
+    assert!(day_body.contains("<a href=\"/@/dates/2026-W23\">2026-W23</a>"));
     assert!(!day_body.contains("date, week day, inline"));
 
     assert_eq!(month_day.status(), http::StatusCode::Ok);
     assert!(month_day_body.contains("<title>Date 2026-08-01 Sat</title>"));
+    assert!(month_day_body.contains("<h3 id=\"Containing Periods\">Containing Periods</h3>"));
+    assert!(month_day_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
     assert!(!month_day_body.contains("date, month day, inline"));
+
+    assert_eq!(contained_day.status(), http::StatusCode::Ok);
+    assert!(contained_day_body.contains("<title>Date 2026-08-04 Tue</title>"));
+    assert!(contained_day_body.contains("<h3 id=\"Containing Periods\">Containing Periods</h3>"));
+    assert_text_order(
+        &contained_day_body,
+        &[
+            "<a href=\"/@/dates/2026-08\">2026-08</a>",
+            "<a href=\"/@/dates/2026-W32\">2026-W32</a>",
+        ],
+    );
+    assert!(contained_day_body.contains("date, single, inline"));
+    assert!(!contained_day_body.contains("date, month day, inline"));
+    assert!(!contained_day_body.contains("date, week day, inline"));
 }
 
 #[test]

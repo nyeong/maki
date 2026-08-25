@@ -6,9 +6,9 @@ use std::{
 
 use crate::{
     maki::{
-        self, DateBacklink, DateIndex, DateOccurrence, DateOrigin, DatePeriod, DateRelation,
-        ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary, RecentEntry,
-        SearchEntry, SitemapEntry,
+        self, DateBacklink, DateIndex, DateMarker, DateOccurrence, DateOrigin, DatePeriod,
+        DateRelation, ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary,
+        RecentEntry, SearchEntry, SitemapEntry,
     },
     parser::{Date, DateMonth, DateStampTarget, IsoWeek},
 };
@@ -380,6 +380,16 @@ fn push_date_period_navigation_html(renderer: &mut Renderer<'_>, period: DatePer
         &period.parent_path(),
         &format!("↑ {}", date_period_parent_label(period)),
     );
+    if let DatePeriod::Day(date) = period
+        && let Some(week) = iso_week_for_date(date)
+    {
+        renderer.push_raw(" ");
+        push_html_link(
+            renderer,
+            &DatePeriod::Week(week).path(),
+            &format!("↗ {}", DatePeriod::Week(week).title()),
+        );
+    }
     if let Some(next) = period.next() {
         renderer.push_raw(" ");
         push_html_link(
@@ -418,6 +428,25 @@ fn date_period_parent_label(period: DatePeriod) -> String {
 
 fn date_label(date: Date) -> String {
     format!("{date} {}", date.weekday_abbrev())
+}
+
+fn iso_week_for_date(date: Date) -> Option<IsoWeek> {
+    let first_year = date.year().saturating_sub(1).max(1);
+    let last_year = date.year().saturating_add(1).min(9999);
+
+    for year in first_year..=last_year {
+        for week_number in 1..=53 {
+            let Some(week) = IsoWeek::new(year, week_number) else {
+                break;
+            };
+            let (start, end) = week.representable_date_range();
+            if start <= date && date <= end {
+                return Some(week);
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -470,6 +499,10 @@ fn push_date_day_html(renderer: &mut Renderer<'_>, date_index: &DateIndex, date:
         date_index,
         direct_date_backlinks(date_index, date),
     );
+    let containing_periods = date_containing_period_items(date_index, date);
+    if !containing_periods.is_empty() {
+        push_date_link_list_section(renderer, "Containing Periods", containing_periods);
+    }
 }
 
 fn date_year_month_items(date_index: &DateIndex, year: u16) -> Vec<DateLinkItem> {
@@ -596,6 +629,55 @@ fn date_week_day_items(date_index: &DateIndex, week: IsoWeek) -> Vec<DateLinkIte
             })
         })
         .collect()
+}
+
+fn date_containing_period_items(date_index: &DateIndex, date: Date) -> Vec<DateLinkItem> {
+    let mut counts = BTreeMap::<DatePeriod, usize>::new();
+
+    if let Some(backlinks) = date_index.backlinks_for(&date) {
+        for backlink in backlinks {
+            if let Some(period) = containing_period_for_backlink(date_index, backlink) {
+                *counts.entry(period).or_insert(0) += 1;
+            }
+        }
+    }
+
+    counts
+        .into_iter()
+        .map(|(period, count)| DateLinkItem {
+            label: period.title(),
+            href: period.path(),
+            count,
+        })
+        .collect()
+}
+
+fn containing_period_for_backlink(
+    date_index: &DateIndex,
+    backlink: &DateBacklink,
+) -> Option<DatePeriod> {
+    let occurrence = date_index.occurrence(backlink.occurrence_id())?;
+
+    match (backlink.relation(), occurrence.marker()) {
+        (
+            DateRelation::MonthDay,
+            DateMarker::Single {
+                target: DateStampTarget::Month(month),
+                ..
+            },
+        ) => Some(DatePeriod::Month {
+            year: month.year(),
+            month: month.month(),
+        }),
+        (
+            DateRelation::WeekDay,
+            DateMarker::Single {
+                target: DateStampTarget::IsoWeek(week),
+                ..
+            },
+        ) => Some(DatePeriod::Week(*week)),
+        _ => None,
+    }
 }
 
 fn period_backlinks(date_index: &DateIndex, period: DatePeriod) -> Vec<&DateBacklink> {
