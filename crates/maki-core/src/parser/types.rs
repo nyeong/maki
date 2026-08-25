@@ -164,6 +164,11 @@ pub struct DateRange<'a> {
 impl Date {
     const MIN_YEAR: u16 = 1;
     const MAX_YEAR: u16 = 9999;
+    const MAX: Self = Self {
+        year: Self::MAX_YEAR,
+        month: 12,
+        day: 31,
+    };
 
     pub(super) fn new(year: u16, month: u8, day: u8) -> Option<Self> {
         if !(Self::MIN_YEAR..=Self::MAX_YEAR).contains(&year) || month == 0 || month > 12 {
@@ -331,15 +336,13 @@ impl fmt::Display for DateMonth {
 
 impl IsoWeek {
     pub fn new(year: u16, week: u8) -> Option<Self> {
-        if !(Date::MIN_YEAR..=Date::MAX_YEAR).contains(&year)
-            || week == 0
-            || week > weeks_in_iso_year(year)
-        {
+        let max_week = weeks_in_iso_year(year)?;
+        if week == 0 || week > max_week {
             return None;
         }
 
         let iso_week = Self { year, week };
-        iso_week.date_for_weekday(7)?;
+        iso_week.date_for_weekday(1)?;
 
         Some(iso_week)
     }
@@ -397,9 +400,15 @@ impl IsoWeek {
             .expect("valid IsoWeek has a Monday")
     }
 
-    pub fn sunday(&self) -> Date {
+    pub fn sunday(&self) -> Option<Date> {
         self.date_for_weekday(7)
-            .expect("valid IsoWeek has a Sunday")
+    }
+
+    pub fn representable_date_range(&self) -> (Date, Date) {
+        let start = self.monday();
+        let end = self.sunday().unwrap_or(Date::MAX);
+
+        (start, end)
     }
 
     pub fn date_for_weekday(&self, weekday: u8) -> Option<Date> {
@@ -425,14 +434,13 @@ impl IsoWeek {
             return Self::new(self.year, self.week - 1);
         }
 
-        self.year.checked_sub(1).and_then(|year| {
-            let week = weeks_in_iso_year(year);
-            Self::new(year, week)
-        })
+        let year = self.year.checked_sub(1)?;
+        let week = weeks_in_iso_year(year)?;
+        Self::new(year, week)
     }
 
     pub fn next(&self) -> Option<Self> {
-        if self.week < weeks_in_iso_year(self.year) {
+        if self.week < weeks_in_iso_year(self.year)? {
             return Self::new(self.year, self.week + 1);
         }
 
@@ -511,15 +519,15 @@ fn days_in_month(year: u16, month: u8) -> u8 {
     }
 }
 
-fn weeks_in_iso_year(year: u16) -> u8 {
-    let jan_1 = Date::new(year, 1, 1).expect("valid ISO year has January 1");
+fn weeks_in_iso_year(year: u16) -> Option<u8> {
+    let jan_1 = Date::new(year, 1, 1)?;
     let weekday = jan_1.iso_weekday_number();
 
-    if weekday == 4 || (weekday == 3 && is_leap_year(year)) {
+    Some(if weekday == 4 || (weekday == 3 && is_leap_year(year)) {
         53
     } else {
         52
-    }
+    })
 }
 
 fn iso_week_one_monday(year: u16) -> Option<Date> {

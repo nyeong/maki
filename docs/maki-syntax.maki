@@ -770,13 +770,15 @@ Date body의 prefix가 의미상 날짜 또는 기간 값이다.
 
 그 뒤에 문자가 더 있으면 첫 문자는 whitespace여야 한다.
 Gregorian date/month validity는 year, month, day 범위와 leap year를 검사한다.
-ISO week validity는 ISO week-numbering year, week `01`-`52`/`53`, weekday `1`-`7`을 검사한다.
+ISO week period validity는 ISO week-numbering year와 week `01`-`52`/`53`을 검사한다.
+`yyyy-Www-d`는 weekday `1`-`7`도 검사하며, 그 weekday가 지원하는 Gregorian date 범위 `0001-01-01`부터 `9999-12-31` 안의 특정 일로 변환되어야 한다.
+따라서 `[9999-W52]`는 유효한 period marker지만 exact date marker는 `[9999-W52-5]`까지만 유효하고 `[9999-W52-6]`과 `[9999-W52-7]`은 유효하지 않다.
 
 Indexing:
 
 - `yyyy-mm-dd`와 `yyyy-Www-d`는 특정 일을 지정하므로 같은 우선순위의 day backlink로 index한다.
 - `yyyy-mm`은 해당 month page에 직접 index하고, 그 달의 모든 day page에도 가장 낮은 우선순위로 index한다.
-- `yyyy-Www`는 해당 ISO week page에 직접 index하고, 그 주의 모든 day page에도 가장 낮은 우선순위로 index한다.
+- `yyyy-Www`는 해당 ISO week page에 직접 index하고, 그 주에서 지원하는 Gregorian date 범위에 들어오는 모든 day page에도 가장 낮은 우선순위로 index한다.
 
 예:
 

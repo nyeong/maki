@@ -108,6 +108,7 @@ Document reference definition target 중 local Maki note 후보는 같은 resolu
 Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index에 들어가며, occurrence context는 `[ ]` 또는 `[x]` state를 보존한다.
 Date Marker는 Gregorian day, Gregorian month, ISO week, ISO weekday를 구분한다.
 Month marker는 month page와 그 달의 모든 day page에, ISO week marker는 week page와 그 주의 모든 day page에 index한다.
+날짜 계층의 boundary period page는 `0001-01-01`부터 `9999-12-31`까지 표현 가능한 subrange만 펼치며, 범위 밖 period로 향하는 navigation은 생략한다. 따라서 `0001-W01`에는 previous week link가 없다.
 Month/week에서 각 day로 펼친 backlink는 direct day marker와 range middle보다 낮은 우선순위로 정렬한다.
 별도 sans IO `ProjectAnalysis`는 source snapshot 목록에서 document metadata, block/heading/note-link/property/date occurrence와 semantic diagnostics를 계산한다.
 

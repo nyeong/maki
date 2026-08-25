@@ -310,9 +310,47 @@ fn iso_week_dates_follow_iso_8601_boundaries() {
     let week = IsoWeek::new(2026, 1).unwrap();
 
     assert_eq!(week.monday(), Date::new(2025, 12, 29).unwrap());
-    assert_eq!(week.sunday(), Date::new(2026, 1, 4).unwrap());
+    assert_eq!(week.sunday(), Date::new(2026, 1, 4));
     assert!(IsoWeek::new(2026, 53).is_some());
     assert!(IsoWeek::new(2027, 53).is_none());
+}
+
+#[test]
+fn iso_week_dates_handle_representable_year_boundaries() {
+    let first_week = IsoWeek::new(1, 1).unwrap();
+    assert_eq!(first_week.monday(), Date::new(1, 1, 1).unwrap());
+    assert!(first_week.previous().is_none());
+
+    let last_week = IsoWeek::new(9999, 52).unwrap();
+    for (weekday, day) in [(1, 27), (2, 28), (3, 29), (4, 30), (5, 31)] {
+        assert_eq!(
+            last_week.date_for_weekday(weekday),
+            Date::new(9999, 12, day)
+        );
+    }
+    assert!(last_week.date_for_weekday(6).is_none());
+    assert!(last_week.sunday().is_none());
+    assert_eq!(
+        last_week.representable_date_range(),
+        (
+            Date::new(9999, 12, 27).unwrap(),
+            Date::new(9999, 12, 31).unwrap()
+        )
+    );
+    assert!(last_week.next().is_none());
+
+    assert_eq!(
+        parse_inline("[9999-W52-5]"),
+        vec![Inline::DateStamp(DateStamp {
+            kind: DateStampKind::Date,
+            target: DateStampTarget::Date(Date::new(9999, 12, 31).unwrap()),
+            body: "9999-W52-5",
+        })]
+    );
+    assert_eq!(
+        parse_inline("[9999-W52-6]"),
+        vec![Inline::Text("[9999-W52-6]")]
+    );
 }
 
 #[test]

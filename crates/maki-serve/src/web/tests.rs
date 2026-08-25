@@ -522,6 +522,34 @@ Target [2026-06-01]."#,
 }
 
 #[test]
+fn test_iso_week_pages_handle_representable_year_boundaries() {
+    let root = std::env::temp_dir().join(format!("maki-boundary-weeks-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        "First [0001-W01].\nLast [9999-W52].\nFriday [9999-W52-5].",
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let first = handle_request(&state, &http::Request::get("/@/dates/0001-W01")).unwrap();
+    let first_body = String::from_utf8(first.body().to_vec()).unwrap();
+    let last = handle_request(&state, &http::Request::get("/@/dates/9999-W52")).unwrap();
+    let last_body = String::from_utf8(last.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(first.status(), http::StatusCode::Ok);
+    assert!(!first_body.contains("←"));
+    assert!(first_body.contains("/@/dates/0001-W02"));
+
+    assert_eq!(last.status(), http::StatusCode::Ok);
+    assert!(last_body.contains("/@/dates/9999-12-31"));
+    assert!(!last_body.contains("→"));
+}
+
+#[test]
 fn test_diagnostics_page_lists_project_issues() {
     let root = std::env::temp_dir().join(format!("maki-diagnostics-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);

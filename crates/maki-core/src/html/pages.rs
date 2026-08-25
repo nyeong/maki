@@ -476,8 +476,7 @@ fn push_date_week_source(
         source.push('\n');
     }
 
-    let start = week.monday();
-    let end = week.sunday();
+    let (start, end) = week.representable_date_range();
     let dates = date_index
         .dates()
         .filter(|(date, _backlinks)| **date >= start && **date <= end)

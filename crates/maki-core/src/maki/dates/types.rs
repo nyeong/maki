@@ -129,12 +129,8 @@ impl DateIndex {
                     occurrence_id,
                     DateRelation::Week,
                 );
-                self.push_date_span_backlinks(
-                    week.monday(),
-                    week.sunday(),
-                    occurrence_id,
-                    DateRelation::WeekDay,
-                );
+                let (start, end) = week.representable_date_range();
+                self.push_date_span_backlinks(start, end, occurrence_id, DateRelation::WeekDay);
             }
         }
     }
