@@ -1,6 +1,6 @@
 --^ title: Zed Local Extension MVP
 --^ date: [2026-08-26]
---^ status: doing
+--^ status: done
 
 `maki`를 Zed에서 작성할 수 있도록, stable syntax와 맞는 Tree-sitter grammar와 로컬 개발용 Zed extension을 만든다.
 
@@ -14,7 +14,7 @@ Zed는 language metadata에 Tree-sitter grammar를 요구하고 language server 
 `maki-zed`도 착수 당시에는 빈 Git 저장소였다.
 
 현재는 stable grammar/query/corpus와 전체 Maki docs parse 검증, local file grammar를 쓰는 Zed extension, `PATH`의 `maki lsp` 연결, Nix+direnv 개발환경, wasm/query/LSP smoke 자동 검증까지 완료했다.
-Zed UI에서 dev extension을 설치해 highlighting과 LSP 기능을 확인하는 수동 검증은 남아 있다.
+Zed UI에서 dev extension을 설치해 highlighting과 LSP 기본 동작도 확인했다.
 
 이 마일스톤은 marketplace 배포보다 한 컴퓨터에서 end-to-end로 검증 가능한 개발 경로를 먼저 만든다.
 
@@ -125,7 +125,7 @@ binary 자동 설치는 로컬 연결이 검증된 뒤 별도 마일스톤으로
 - [x] `maki`를 찾지 못할 때의 오류를 명확히 한다.
 - [x] Nix flake와 direnv로 Maki package와 wasm Rust target을 제공한다.
 
---v status: doing
+--v status: done
 == 4. 검증과 문서화
 
 - [x] Tree-sitter generate/corpus/query/binding test를 통과한다.
@@ -135,15 +135,15 @@ binary 자동 설치는 로컬 연결이 검증된 뒤 별도 마일스톤으로
 - [x] Zed dev extension 설치 절차를 문서화한다.
 - [x] highlighting, diagnostics, definition, completion, symbols 수동 체크리스트를 문서화한다.
 - [x] [[lsp]], [[implementation-analysis]], [[v4]]의 보류 설명을 현재 상태와 맞춘다.
-- [ ] Zed dev extension을 설치해 수동 체크리스트를 확인한다.
+- [x] Zed dev extension을 설치해 수동 체크리스트를 확인한다.
 
 = 성공기준
 
 - [x] representative stable `.maki` fixture가 Tree-sitter에서 unexpected `ERROR` 없이 파싱된다.
 - [x] grammar와 extension query가 존재하지 않는 node/capture를 참조하지 않는다.
-- [ ] `.maki` 파일이 Zed에서 Maki로 인식되고 기본 highlighting과 heading outline이 보인다.
-- [ ] Zed가 `maki lsp`를 시작하며 diagnostics를 표시한다.
-- [ ] note/heading definition, completion, document/workspace symbol 중 v4에서 지원한 기능을 Zed에서 확인할 수 있다.
+- [x] `.maki` 파일이 Zed에서 Maki로 인식되고 기본 highlighting과 heading outline이 보인다.
+- [x] Zed가 `maki lsp`를 시작하며 diagnostics를 표시한다.
+- [x] note/heading definition, completion, document/workspace symbol 중 v4에서 지원한 기능을 Zed에서 확인할 수 있다.
 - [x] 자동 검증 명령과 남은 수동 검증 절차가 재현 가능하게 기록되어 있다.
 
 = 나중에 할 것
@@ -152,4 +152,3 @@ binary 자동 설치는 로컬 연결이 검증된 뒤 별도 마일스톤으로
 - release artifact 기반 `maki` 자동 설치와 update
 - code/quote container language injection
 - richer text object, indent, override query
-- Zed settings를 통한 custom `maki` executable path

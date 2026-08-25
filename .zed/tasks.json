@@ -1,7 +1,12 @@
 [
   {
-    "label": "cargo run",
-    "command": "echo $ZED_FILE",
-    "tags": ["rustc-main"],
+    "label": "Maki: build LSP",
+    "command": "cargo build --bin maki",
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Maki: test",
+    "command": "cargo test",
+    "cwd": "$ZED_WORKTREE_ROOT"
   },
 ]
