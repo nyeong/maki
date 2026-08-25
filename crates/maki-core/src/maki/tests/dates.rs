@@ -1,4 +1,5 @@
 use super::*;
+use crate::parser::IsoWeek;
 
 #[test]
 fn date_index_collects_inline_property_and_range_dates() {
@@ -58,6 +59,70 @@ Track [2026-08-17]--[2026-08-19]."#,
     assert!(html.contains("href=\"/@/dates/2026-08-16#date-inline-start-maki-1\""));
     assert!(html.contains("href=\"/@/dates/2026-08-17#date-inline-start-maki-2\""));
     assert!(html.contains("href=\"/@/dates/2026-08-19#date-inline-start-maki-2\""));
+}
+
+#[test]
+fn date_index_collects_month_week_and_iso_weekday_markers() {
+    let project = temp_project("period-date-index");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"--^ title: Start
+
+Month [2026-08].
+Week [2026-W23].
+Specific [2026-W23-1].
+Target [2026-06-01]."#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let month_period = DatePeriod::Month {
+        year: 2026,
+        month: 8,
+    };
+    let week = IsoWeek::new(2026, 23).unwrap();
+    let week_period = DatePeriod::Week(week);
+    let august_first = Date::parse("2026-08-01").unwrap();
+    let week_monday = Date::parse("2026-06-01").unwrap();
+    let week_tuesday = Date::parse("2026-06-02").unwrap();
+
+    let month_backlinks = maki
+        .date_index()
+        .backlinks_for_period(month_period)
+        .unwrap();
+    assert_eq!(month_backlinks.len(), 1);
+    assert_eq!(month_backlinks[0].relation(), DateRelation::Month);
+
+    let week_backlinks = maki.date_index().backlinks_for_period(week_period).unwrap();
+    assert_eq!(week_backlinks.len(), 1);
+    assert_eq!(week_backlinks[0].relation(), DateRelation::Week);
+
+    let august_backlinks = maki.date_index().backlinks_for(&august_first).unwrap();
+    assert_eq!(august_backlinks.len(), 1);
+    assert_eq!(august_backlinks[0].relation(), DateRelation::MonthDay);
+
+    let monday_backlinks = maki.date_index().backlinks_for(&week_monday).unwrap();
+    assert_eq!(monday_backlinks.len(), 3);
+    assert_eq!(monday_backlinks[0].relation(), DateRelation::Single);
+    assert_eq!(monday_backlinks[1].relation(), DateRelation::Single);
+    assert_eq!(monday_backlinks[2].relation(), DateRelation::WeekDay);
+
+    let tuesday_backlinks = maki.date_index().backlinks_for(&week_tuesday).unwrap();
+    assert_eq!(tuesday_backlinks.len(), 1);
+    assert_eq!(tuesday_backlinks[0].relation(), DateRelation::WeekDay);
+
+    let indexed_dates = maki
+        .date_index()
+        .dates()
+        .map(|(date, _backlinks)| *date)
+        .collect::<Vec<_>>();
+    assert!(indexed_dates.contains(&august_first));
+    assert!(indexed_dates.contains(&week_tuesday));
+
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert!(html.contains("href=\"/@/dates/2026-08#date-inline-start-maki-1\""));
+    assert!(html.contains("href=\"/@/dates/2026-W23#date-inline-start-maki-2\""));
+    assert!(html.contains("href=\"/@/dates/2026-06-01#date-inline-start-maki-3\""));
 }
 
 #[test]

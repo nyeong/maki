@@ -9,7 +9,7 @@ use crate::{
         self, DateIndex, DateOccurrence, DateOrigin, DatePeriod, DateRelation, ProjectDiagnostic,
         ProjectDiagnosticKind, ProjectDiagnosticSummary, RecentEntry, SearchEntry,
     },
-    parser::Date,
+    parser::{Date, DateStampTarget, IsoWeek},
 };
 
 use super::{
@@ -174,13 +174,23 @@ impl MakiReferences {
 }
 
 fn reference_safe_title(title: &str) -> String {
-    let date_prefix = title.get(..10).and_then(Date::parse);
-    let date_suffix = title.get(10..).unwrap_or_default();
-    let conflicts_with_date =
-        date_prefix.is_some() && date_suffix.chars().next().is_none_or(char::is_whitespace);
+    let date_marker_target = DateStampTarget::parse_prefix(title).and_then(|(target, len)| {
+        title
+            .get(len..)
+            .unwrap_or_default()
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
+            .then_some(target)
+    });
 
-    if conflicts_with_date {
-        format!("Date {title}")
+    if let Some(target) = date_marker_target {
+        let prefix = match target {
+            DateStampTarget::Date(_) => "Date",
+            DateStampTarget::Month(_) => "Month",
+            DateStampTarget::IsoWeek(_) => "Week",
+        };
+        format!("{prefix} {title}")
     } else if title.starts_with('^') {
         format!("Link {title}")
     } else {
@@ -325,6 +335,7 @@ fn date_period_page_body_source(
         DatePeriod::Month { year, month } => {
             push_date_month_source(&mut source, references, date_index, year, month)
         }
+        DatePeriod::Week(week) => push_date_week_source(&mut source, references, date_index, week),
         DatePeriod::Day(date) => push_date_day_source(&mut source, references, date_index, date),
     }
 
@@ -365,7 +376,7 @@ fn date_period_title(period: DatePeriod) -> String {
 
 fn date_period_navigation_label(period: DatePeriod) -> String {
     match period {
-        DatePeriod::Year(_) | DatePeriod::Month { .. } => period.title(),
+        DatePeriod::Year(_) | DatePeriod::Month { .. } | DatePeriod::Week(_) => period.title(),
         DatePeriod::Day(date) => date_label(date),
     }
 }
@@ -374,6 +385,7 @@ fn date_period_parent_label(period: DatePeriod) -> String {
     match period {
         DatePeriod::Year(_) => "Dates".to_string(),
         DatePeriod::Month { year, .. } => format!("{year:04}"),
+        DatePeriod::Week(week) => format!("{:04}", week.year()),
         DatePeriod::Day(date) => format!("{:04}-{:02}", date.year(), date.month()),
     }
 }
@@ -389,9 +401,17 @@ fn push_date_year_source(
     year: u16,
 ) {
     let mut month_counts = BTreeMap::new();
+    let mut week_counts = BTreeMap::new();
     for (date, _backlinks) in date_index.dates() {
         if date.year() == year {
             *month_counts.entry(date.month()).or_insert(0) += 1;
+        }
+    }
+    for (period, backlinks) in date_index.periods() {
+        if let DatePeriod::Week(week) = period
+            && week.year() == year
+        {
+            *week_counts.entry(week.week()).or_insert(0) += backlinks.len();
         }
     }
 
@@ -408,6 +428,17 @@ fn push_date_year_source(
         };
         push_maki_link_item_with_count(source, references, &period.title(), &period.path(), *count);
     }
+
+    if week_counts.is_empty() {
+        return;
+    }
+
+    source.push_str("\n== ISO Weeks\n\n");
+    for (week, count) in week_counts.iter().rev() {
+        let week = IsoWeek::new(year, *week).expect("indexed ISO week is valid");
+        let period = DatePeriod::Week(week);
+        push_maki_link_item_with_count(source, references, &period.title(), &period.path(), *count);
+    }
 }
 
 fn push_date_month_source(
@@ -417,12 +448,51 @@ fn push_date_month_source(
     year: u16,
     month: u8,
 ) {
+    if push_date_period_backlinks_section(
+        source,
+        references,
+        date_index,
+        DatePeriod::Month { year, month },
+    ) {
+        source.push('\n');
+    }
+
     let dates = date_index
         .dates()
         .filter(|(date, _backlinks)| date.year() == year && date.month() == month)
         .map(|(date, _backlinks)| *date)
         .collect::<Vec<_>>();
 
+    push_date_days_section(source, references, date_index, &dates);
+}
+
+fn push_date_week_source(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    week: IsoWeek,
+) {
+    if push_date_period_backlinks_section(source, references, date_index, DatePeriod::Week(week)) {
+        source.push('\n');
+    }
+
+    let start = week.monday();
+    let end = week.sunday();
+    let dates = date_index
+        .dates()
+        .filter(|(date, _backlinks)| **date >= start && **date <= end)
+        .map(|(date, _backlinks)| *date)
+        .collect::<Vec<_>>();
+
+    push_date_days_section(source, references, date_index, &dates);
+}
+
+fn push_date_days_section(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    dates: &[Date],
+) {
     source.push_str("== Days\n\n");
     if dates.is_empty() {
         source.push_str("No date markers.\n");
@@ -451,6 +521,32 @@ fn push_date_day_source(
     if !push_date_backlinks_for_date(source, references, date_index, date) {
         source.push_str("No date markers.\n");
     }
+}
+
+fn push_date_period_backlinks_section(
+    source: &mut String,
+    references: &mut MakiReferences,
+    date_index: &DateIndex,
+    period: DatePeriod,
+) -> bool {
+    let Some(backlinks) = date_index.backlinks_for_period(period) else {
+        return false;
+    };
+
+    let mut has_backlinks = false;
+    for backlink in backlinks {
+        let Some(occurrence) = date_index.occurrence(backlink.occurrence_id()) else {
+            continue;
+        };
+        if !has_backlinks {
+            source.push_str("== Backlinks\n\n");
+            has_backlinks = true;
+        }
+        let relation = backlink.relation();
+        push_date_backlink_source(source, references, occurrence, relation);
+    }
+
+    has_backlinks
 }
 
 fn push_date_backlinks_for_date(

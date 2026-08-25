@@ -26,6 +26,9 @@ pub(super) fn response_cache_warmup_keys(maki: &Maki) -> Vec<ResponseCacheKey> {
         });
         date_periods.insert(DatePeriod::Day(*date));
     }
+    for (period, _backlinks) in maki.date_index().periods() {
+        date_periods.insert(*period);
+    }
     keys.extend(
         date_periods
             .into_iter()

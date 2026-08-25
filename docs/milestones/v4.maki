@@ -131,6 +131,7 @@ LSP와 HTML/search/diagnostics가 함께 쓸 수 있는 sans IO 분석 API를 �
 - [x] note link occurrence와 resolve result를 함께 index한다.
 - [x] property occurrence를 key/value/range 단위로 index한다.
 - [x] date marker occurrence를 visible inline과 property value로 구분한다.
+- [x] Date Marker가 Gregorian month, ISO week, ISO weekday를 index할 수 있다.
 - [x] diagnostics는 parser warning과 project semantic warning을 한 surface로 모은다.
 
 --v status: done

@@ -156,7 +156,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_date_stamp_link(&mut self, stamp: DateStamp<'_>, occurrence_id: &str) {
-        let href = maki::date_occurrence_href(stamp.date(), occurrence_id);
+        let href = maki::date_occurrence_href(stamp.target(), occurrence_id);
         self.html.push_str("<a class=\"");
         self.html.push_str(date_stamp_class(stamp.kind()));
         self.html.push_str("\" href=\"");
