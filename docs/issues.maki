@@ -25,8 +25,8 @@ analysis surface에는 container occurrence span이 있지만, 아직 별도 `Un
 --v type: feature
 = `maki.toml` 중심으로 프로젝트 루트 인식 개편
 
-현재 maki는 `maki serve <directory>`처럼 명시적으로 받은 디렉토리를 프로젝트 루트로 본다.
-앞으로는 어떤 `.maki` 파일에 대해 작업하더라도, 상위 디렉토리로 올라가며 `maki.toml`을 찾아 프로젝트 루트를 자동 인식한다.
+개편 전 maki는 `maki serve <directory>`처럼 명시적으로 받은 디렉토리를 프로젝트 루트로 보았다.
+현재 CLI는 입력 경로에서, LSP는 editor workspace root에서 상위 디렉토리로 올라가며 가장 가까운 `maki.toml`을 찾아 프로젝트 루트를 자동 인식한다.
 
 == 의도
 
@@ -34,18 +34,18 @@ analysis surface에는 container occurrence span이 있지만, 아직 별도 `Un
 - note identity, wikilink resolution, serve root, build context가 모두 project config의 source root를 기준으로 동작하게 한다.
 - 단일 파일 렌더링이 아니라 프로젝트 단위 렌더링이라는 maki의 멘탈 모델을 CLI에도 반영한다.
 
-== 초안 동작
+== 구현된 동작
 
 - `maki.toml`이 있는 디렉토리를 maki 프로젝트 루트로 본다.
 - 파일 경로를 입력받는 명령은 해당 파일의 parent부터 상위로 올라가며 가장 가까운 `maki.toml`을 찾는다.
 - 디렉토리 경로를 입력받는 명령은 해당 디렉토리부터 상위로 올라가며 가장 가까운 `maki.toml`을 찾는다.
-- `maki serve`는 현재 디렉토리 또는 입력받은 디렉토리에서 `maki.toml`을 찾아 상위로 올라가고, project root의 config를 읽어 configured source root를 serve한다.
-- nested project는 상정하지 않는다.
-- `maki.toml`을 찾지 못하면 명령별 fallback을 둘 수 있다.
-  - `serve`: 기존처럼 입력 디렉토리를 root로 볼 수 있다.
-  - `build`: 일단 단일 파일 build로 동작할 수 있다.
+- `maki serve`는 현재 디렉토리 또는 입력받은 경로에서 가장 가까운 `maki.toml`을 찾는다. 입력 경로가 project root 또는 configured source root 안이면 source root를 serve하고, 그 밖이면 입력 디렉토리를 독립 note root로 serve한다.
+- nested manifest가 있으면 가장 가까운 `maki.toml`이 project root가 된다.
+- `maki.toml`을 찾지 못하면 명령별 fallback을 사용한다.
+  - `serve`: 입력 디렉토리를 note root로 사용한다.
+  - `build`: 입력 파일을 standalone HTML로 render한다.
 
-== 설정 초안
+== 설정
 
 --v lang: toml
 : [project]

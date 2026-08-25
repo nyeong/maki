@@ -58,6 +58,8 @@ maki serve my-notes
 maki serve .
 maki build docs/index.maki > index.html
 maki lsp
+maki serve --git https://example.invalid/maki.git --branch main --state-dir /var/lib/maki/docs
+maki serve . --metrics 127.0.0.1:4041
 ```
 
 `maki serve <path>` walks upward from `<path>` to find `maki.toml`. If `<path>`
@@ -108,6 +110,46 @@ truth.
 - `/@/diagnostics`: project diagnostics.
 - `/@/dates`: date index.
 - `/.maki/search`: title search.
+
+## Deployment
+
+`serve --git` keeps a checkout of a configured branch and periodically fetches
+updates. Put `maki.toml` at the repository root and set its `source` when notes
+live in a subdirectory. `--metrics HOST:PORT` enables a separate Prometheus
+listener that serves `GET /metrics`.
+
+The NixOS module supports multiple named local or Git-backed targets:
+
+```nix
+{
+  inputs.maki.url = "git+https://example.invalid/maki.git";
+
+  outputs =
+    { maki, nixpkgs, ... }:
+    {
+      nixosConfigurations.nixbox = nixpkgs.lib.nixosSystem {
+        modules = [
+          maki.nixosModules.default
+          {
+            services.maki = {
+              enable = true;
+              targets.docs = {
+                git.url = "https://example.invalid/notes.git";
+                port = 4000;
+                metrics.port = 4041;
+                openFirewall = true;
+              };
+            };
+          }
+        ];
+      };
+    };
+}
+```
+
+Git targets default to `branch = "main"`, `fetchInterval = "60s"`, and
+`stateDir = "/var/lib/maki/<target-name>"`. For a local target, set `source`
+instead of `git`.
 
 ## Development
 

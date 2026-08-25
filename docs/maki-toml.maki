@@ -71,15 +71,21 @@ Note 자체의 제목, 검색 제목, note route는 바꾸지 않는다.
 : source = "docs"
 
 프로젝트 루트 기준으로 `.maki` 파일을 읽을 source root를 지정한다.
-Maki는 source root 아래의 숨김 파일과 숨김 디렉토리를 제외하고 `.maki` 파일을 재귀적으로 읽는다.
+Build와 serve는 source root 아래의 숨김 파일과 숨김 디렉토리를 제외하고 `.maki` 파일을 재귀적으로 읽는다.
+LSP workspace loading은 현재 숨김 경로도 읽으므로, 숨김 note를 두면 editor diagnostics/symbol/completion과 build/serve 결과가 달라질 수 있다.
 
-`source`는 프로젝트 내부의 상대 경로여야 한다.
+`source`는 프로젝트 루트 기준의 lexical relative path여야 한다.
+빈 값, absolute path, `..` component는 거부한다.
 
 - 가능: `source = "."`
 - 가능: `source = "docs"`
 - 불가: `source = ""`
 - 불가: `source = "../docs"`
 - 불가: `source = "/srv/maki/docs"`
+
+Local directory source에서는 source root 아래 symlink의 target이 프로젝트 안에 있는지 canonical path로 검사하지 않는다.
+따라서 신뢰하지 않는 local project를 실행할 때 symlink를 프로젝트 경계로 간주하면 안 된다.
+Git source serving은 repository 안의 symlink를 거부한다.
 
 `source = "docs"`일 때 `docs/project/plan.maki`의 note route는 `/project/plan`이다.
 Note link도 source root를 기준으로 해석하므로 `[[project/plan]]`처럼 쓴다.
