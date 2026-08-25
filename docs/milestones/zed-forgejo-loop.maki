@@ -1,6 +1,6 @@
 --^ title: Zed Forgejo Development and Deployment Loop
 --^ date: [2026-08-26]
---^ status: doing
+--^ status: done
 
 [[zed-dev-loop]]의 local edit/reload 흐름을 Forgejo PR, main merge, 실제 dogfood 배포까지 연결한다.
 
@@ -59,6 +59,8 @@ Maki의 Zed 지원은 세 저장소에 나뉜다.
 
 기존 PR 번호와 새 loop PR 번호는 같은 작업으로 간주하지 않는다.
 특히 이 마일스톤을 작성할 때 이미 열린 Maki PR `#3`, `#4`는 local/Forgejo loop PR과 별도 작업이다.
+실행 결과 local loop는 Maki `#5`와 maki-zed `#1`, Forgejo loop는 그 위에 쌓인 Maki `#6`와 maki-zed `#2`로 열었다.
+기존 Maki `#3`, `#4`는 review 보정 뒤 병합했고, merge revision `c2a038e`를 nixbox에 배포했다.
 
 = Dogfood 배포
 
@@ -95,26 +97,26 @@ Zed adapter/query/grammar 변경은 server deploy 대상이 아니다.
 - [x] LSP smoke가 flake에 고정된 Maki 대신 현재 debug binary를 받을 수 있다.
 - [x] 기본 경로와 override 환경변수를 문서화한다.
 
---v status: doing
+--v status: done
 == 2. Forgejo PR gate
 
 - [x] local loop 변경을 저장소별 branch와 commit으로 분리한다.
 - [x] Forgejo loop 변경을 별도 stacked branch로 분리한다.
-- [ ] local loop PR과 Forgejo loop PR을 생성한다.
+- [x] local loop PR과 Forgejo loop PR을 생성한다.
 - [x] 기존 Maki PR `#3`, `#4`의 실제 diff와 mergeability를 확인한다.
 
---v status: todo
+--v status: done
 == 3. Merge and deploy
 
-- [ ] 기존 Maki PR `#3`, `#4`를 검증하고 병합한다.
-- [ ] merge된 Maki main에서 전체 test를 통과한다.
-- [ ] dotfiles flake input update와 nixbox deploy를 완료한다.
-- [ ] Zed local extension의 reload/rebuild 경로를 다시 확인한다.
+- [x] 기존 Maki PR `#3`, `#4`를 검증하고 병합한다.
+- [x] merge된 Maki main에서 전체 test를 통과한다.
+- [x] dotfiles flake input update와 nixbox deploy를 완료한다.
+- [x] Zed local extension의 reload/rebuild 경로를 다시 확인한다.
 
 = 성공기준
 
 - [x] 세 저장소 검증을 `./scripts/verify-stack.sh` 한 번으로 재현할 수 있다.
-- [ ] 새 local loop와 Forgejo loop가 별도 PR로 보인다.
-- [ ] 기존 PR `#3`, `#4`가 새 PR과 혼동 없이 병합된다.
-- [ ] 배포 script가 feature branch, dirty tree, remote와 다른 main을 거부한다.
-- [ ] 실제 Maki main revision이 nixbox에 배포된다.
+- [x] 새 local loop와 Forgejo loop가 별도 PR로 보인다.
+- [x] 기존 PR `#3`, `#4`가 새 PR과 혼동 없이 병합된다.
+- [x] 배포 script가 feature branch, dirty tree, remote와 다른 main을 거부한다.
+- [x] 실제 Maki main revision이 nixbox에 배포된다.
