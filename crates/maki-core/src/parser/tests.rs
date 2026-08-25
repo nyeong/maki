@@ -244,30 +244,112 @@ fn parse_inline_date_stamps_and_ranges() {
             Inline::Text("On "),
             Inline::DateStamp(DateStamp {
                 kind: DateStampKind::Date,
-                date: Date::new(2026, 8, 15).unwrap(),
+                target: DateStampTarget::Date(Date::new(2026, 8, 15).unwrap()),
                 body: "2026-08-15 토",
             }),
             Inline::Text(" and "),
             Inline::DateStamp(DateStamp {
                 kind: DateStampKind::Event,
-                date: Date::new(2026, 8, 16).unwrap(),
+                target: DateStampTarget::Date(Date::new(2026, 8, 16).unwrap()),
                 body: "2026-08-16",
             }),
             Inline::Text(" through "),
             Inline::DateRange(DateRange {
                 start: DateStamp {
                     kind: DateStampKind::Date,
-                    date: Date::new(2026, 8, 17).unwrap(),
+                    target: DateStampTarget::Date(Date::new(2026, 8, 17).unwrap()),
                     body: "2026-08-17",
                 },
                 end: DateStamp {
                     kind: DateStampKind::Date,
-                    date: Date::new(2026, 8, 19).unwrap(),
+                    target: DateStampTarget::Date(Date::new(2026, 8, 19).unwrap()),
                     body: "2026-08-19",
                 },
             }),
             Inline::Text("."),
         ]
+    );
+}
+
+#[test]
+fn parse_inline_month_iso_week_and_iso_weekday_date_markers() {
+    assert_eq!(
+        parse_inline("[2026-08] <2026-W23> [2026-W23-1 Mon]"),
+        vec![
+            Inline::DateStamp(DateStamp {
+                kind: DateStampKind::Date,
+                target: DateStampTarget::Month(DateMonth::new(2026, 8).unwrap()),
+                body: "2026-08",
+            }),
+            Inline::Text(" "),
+            Inline::DateStamp(DateStamp {
+                kind: DateStampKind::Event,
+                target: DateStampTarget::IsoWeek(IsoWeek::new(2026, 23).unwrap()),
+                body: "2026-W23",
+            }),
+            Inline::Text(" "),
+            Inline::DateStamp(DateStamp {
+                kind: DateStampKind::Date,
+                target: DateStampTarget::Date(Date::new(2026, 6, 1).unwrap()),
+                body: "2026-W23-1 Mon",
+            }),
+        ]
+    );
+}
+
+#[test]
+fn parse_inline_rejects_invalid_month_and_iso_week_markers() {
+    assert_eq!(
+        parse_inline("[2026-13] [2026-W00] [2026-W54] [2026-W23-8]"),
+        vec![Inline::Text("[2026-13] [2026-W00] [2026-W54] [2026-W23-8]")]
+    );
+}
+
+#[test]
+fn iso_week_dates_follow_iso_8601_boundaries() {
+    let week = IsoWeek::new(2026, 1).unwrap();
+
+    assert_eq!(week.monday(), Date::new(2025, 12, 29).unwrap());
+    assert_eq!(week.sunday(), Date::new(2026, 1, 4));
+    assert!(IsoWeek::new(2026, 53).is_some());
+    assert!(IsoWeek::new(2027, 53).is_none());
+}
+
+#[test]
+fn iso_week_dates_handle_representable_year_boundaries() {
+    let first_week = IsoWeek::new(1, 1).unwrap();
+    assert_eq!(first_week.monday(), Date::new(1, 1, 1).unwrap());
+    assert!(first_week.previous().is_none());
+
+    let last_week = IsoWeek::new(9999, 52).unwrap();
+    for (weekday, day) in [(1, 27), (2, 28), (3, 29), (4, 30), (5, 31)] {
+        assert_eq!(
+            last_week.date_for_weekday(weekday),
+            Date::new(9999, 12, day)
+        );
+    }
+    assert!(last_week.date_for_weekday(6).is_none());
+    assert!(last_week.sunday().is_none());
+    assert_eq!(
+        last_week.representable_date_range(),
+        (
+            Date::new(9999, 12, 27).unwrap(),
+            Date::new(9999, 12, 31).unwrap()
+        )
+    );
+    assert!(last_week.next().is_none());
+
+    assert_eq!(
+        parse_inline("[9999-W52-5]"),
+        vec![Inline::DateStamp(DateStamp {
+            kind: DateStampKind::Date,
+            target: DateStampTarget::Date(Date::new(9999, 12, 31).unwrap()),
+            body: "9999-W52-5",
+        })]
+    );
+    assert_eq!(
+        parse_inline("[9999-W52-6]"),
+        vec![Inline::Text("[9999-W52-6]")]
     );
 }
 
@@ -437,7 +519,7 @@ fn parse_table_with_inline_cells_and_numeric_alignment() {
         rows[0].cells[2].body,
         vec![Inline::DateStamp(DateStamp {
             kind: DateStampKind::Date,
-            date: Date::new(2026, 8, 15).unwrap(),
+            target: DateStampTarget::Date(Date::new(2026, 8, 15).unwrap()),
             body: "2026-08-15",
         })]
     );
@@ -547,7 +629,7 @@ fn parse_table_keeps_middle_separator_inside_table() {
         rows[2].cells[0].body,
         vec![Inline::DateStamp(DateStamp {
             kind: DateStampKind::Date,
-            date: Date::new(2026, 4, 4).unwrap(),
+            target: DateStampTarget::Date(Date::new(2026, 4, 4).unwrap()),
             body: "2026-04-04 Sat",
         })]
     );

@@ -79,6 +79,8 @@ local path serve는 입력 path에서 `maki.toml`을 상위로 탐색하고, 없
 - angle-wrapped HTTP/HTTPS Hyper Link
 - italic, strong, superscript, subscript, highlight
 - date marker와 date range
+  - Gregorian day/month marker
+  - ISO week/ISO weekday marker
 - invalid property, unclosed container, property-on-property, duplicate reference definition diagnostics
 
 근거:
@@ -104,6 +106,10 @@ internal identity는 확장자를 제거한 root-relative canonical path다.
 `NoteIndex`는 exact path, normalized path, project-wide normalized stem, sibling normalized stem lookup을 가진다.
 Document reference definition target 중 local Maki note 후보는 같은 resolution을 사용하고, HTTP/HTTPS target과 Hyper Link는 external link index에 들어간다.
 Todo item body의 Date Marker와 Date Range는 일반 list item처럼 date index에 들어가며, occurrence context는 `[ ]` 또는 `[x]` state를 보존한다.
+Date Marker는 Gregorian day, Gregorian month, ISO week, ISO weekday를 구분한다.
+Month marker는 month page와 그 달의 모든 day page에, ISO week marker는 week page와 그 주의 모든 day page에 index한다.
+날짜 계층의 boundary period page는 `0001-01-01`부터 `9999-12-31`까지 표현 가능한 subrange만 펼치며, 범위 밖 period로 향하는 navigation은 생략한다. 따라서 `0001-W01`에는 previous week link가 없다.
+Month/week에서 각 day로 펼친 backlink는 direct day marker와 range middle보다 낮은 우선순위로 정렬한다.
 별도 sans IO `ProjectAnalysis`는 source snapshot 목록에서 document metadata, block/heading/note-link/property/date occurrence와 semantic diagnostics를 계산한다.
 
 근거:
@@ -187,7 +193,7 @@ project page에는 nav shell, search input, meta index link, TOC/search scripts�
 웹 서버는 `maki-http`의 직접 만든 HTTP parser/response 위에 thread-per-connection으로 동작한다.
 SSE live reload와 polling file watcher를 갖고 있고, `.maki` 파일과 `maki.toml` 변경을 감지한다.
 project page에서는 runtime asset을 external route로 제공한다.
-프로젝트 snapshot마다 response cache를 갖고, `/@/`, `/@/recents`, `/@/diagnostics`, `/@/dates`, `/@/dates/yyyy`, `/@/dates/yyyy-mm`, `/@/dates/yyyy-mm-dd`, `/.maki/search-index.json`, note page HTML을 cache miss 시 렌더한 뒤 재사용한다.
+프로젝트 snapshot마다 response cache를 갖고, `/@/`, `/@/recents`, `/@/diagnostics`, `/@/dates`, `/@/dates/yyyy`, `/@/dates/yyyy-mm`, `/@/dates/yyyy-Www`, `/@/dates/yyyy-mm-dd`, `/.maki/search-index.json`, note page HTML을 cache miss 시 렌더한 뒤 재사용한다.
 serve 시작 후에는 background warmer가 cacheable route를 순차적으로 채운다.
 local file watcher나 git updater가 새 `Maki` snapshot을 교체하면 response cache도 함께 새 세대로 바뀐다.
 metrics가 켜지면 HTTP request, response cache, render, project load/reload, git refresh, live reload 상태를 Prometheus 형식으로 누적한다.

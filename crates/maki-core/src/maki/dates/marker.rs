@@ -5,7 +5,7 @@ use super::types::DateMarker;
 pub(super) fn date_stamp_marker(stamp: DateStamp<'_>) -> DateMarker {
     DateMarker::Single {
         kind: stamp.kind(),
-        date: stamp.date(),
+        target: stamp.target(),
         raw: date_stamp_raw(stamp),
     }
 }
@@ -13,8 +13,14 @@ pub(super) fn date_stamp_marker(stamp: DateStamp<'_>) -> DateMarker {
 pub(super) fn date_range_marker(range: DateRange<'_>) -> DateMarker {
     DateMarker::Range {
         kind: range.kind(),
-        start: range.start().date(),
-        end: range.end().date(),
+        start: range
+            .start()
+            .date()
+            .expect("date ranges only contain exact start dates"),
+        end: range
+            .end()
+            .date()
+            .expect("date ranges only contain exact end dates"),
         raw: date_range_raw(range),
     }
 }

@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::parser::Date;
+use crate::parser::DateStampTarget;
 
-use super::period::date_page_path;
+use super::period::date_target_page_path;
 
 pub fn inline_date_occurrence_id(source_path: &Path, ordinal: usize) -> String {
     date_occurrence_id("inline", source_path, ordinal)
@@ -12,8 +12,8 @@ pub fn property_date_occurrence_id(source_path: &Path, ordinal: usize) -> String
     date_occurrence_id("property", source_path, ordinal)
 }
 
-pub fn date_occurrence_href(date: Date, occurrence_id: &str) -> String {
-    format!("{}#{occurrence_id}", date_page_path(date))
+pub fn date_occurrence_href(target: DateStampTarget, occurrence_id: &str) -> String {
+    format!("{}#{occurrence_id}", date_target_page_path(target))
 }
 
 fn date_occurrence_id(kind: &str, source_path: &Path, ordinal: usize) -> String {

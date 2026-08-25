@@ -123,6 +123,25 @@ pub struct Date {
     day: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DateMonth {
+    year: u16,
+    month: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IsoWeek {
+    year: u16,
+    week: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateStampTarget {
+    Date(Date),
+    Month(DateMonth),
+    IsoWeek(IsoWeek),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateStampKind {
     Date,
@@ -132,7 +151,7 @@ pub enum DateStampKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateStamp<'a> {
     pub(super) kind: DateStampKind,
-    pub(super) date: Date,
+    pub(super) target: DateStampTarget,
     pub(super) body: &'a str,
 }
 
@@ -143,8 +162,16 @@ pub struct DateRange<'a> {
 }
 
 impl Date {
+    const MIN_YEAR: u16 = 1;
+    const MAX_YEAR: u16 = 9999;
+    const MAX: Self = Self {
+        year: Self::MAX_YEAR,
+        month: 12,
+        day: 31,
+    };
+
     pub(super) fn new(year: u16, month: u8, day: u8) -> Option<Self> {
-        if year == 0 || month == 0 || month > 12 {
+        if !(Self::MIN_YEAR..=Self::MAX_YEAR).contains(&year) || month == 0 || month > 12 {
             return None;
         }
         if day == 0 || day > days_in_month(year, month) {
@@ -222,9 +249,21 @@ impl Date {
         self.day
     }
 
+    pub fn iso_weekday_number(&self) -> u8 {
+        match self.weekday_sunday_index() {
+            0 => 7,
+            index => index,
+        }
+    }
+
     pub fn weekday_abbrev(&self) -> &'static str {
-        const MONTH_OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
         const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+        WEEKDAYS[self.weekday_sunday_index() as usize]
+    }
+
+    fn weekday_sunday_index(&self) -> u8 {
+        const MONTH_OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
 
         // Sakamoto's algorithm, with 0 representing Sunday.
         let month = i32::from(self.month);
@@ -238,7 +277,7 @@ impl Date {
             + i32::from(self.day))
         .rem_euclid(7);
 
-        WEEKDAYS[index as usize]
+        index as u8
     }
 }
 
@@ -248,13 +287,203 @@ impl fmt::Display for Date {
     }
 }
 
+impl DateMonth {
+    pub fn new(year: u16, month: u8) -> Option<Self> {
+        Date::new(year, month, 1)?;
+
+        Some(Self { year, month })
+    }
+
+    pub(super) fn parse_prefix(source: &str) -> Option<(Self, usize)> {
+        let bytes = source.as_bytes();
+        if bytes.len() < "yyyy-mm".len() || bytes[4] != b'-' {
+            return None;
+        }
+        if !bytes[..4].iter().all(u8::is_ascii_digit) || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+
+        let year = source[..4].parse::<u16>().ok()?;
+        let month = source[5..7].parse::<u8>().ok()?;
+
+        Self::new(year, month).map(|month| (month, 7))
+    }
+
+    pub fn year(&self) -> u16 {
+        self.year
+    }
+
+    pub fn month(&self) -> u8 {
+        self.month
+    }
+
+    pub fn first_day(&self) -> Date {
+        Date::new(self.year, self.month, 1).expect("valid DateMonth has a first day")
+    }
+
+    pub fn last_day(&self) -> Date {
+        Date::new(self.year, self.month, days_in_month(self.year, self.month))
+            .expect("valid DateMonth has a last day")
+    }
+}
+
+impl fmt::Display for DateMonth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04}-{:02}", self.year, self.month)
+    }
+}
+
+impl IsoWeek {
+    pub fn new(year: u16, week: u8) -> Option<Self> {
+        let max_week = weeks_in_iso_year(year)?;
+        if week == 0 || week > max_week {
+            return None;
+        }
+
+        let iso_week = Self { year, week };
+        iso_week.date_for_weekday(1)?;
+
+        Some(iso_week)
+    }
+
+    pub(super) fn parse_prefix(source: &str) -> Option<(Self, usize)> {
+        let bytes = source.as_bytes();
+        if bytes.len() < "yyyy-Www".len() || bytes[4] != b'-' || bytes[5] != b'W' {
+            return None;
+        }
+        if !bytes[..4].iter().all(u8::is_ascii_digit) || !bytes[6..8].iter().all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+
+        let year = source[..4].parse::<u16>().ok()?;
+        let week = source[6..8].parse::<u8>().ok()?;
+
+        Self::new(year, week).map(|week| (week, 8))
+    }
+
+    pub(super) fn parse_weekday_date_prefix(source: &str) -> Option<(Date, usize)> {
+        let bytes = source.as_bytes();
+        if bytes.len() < "yyyy-Www-d".len()
+            || bytes[4] != b'-'
+            || bytes[5] != b'W'
+            || bytes[8] != b'-'
+        {
+            return None;
+        }
+        if !bytes[..4].iter().all(u8::is_ascii_digit)
+            || !bytes[6..8].iter().all(u8::is_ascii_digit)
+            || !bytes[9].is_ascii_digit()
+        {
+            return None;
+        }
+
+        let year = source[..4].parse::<u16>().ok()?;
+        let week = source[6..8].parse::<u8>().ok()?;
+        let weekday = source[9..10].parse::<u8>().ok()?;
+        let date = Self::new(year, week)?.date_for_weekday(weekday)?;
+
+        Some((date, 10))
+    }
+
+    pub fn year(&self) -> u16 {
+        self.year
+    }
+
+    pub fn week(&self) -> u8 {
+        self.week
+    }
+
+    pub fn monday(&self) -> Date {
+        self.date_for_weekday(1)
+            .expect("valid IsoWeek has a Monday")
+    }
+
+    pub fn sunday(&self) -> Option<Date> {
+        self.date_for_weekday(7)
+    }
+
+    pub fn representable_date_range(&self) -> (Date, Date) {
+        let start = self.monday();
+        let end = self.sunday().unwrap_or(Date::MAX);
+
+        (start, end)
+    }
+
+    pub fn date_for_weekday(&self, weekday: u8) -> Option<Date> {
+        if !(1..=7).contains(&weekday) {
+            return None;
+        }
+
+        let mut date = iso_week_one_monday(self.year)?;
+        for _ in 1..self.week {
+            for _ in 0..7 {
+                date = date.next_day()?;
+            }
+        }
+        for _ in 1..weekday {
+            date = date.next_day()?;
+        }
+
+        Some(date)
+    }
+
+    pub fn previous(&self) -> Option<Self> {
+        if self.week > 1 {
+            return Self::new(self.year, self.week - 1);
+        }
+
+        let year = self.year.checked_sub(1)?;
+        let week = weeks_in_iso_year(year)?;
+        Self::new(year, week)
+    }
+
+    pub fn next(&self) -> Option<Self> {
+        if self.week < weeks_in_iso_year(self.year)? {
+            return Self::new(self.year, self.week + 1);
+        }
+
+        self.year.checked_add(1).and_then(|year| Self::new(year, 1))
+    }
+}
+
+impl fmt::Display for IsoWeek {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04}-W{:02}", self.year, self.week)
+    }
+}
+
+impl DateStampTarget {
+    pub fn parse_prefix(source: &str) -> Option<(Self, usize)> {
+        IsoWeek::parse_weekday_date_prefix(source)
+            .map(|(date, len)| (Self::Date(date), len))
+            .or_else(|| Date::parse_prefix(source).map(|(date, len)| (Self::Date(date), len)))
+            .or_else(|| IsoWeek::parse_prefix(source).map(|(week, len)| (Self::IsoWeek(week), len)))
+            .or_else(|| {
+                DateMonth::parse_prefix(source).map(|(month, len)| (Self::Month(month), len))
+            })
+    }
+
+    pub fn exact_date(&self) -> Option<Date> {
+        match self {
+            Self::Date(date) => Some(*date),
+            Self::Month(_) | Self::IsoWeek(_) => None,
+        }
+    }
+}
+
 impl<'a> DateStamp<'a> {
     pub fn kind(&self) -> DateStampKind {
         self.kind
     }
 
-    pub fn date(&self) -> Date {
-        self.date
+    pub fn target(&self) -> DateStampTarget {
+        self.target
+    }
+
+    pub fn date(&self) -> Option<Date> {
+        self.target.exact_date()
     }
 
     pub fn body(&self) -> &'a str {
@@ -288,6 +517,26 @@ fn days_in_month(year: u16, month: u8) -> u8 {
         2 => 28,
         _ => 0,
     }
+}
+
+fn weeks_in_iso_year(year: u16) -> Option<u8> {
+    let jan_1 = Date::new(year, 1, 1)?;
+    let weekday = jan_1.iso_weekday_number();
+
+    Some(if weekday == 4 || (weekday == 3 && is_leap_year(year)) {
+        53
+    } else {
+        52
+    })
+}
+
+fn iso_week_one_monday(year: u16) -> Option<Date> {
+    let mut date = Date::new(year, 1, 4)?;
+    for _ in 1..date.iso_weekday_number() {
+        date = date.previous_day()?;
+    }
+
+    Some(date)
 }
 
 #[derive(Debug, PartialEq, Default)]

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::types::{
-    Date, DateRange, DateStamp, DateStampKind, Inline, ReferenceDefinition, ReferenceDefinitions,
+    DateRange, DateStamp, DateStampKind, DateStampTarget, Inline, ReferenceDefinition,
+    ReferenceDefinitions,
 };
 
 #[derive(Default)]
@@ -123,15 +124,15 @@ fn parse_date_stamp_at(source: &str) -> Option<(DateStamp<'_>, usize)> {
     let body_source = &source[body_start..];
     let body_end = body_source.find(close)?;
     let body = &body_source[..body_end];
-    let (date, date_len) = Date::parse_prefix(body)?;
-    let rest = &body[date_len..];
+    let (target, target_len) = DateStampTarget::parse_prefix(body)?;
+    let rest = &body[target_len..];
 
     if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
 
     Some((
-        DateStamp { kind, date, body },
+        DateStamp { kind, target, body },
         body_start + body.len() + close.len_utf8(),
     ))
 }
@@ -143,7 +144,11 @@ fn parse_inline_date_range<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'
     let rest_after_separator = rest_after_start.strip_prefix(INLINE_DATE_RANGE_SEPARATOR)?;
     let (end, end_len) = parse_date_stamp_at(rest_after_separator)?;
 
-    if start.kind() != end.kind() || start.date() > end.date() {
+    let (Some(start_date), Some(end_date)) = (start.date(), end.date()) else {
+        return None;
+    };
+
+    if start.kind() != end.kind() || start_date > end_date {
         return None;
     }
 

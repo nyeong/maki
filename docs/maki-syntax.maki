@@ -660,7 +660,7 @@ Title은 Inline으로 다시 파싱하지 않는다.
 Reference Definition이 없으면 Text로 남긴다.
 동일한 title의 link definition이 여러 개 있으면 duplicate reference definition warning 대상이다.
 
-Date Range와 Date Marker가 우선한다. 따라서 `[yyyy-mm-dd]` 또는 `[yyyy-mm-dd <display suffix>]`는 Link가 아니라 Date Marker이다.
+Date Range와 Date Marker가 우선한다. 따라서 `[yyyy-mm-dd]`, `[yyyy-mm]`, `[yyyy-Www]`, `[yyyy-Www-d]` 또는 각 suffix form은 Link가 아니라 Date Marker이다.
 
 Maki note href 후보의 자세한 규칙은 Reference Link To Note 참고.
 
@@ -744,32 +744,58 @@ Hyper Link의 title과 target은 angle bracket을 제외한 body 문자열이다
 
 : [yyyy-mm-dd]
 : [yyyy-mm-dd <display suffix>]
+: [yyyy-mm]
+: [yyyy-Www]
+: [yyyy-Www-d]
 : <yyyy-mm-dd>
 : <yyyy-mm-dd <display suffix>>
+: <yyyy-mm>
+: <yyyy-Www>
+: <yyyy-Www-d>
 
 - parsing: custom
 
 Date Marker는 날짜를 semantic하게 표시하는 inline이다.
 
 `[date]`는 reference date이고, `<date>`는 event date이다.
-Date body에서 첫 `yyyy-mm-dd`가 의미상 날짜 값이다.
+Date body의 prefix가 의미상 날짜 또는 기간 값이다.
 그 뒤의 suffix는 표시용 body로 보존한다.
 
-Date body의 처음 10자는 `yyyy-mm-dd`여야 한다.
+지원하는 prefix:
+
+- `yyyy-mm-dd`: Gregorian calendar date.
+- `yyyy-mm`: Gregorian calendar month.
+- `yyyy-Www`: ISO 8601 week date의 week. `W`는 대문자이고 week는 2자리다.
+- `yyyy-Www-d`: ISO 8601 week date의 weekday. `d`는 Monday `1`부터 Sunday `7`까지다.
+
 그 뒤에 문자가 더 있으면 첫 문자는 whitespace여야 한다.
-Date validity는 year, month, day 범위와 leap year를 검사한다.
+Gregorian date/month validity는 year, month, day 범위와 leap year를 검사한다.
+ISO week period validity는 ISO week-numbering year와 week `01`-`52`/`53`을 검사한다.
+`yyyy-Www-d`는 weekday `1`-`7`도 검사하며, 그 weekday가 지원하는 Gregorian date 범위 `0001-01-01`부터 `9999-12-31` 안의 특정 일로 변환되어야 한다.
+따라서 `[9999-W52]`는 유효한 period marker지만 exact date marker는 `[9999-W52-5]`까지만 유효하고 `[9999-W52-6]`과 `[9999-W52-7]`은 유효하지 않다.
+
+Indexing:
+
+- `yyyy-mm-dd`와 `yyyy-Www-d`는 특정 일을 지정하므로 같은 우선순위의 day backlink로 index한다.
+- `yyyy-mm`은 해당 month page에 직접 index하고, 그 달의 모든 day page에도 가장 낮은 우선순위로 index한다.
+- `yyyy-Www`는 해당 ISO week page에 직접 index하고, 그 주에서 지원하는 Gregorian date 범위에 들어오는 모든 day page에도 가장 낮은 우선순위로 index한다.
 
 예:
 
 --v lang: maki
 : [2026-08-23]
 : [2026-08-23 Sun]
+: [2026-08]
+: [2026-W23]
+: [2026-W23-1 Mon]
 : <2026-08-23 10:00>
 
 == Date Range
 
 : [yyyy-mm-dd]--[yyyy-mm-dd]
+: [yyyy-Www-d]--[yyyy-Www-d]
 : <yyyy-mm-dd>--<yyyy-mm-dd>
+: <yyyy-Www-d>--<yyyy-Www-d>
 
 - parsing: custom
 
@@ -777,11 +803,13 @@ Date Range는 같은 kind의 두 Date Marker가 이루는 기간이다.
 
 양 끝 marker kind가 같아야한다.
 Start date는 end date보다 늦을 수 없다.
+양 끝 marker는 특정 일을 지정해야 하므로 `yyyy-mm-dd` 또는 `yyyy-Www-d`만 Date Range endpoint가 될 수 있다.
 
 예:
 
 --v lang: maki
 : [2026-08-23]--[2026-08-25]
+: [2026-W23-1]--[2026-W23-5]
 : <2026-08-23 10:00>--<2026-08-23 12:00>
 
 = Link Resolution

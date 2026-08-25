@@ -386,12 +386,12 @@ Task with property date.
     assert!(year_body.contains("<a href=\"/@/dates/2025\">← 2025</a>"));
     assert!(year_body.contains("<a href=\"/@/dates/2027\">2027 →</a>"));
     assert!(year_body.contains("<a href=\"/@/dates\">↑ Dates</a>"));
-    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">Month 2026-08</a>"));
 
     assert_eq!(month.status(), http::StatusCode::Ok);
     assert!(month_body.contains("<title>2026-08</title>"));
     assert!(month_body.contains("<a href=\"/@/dates/2026-07\">← 2026-07</a>"));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-09\">2026-09 →</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-09\">Month 2026-09 →</a>"));
     assert!(month_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
     assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
     assert!(month_body.contains(
@@ -453,6 +453,100 @@ Task with property date.
     assert!(note_body.contains("id=\"date-inline-home-maki-2\""));
     assert!(note_body.contains("<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-17#date-inline-home-maki-2\">[2026-08-17]</a>&ndash;<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-19#date-inline-home-maki-2\">[2026-08-19]</a>"));
     assert!(note_body.contains("id=\"date-property-home-maki-2\""));
+}
+
+#[test]
+fn test_dates_pages_list_month_and_iso_week_markers() {
+    let root = std::env::temp_dir().join(format!("maki-period-dates-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        r#"--^ title: Home
+
+Month [2026-08].
+Week [2026-W23].
+Specific [2026-W23-1].
+Target [2026-06-01]."#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+
+    let year = handle_request(&state, &http::Request::get("/@/dates/2026")).unwrap();
+    let year_body = String::from_utf8(year.body().to_vec()).unwrap();
+    let month = handle_request(&state, &http::Request::get("/@/dates/2026-08")).unwrap();
+    let month_body = String::from_utf8(month.body().to_vec()).unwrap();
+    let week = handle_request(&state, &http::Request::get("/@/dates/2026-W23")).unwrap();
+    let week_body = String::from_utf8(week.body().to_vec()).unwrap();
+    let iso_weekday_alias =
+        handle_request(&state, &http::Request::get("/@/dates/2026-W23-1")).unwrap();
+    let iso_weekday_alias_body = String::from_utf8(iso_weekday_alias.body().to_vec()).unwrap();
+    let day = handle_request(&state, &http::Request::get("/@/dates/2026-06-01")).unwrap();
+    let day_body = String::from_utf8(day.body().to_vec()).unwrap();
+    let month_day = handle_request(&state, &http::Request::get("/@/dates/2026-08-01")).unwrap();
+    let month_day_body = String::from_utf8(month_day.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(year.status(), http::StatusCode::Ok);
+    assert!(year_body.contains("<h3 id=\"ISO Weeks\">ISO Weeks</h3>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2026-W23\">Week 2026-W23</a>"));
+
+    assert_eq!(month.status(), http::StatusCode::Ok);
+    assert!(month_body.contains("<title>2026-08</title>"));
+    assert!(month_body.contains("date, month, inline"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-01\">Date 2026-08-01 Sat</a>"));
+
+    assert_eq!(week.status(), http::StatusCode::Ok);
+    assert!(week_body.contains("<title>2026-W23</title>"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026-W22\">← 2026-W22</a>"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026-W24\">Week 2026-W24 →</a>"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026\">↑ 2026</a>"));
+    assert!(week_body.contains("date, week, inline"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026-06-01\">Date 2026-06-01 Mon</a>"));
+    assert!(week_body.contains("<a href=\"/@/dates/2026-06-07\">Date 2026-06-07 Sun</a>"));
+
+    assert_eq!(iso_weekday_alias.status(), http::StatusCode::Ok);
+    assert!(iso_weekday_alias_body.contains("<title>2026-06-01 Mon</title>"));
+
+    assert_eq!(day.status(), http::StatusCode::Ok);
+    let specific_position = day_body.find("/home#date-inline-home-maki-3").unwrap();
+    let target_position = day_body.find("/home#date-inline-home-maki-4").unwrap();
+    let week_day_position = day_body.find("date, week day, inline").unwrap();
+    assert!(specific_position < week_day_position);
+    assert!(target_position < week_day_position);
+
+    assert_eq!(month_day.status(), http::StatusCode::Ok);
+    assert!(month_day_body.contains("date, month day, inline"));
+}
+
+#[test]
+fn test_iso_week_pages_handle_representable_year_boundaries() {
+    let root = std::env::temp_dir().join(format!("maki-boundary-weeks-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        "First [0001-W01].\nLast [9999-W52].\nFriday [9999-W52-5].",
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let first = handle_request(&state, &http::Request::get("/@/dates/0001-W01")).unwrap();
+    let first_body = String::from_utf8(first.body().to_vec()).unwrap();
+    let last = handle_request(&state, &http::Request::get("/@/dates/9999-W52")).unwrap();
+    let last_body = String::from_utf8(last.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(first.status(), http::StatusCode::Ok);
+    assert!(!first_body.contains("←"));
+    assert!(first_body.contains("/@/dates/0001-W02"));
+
+    assert_eq!(last.status(), http::StatusCode::Ok);
+    assert!(last_body.contains("/@/dates/9999-12-31"));
+    assert!(!last_body.contains("→"));
 }
 
 #[test]

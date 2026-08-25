@@ -13,9 +13,9 @@ mod tests;
 pub use diagnostic::{ParseDiagnostic, ParseDiagnosticKind, format_parse_diagnostic_kind};
 pub use inline::parse_inline;
 pub use types::{
-    Block, BlockKind, Date, DateRange, DateStamp, DateStampKind, Document, Inline, ListItem,
-    ListKind, ReferenceDefinition, ReferenceDefinitions, TableCell, TableColumnAlignment, TableRow,
-    TableRowKind, TodoState,
+    Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
+    Document, Inline, IsoWeek, ListItem, ListKind, ReferenceDefinition, ReferenceDefinitions,
+    TableCell, TableColumnAlignment, TableRow, TableRowKind, TodoState,
 };
 
 pub struct ParseResult<'a> {
