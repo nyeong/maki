@@ -1,6 +1,7 @@
 use super::draft::{BlockDraft, ListItemDraft, PropertyItemDraft, PropertyKind, build_drafts};
 use super::line::{LinePrefix, LineToken, scan_lines};
 use super::*;
+use crate::source::{SourceMap, SourceSpan};
 
 #[test]
 fn nested_unordered_list() {
@@ -286,59 +287,43 @@ Container Block
 
 plain text"#;
 
+    let lines = scan_lines(source);
+    let tokens = lines
+        .iter()
+        .map(|line| match line {
+            LineToken::Blank { raw_line, .. } => (0, None, *raw_line),
+            LineToken::Line {
+                indent,
+                kind,
+                raw_line,
+                ..
+            } => (*indent, Some(*kind), *raw_line),
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        scan_lines(source),
+        tokens,
         vec![
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::EnCaret,
-                raw_line: "--^ title: Maki"
-            },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::EqualsRun(2),
-                raw_line: "== Heading"
-            },
-            LineToken::Blank { raw_line: "" },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::Hyphen,
-                raw_line: "- list"
-            },
-            LineToken::Line {
-                indent: 2,
-                kind: LinePrefix::Hyphen,
-                raw_line: "  - nested list"
-            },
-            LineToken::Blank { raw_line: "" },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::Colon,
-                raw_line: ": This is Code Line"
-            },
-            LineToken::Blank { raw_line: "" },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::HyphenFence(3),
-                raw_line: "--- code"
-            },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::None,
-                raw_line: "Container Block"
-            },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::HyphenFence(3),
-                raw_line: "---"
-            },
-            LineToken::Blank { raw_line: "" },
-            LineToken::Line {
-                indent: 0,
-                kind: LinePrefix::None,
-                raw_line: "plain text"
-            },
+            (0, Some(LinePrefix::EnCaret), "--^ title: Maki"),
+            (0, Some(LinePrefix::EqualsRun(2)), "== Heading"),
+            (0, None, ""),
+            (0, Some(LinePrefix::Hyphen), "- list"),
+            (2, Some(LinePrefix::Hyphen), "  - nested list"),
+            (0, None, ""),
+            (0, Some(LinePrefix::Colon), ": This is Code Line"),
+            (0, None, ""),
+            (0, Some(LinePrefix::HyphenFence(3)), "--- code"),
+            (0, Some(LinePrefix::None), "Container Block"),
+            (0, Some(LinePrefix::HyphenFence(3)), "---"),
+            (0, None, ""),
+            (0, Some(LinePrefix::None), "plain text"),
         ]
+    );
+    let source_map = SourceMap::new(source);
+    assert_eq!(
+        lines.iter().map(LineToken::span).collect::<Vec<_>>(),
+        (0..lines.len())
+            .map(|line| source_map.line_span(line).expect("line should exist"))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -367,6 +352,7 @@ plain text"#;
         vec![
             BlockDraft::Property {
                 line: 1,
+                span: SourceSpan::new(0, 15),
                 raw_line: "--^ title: Maki",
                 indent: 0,
                 kind: PropertyKind::Previous,
@@ -586,6 +572,19 @@ fn parse_reports_no_diagnostics_for_supported_document() {
 }
 
 #[test]
+fn lone_heading_marker_is_plain_text() {
+    let parsed = parse("=");
+
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(
+        parsed.document.blocks[0].kind,
+        BlockKind::Paragraph {
+            body: vec![Inline::Text("=")],
+        }
+    );
+}
+
+#[test]
 fn parse_quote_lines_strip_prefix_for_inner_maki() {
     let parsed = parse(
         r#"> = Quoted
@@ -622,6 +621,7 @@ fn parse_reports_invalid_property_without_panicking() {
         parsed.diagnostics,
         vec![ParseDiagnostic {
             line: 1,
+            span: SourceSpan::new(0, 20),
             kind: ParseDiagnosticKind::InvalidProperty {
                 raw_line: "--^ invalid-property"
             },
@@ -640,6 +640,7 @@ fn main() {}"#,
         parsed.diagnostics,
         vec![ParseDiagnostic {
             line: 1,
+            span: SourceSpan::new(0, 8),
             kind: ParseDiagnosticKind::UnclosedContainer {
                 raw_line: "--- code"
             },
@@ -743,6 +744,7 @@ fn parse_reports_property_on_property_and_ignores_the_second_property() {
         parsed.diagnostics,
         vec![ParseDiagnostic {
             line: 2,
+            span: SourceSpan::new(19, 37),
             kind: ParseDiagnosticKind::PropertyOnProperty {
                 raw_line: "--^ title: ignored",
             },
@@ -770,14 +772,16 @@ fn parse_reports_duplicate_reference_definitions_and_uses_the_first() {
         parsed.diagnostics[0],
         ParseDiagnostic {
             line: 3,
-            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. }
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
+            ..
         }
     ));
     assert!(matches!(
         parsed.diagnostics[1],
         ParseDiagnostic {
             line: 5,
-            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. }
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
+            ..
         }
     ));
 }

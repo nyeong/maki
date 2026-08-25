@@ -82,6 +82,22 @@ fn test_parse_unknown_command() {
 }
 
 #[test]
+fn test_parse_lsp_command() {
+    assert_eq!(
+        parse_args(&["maki".to_string(), "lsp".to_string()]),
+        Ok(Command::Lsp)
+    );
+    assert_eq!(
+        parse_args(&[
+            "maki".to_string(),
+            "lsp".to_string(),
+            "unexpected".to_string(),
+        ]),
+        Err(CliError::UnexpectedArgument("unexpected".to_string()))
+    );
+}
+
+#[test]
 fn test_parse_missing_command() {
     assert_eq!(parse_args(&args(&["maki"])), Err(CliError::MissingCommand))
 }

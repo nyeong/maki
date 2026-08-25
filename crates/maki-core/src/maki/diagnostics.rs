@@ -387,7 +387,7 @@ fn push_link_diagnostic(
     target: &str,
 ) {
     match resolution {
-        NoteLinkResolution::Found(_) => {}
+        NoteLinkResolution::Found(_) | NoteLinkResolution::FoundHeading { .. } => {}
         NoteLinkResolution::Broken => diagnostics.push(ProjectDiagnostic::new(
             source_path,
             None,

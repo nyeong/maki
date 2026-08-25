@@ -67,15 +67,31 @@ impl Maki {
     }
 
     pub fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
+        let Some((note_target, heading_anchor)) = target.split_once('#') else {
+            return self.resolve_note_target(current, target);
+        };
+        if heading_anchor.is_empty() {
+            return NoteLinkResolution::Broken;
+        }
+
+        let note_resolution = if note_target.is_empty() {
+            NoteLinkResolution::Found(current.clone())
+        } else {
+            self.resolve_note_target(current, note_target)
+        };
+        let NoteLinkResolution::Found(note_ref) = note_resolution else {
+            return note_resolution;
+        };
+
+        self.resolve_heading_target(note_ref, heading_anchor)
+    }
+
+    fn resolve_note_target(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
         let target = normalize_note_link_target(target);
         let target = target.as_str();
 
         if let Some(note_ref) = self.index.exact_path(Path::new(target)) {
             return NoteLinkResolution::Found(note_ref);
-        }
-
-        if target.starts_with('#') {
-            return NoteLinkResolution::Ambiguous;
         }
 
         if target.contains('/')
@@ -94,6 +110,52 @@ impl Maki {
         }
 
         NoteLinkResolution::Broken
+    }
+
+    fn resolve_heading_target(
+        &self,
+        note_ref: NoteRef,
+        heading_anchor: &str,
+    ) -> NoteLinkResolution {
+        let Some(note) = self.note(&note_ref) else {
+            return NoteLinkResolution::Broken;
+        };
+        let Ok(source) = std::fs::read_to_string(&note.absolute_path) else {
+            return NoteLinkResolution::Broken;
+        };
+        let parsed = parser::parse(&source);
+        let headings = parsed.document.blocks.iter().filter_map(|block| {
+            let parser::BlockKind::Heading { raw_body, .. } = &block.kind else {
+                return None;
+            };
+            Some(
+                block
+                    .property("id")
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or(raw_body),
+            )
+        });
+        let exact = headings
+            .clone()
+            .filter(|anchor| *anchor == heading_anchor)
+            .collect::<Vec<_>>();
+        let matches = if exact.is_empty() {
+            let normalized = normalize_key(heading_anchor);
+            headings
+                .filter(|anchor| normalize_key(anchor) == normalized)
+                .collect::<Vec<_>>()
+        } else {
+            exact
+        };
+
+        match matches.as_slice() {
+            [anchor] => NoteLinkResolution::FoundHeading {
+                note: note_ref,
+                anchor: (*anchor).to_string(),
+            },
+            [] => NoteLinkResolution::Broken,
+            _ => NoteLinkResolution::Ambiguous,
+        }
     }
 
     pub fn get_raw_content(&self, path: &Path) -> Result<String, Error> {

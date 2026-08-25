@@ -1,6 +1,9 @@
+use crate::source::SourceSpan;
+
 #[derive(Debug, PartialEq)]
 pub struct ParseDiagnostic<'a> {
     pub line: usize,
+    pub span: SourceSpan,
     pub kind: ParseDiagnosticKind<'a>,
 }
 

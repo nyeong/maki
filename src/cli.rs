@@ -12,6 +12,7 @@ pub(crate) enum Command {
     Build {
         file: PathBuf,
     },
+    Lsp,
 }
 
 #[derive(Debug, PartialEq)]
@@ -222,6 +223,12 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
             Ok(Command::Build {
                 file: PathBuf::from(file),
             })
+        }
+        "lsp" => {
+            if let Some(argument) = args.get(2) {
+                return Err(CliError::UnexpectedArgument(argument.clone()));
+            }
+            Ok(Command::Lsp)
         }
         other => Err(CliError::UnknownCommand(other.to_string())),
     }

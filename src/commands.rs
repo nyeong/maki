@@ -13,6 +13,7 @@ pub(crate) enum RunError {
     Git(git_source::Error),
     Serve(maki_serve::RunError),
     Maki(MakiError),
+    Lsp(String),
 }
 
 impl From<git_source::Error> for RunError {
@@ -40,6 +41,7 @@ impl Display for RunError {
             RunError::Git(error) => write!(f, "Git source error: {}", error),
             RunError::Serve(error) => write!(f, "Serve error: {}", error),
             RunError::Maki(maki_error) => write!(f, "Maki error: {}", maki_error),
+            RunError::Lsp(message) => write!(f, "LSP error: {message}"),
         }
     }
 }
@@ -194,6 +196,7 @@ pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
     match command {
         Command::Serve { source, options } => run_serve(source, options),
         Command::Build { file } => run_build(file),
+        Command::Lsp => maki_lsp::run_stdio().map_err(|error| RunError::Lsp(error.to_string())),
     }
 }
 

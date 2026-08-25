@@ -113,6 +113,10 @@ impl<'a> Renderer<'a> {
                 };
                 self.render_anchor(&note_ref.web_path(), title);
             }
+            NoteLinkResolution::FoundHeading { note, anchor } => {
+                let href = format!("{}#{anchor}", note.web_path());
+                self.render_anchor(&href, title.unwrap_or(target));
+            }
             NoteLinkResolution::Broken => {
                 self.render_unresolved_link("broken-link", title.unwrap_or(target), target);
             }
@@ -396,6 +400,17 @@ impl<'a> Renderer<'a> {
                 block.property("mode"),
                 references,
             ),
+            BlockKind::Heading {
+                level,
+                body,
+                raw_body,
+            } => {
+                let anchor = block
+                    .property("id")
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or(raw_body);
+                self.render_heading_with_inlines(level + 1, anchor, body);
+            }
             kind => self.render_block_kind(kind, references),
         }
     }
@@ -412,14 +427,7 @@ impl<'a> Renderer<'a> {
                 self.html.push_str("</p>");
             }
             BlockKind::Code { lines, lang } => self.render_code(lines, *lang),
-            BlockKind::Heading {
-                level,
-                body,
-                raw_body,
-            } => {
-                // 문서의 title이 h1이 될 거라서 하나씩 올려줌
-                self.render_heading_with_inlines(level + 1, raw_body, body);
-            }
+            BlockKind::Heading { .. } => unreachable!("headings are rendered by render_block"),
             BlockKind::List { items } => self.render_list(items, references),
             BlockKind::Quote { .. } | BlockKind::Container { .. } => {
                 unreachable!("property-aware blocks are rendered by render_block")

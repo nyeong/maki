@@ -244,6 +244,7 @@ fn resolve_candidates(candidates: Option<&Vec<NoteRef>>) -> Option<NoteLinkResol
 #[derive(Debug, PartialEq)]
 pub enum NoteLinkResolution {
     Found(NoteRef),
+    FoundHeading { note: NoteRef, anchor: String },
     Broken,
     Ambiguous,
 }

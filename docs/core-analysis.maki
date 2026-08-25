@@ -1,0 +1,69 @@
+--^ title: Core Analysis
+--^ status: draft
+--^ updated: [2026-08-25]
+
+= 개요
+
+`maki-core`가 parser, renderer, search, diagnostics, LSP에 제공하는 IO 없는 분석 계약을 기록한다.
+Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자료 구조와 source 위치 규칙만 다룬다.
+
+= Source Model
+
+`SourceSpan`은 UTF-8 source의 zero-based half-open byte range `[start, end)`이다.
+모든 offset은 UTF-8 character boundary여야 한다.
+
+`SourceMap`은 source 하나와 line start byte offset index를 가진다.
+
+- LF와 CRLF를 line ending으로 취급한다.
+- byte offset을 zero-based line/byte column으로 변환한다.
+- byte offset을 LSP용 zero-based line/UTF-16 code unit으로 변환한다.
+- UTF-16 surrogate pair 중간 position은 유효한 byte offset으로 변환하지 않는다.
+
+= Located Surface
+
+기존 renderer가 쓰는 parser AST는 compatibility surface로 유지한다.
+`DocumentAnalysis`는 parser AST가 빌린 원문 slice를 byte offset으로 되찾아 source occurrence를 만들고 아래 index를 제공한다.
+따라서 현재 located surface는 parser AST 자체에 span을 저장하는 모델이 아니라 AST와 원문을 함께 분석한 별도 결과다.
+
+- block occurrence: block kind, 전체 line span, body span 목록
+- heading occurrence: level, title, anchor, marker span, title span
+- property occurrence: direction, key/value, line/key/value span
+- note link occurrence: 전체 span, target span, resolution
+- date occurrence: visible inline/property value origin, kind, span
+- diagnostic: source path, span, kind, message
+
+= Range Rules
+
+- Block span은 첫 source line 시작부터 마지막 source line body 끝까지다. Line ending은 제외한다.
+- Heading marker span은 `=` run만 포함하고 title span은 delimiter space 뒤의 text만 포함한다.
+- Note Link target span은 `[[`, `]]`를 제외한다.
+- Property key/value span은 prefix, `:`, 양끝 whitespace를 제외한다.
+- Parser warning은 문제가 있는 source line span을 우선 사용한다.
+- Project semantic warning은 문제가 있는 semantic target span을 사용한다.
+
+= Analysis API
+
+`analyze_document(path, source)`는 단일 source를 분석한다.
+`analyze_project(snapshots)`는 editor buffer를 포함한 immutable source snapshot 목록을 분석한다.
+
+두 함수는 filesystem과 network를 읽지 않는다.
+Project 분석은 note/heading link resolution과 semantic diagnostics를 계산한다.
+초기 구현은 snapshot 전체를 다시 분석하며, API 사용자는 incremental index 여부에 의존하지 않는다.
+
+= Diagnostics
+
+`AnalysisDiagnostic`은 parser warning과 Project snapshot에서 계산한 note/heading semantic warning을 한 surface로 제공한다.
+
+- broken/ambiguous note link
+- broken/ambiguous heading link
+
+External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이 sans IO surface에 포함하지 않는다.
+기존 project runtime의 diagnostics가 이 문제를 별도로 수집하며, 필요하면 IO adapter가 두 결과를 표시 단계에서 합성한다.
+
+= 남은 작업
+
+- nested Maki body의 원본 위치를 보존하는 located parse
+- reference definition target occurrence
+- block property owner를 명시하는 relation
+- Date Range를 단일 range occurrence로 보존하는 모델
+- parser AST와 located surface의 중복 축소

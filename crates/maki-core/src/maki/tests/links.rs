@@ -38,6 +38,38 @@ fn resolve_note_link() {
 }
 
 #[test]
+fn resolve_note_link_supports_heading_anchors_and_stable_ids() {
+    let project = temp_project("heading-link");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "= 소개\n--^ id: intro\n\n[[#intro]] [[other#詳細]]",
+    );
+    write_note_with_content(&project, "other.maki", "= 詳細");
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("start"), "#intro"),
+        NoteLinkResolution::FoundHeading {
+            note: NoteRef::new("start"),
+            anchor: "intro".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("start"), "other#詳細"),
+        NoteLinkResolution::FoundHeading {
+            note: NoteRef::new("other"),
+            anchor: "詳細".to_string(),
+        }
+    );
+
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert!(html.contains("<h2 id=\"intro\">소개</h2>"));
+    assert!(html.contains("href=\"/start#intro\""));
+    assert!(html.contains("href=\"/other#詳細\""));
+}
+
+#[test]
 fn resolve_note_link_uses_case_insensitive_path_lookup() {
     let project = temp_project("case-insensitive-path");
     write_note(&project, "milestones/v0.maki");

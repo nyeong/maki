@@ -1,0 +1,58 @@
+--^ title: Maki LSP
+--^ status: draft
+--^ updated: [2026-08-25]
+
+= 개요
+
+Maki 문서를 editor에서 작성하기 위한 Language Server의 동작과 연결 방법을 기록한다.
+문법은 [[maki-syntax]], IO 없는 분석 계약은 [[core-analysis]]를 따른다.
+
+= Architecture
+
+`maki-lsp`는 stdio LSP protocol adapter다.
+
+- stdin/stdout message 처리
+- workspace와 열린 editor buffer source cache
+- `maki-core::source`의 UTF-16 position 변환 사용
+- `maki-core` 분석 결과를 LSP response로 변환
+
+Parsing, link resolution, symbol/property index, completion 후보, semantic diagnostics는 `maki-core`가 담당한다.
+
+= 실행
+
+: maki lsp
+
+Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` 문서를 읽는다.
+열린 문서와 저장하지 않은 변경은 editor buffer source를 우선한다.
+
+= 지원 기능
+
+- parser warning과 깨진/모호한 note·heading link diagnostics
+- note link와 heading link definition
+- note, heading, property key와 관습 value completion
+- heading document symbol
+- note title과 heading workspace symbol
+- property, link resolution, date marker hover
+
+초기 구현은 문서 전체 동기화(`TextDocumentSyncKind::FULL`)를 사용하고 source snapshot 전체를 다시 분석한다.
+Completion은 cursor가 있는 line의 note link 또는 property 문맥을 기준으로 동작한다.
+Reference Definition target의 definition/diagnostics와 nested Maki body의 위치 기반 기능은 아직 지원하지 않는다.
+
+= Editor 연결
+
+Editor는 `.maki` document에 `maki lsp`를 stdio language server로 연결해야 한다.
+
+== Zed
+
+Zed에서 새 language와 language server를 등록하려면 local extension이 필요하다.
+공식 extension model은 language metadata에 grammar를 필수로 요구하고, language server command도 extension API에서 등록한다.
+따라서 `settings.json`만으로 `.maki`와 `maki lsp`를 직접 연결하는 방법은 현재 사용하지 않는다.
+
+v4의 tree-sitter grammar 비목표를 유지하는 동안 Zed 연결은 보류한다.
+Zed를 우선 지원하려면 다음 단계에서 최소 grammar와 local extension을 하나의 별도 작업으로 설계해야 한다.
+
+- [Zed Language Extensions]
+- [Zed Language Configuration]
+
+[Zed Language Extensions]: https://zed.dev/docs/extensions/languages
+[Zed Language Configuration]: https://zed.dev/docs/configuring-languages

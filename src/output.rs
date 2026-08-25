@@ -67,6 +67,7 @@ mod tests {
     fn test_format_parse_warning() {
         let diagnostic = parser::ParseDiagnostic {
             line: 3,
+            span: maki_core::source::SourceSpan::new(0, 20),
             kind: parser::ParseDiagnosticKind::InvalidProperty {
                 raw_line: "--^ invalid-property",
             },

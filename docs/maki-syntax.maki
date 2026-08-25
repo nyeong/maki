@@ -1,17 +1,20 @@
 --^ title: Maki Syntax
 --^ created: [2026-06-24]
 --^ updated: [2026-08-25]
+--^ status: stable
 
 = 개요
 
 Maki는 line-first lightweight markup language이다.
 
-이 문서는 maki 언어의 문법 SoT가 되기 위한 작업 문서이다.
-구현과 충돌이 있는 경우, 구현은 이 문서에 맞추어야한다.
+이 문서는 Maki 언어의 stable 문법과 문법적 해석 규칙을 정의하는 Source of Truth이다.
+구현과 충돌이 있는 경우 구현을 이 문서에 맞춘다.
 
-parser는 정의된 문법을 지원해야하며, Indexer는 필요한 index를 수집해야한다.
+이 문서에서 명시적으로 예약하거나 나중으로 둔 항목을 제외한 문법은 stable이다.
+Container macro의 구체적 의미처럼 아직 정의하지 않은 부분은 stable 문법에 포함되지 않는다.
 
-이 문서에는 각 renderer가 구체적으로 어떻게 표현해야하는지, parser가 어떻게 파싱해야하는지 강제하지 않는다.
+이 문서는 parser 자료 구조, source range, index API, renderer 표현, LSP protocol을 정의하지 않는다.
+그 구현 계약은 [[core-analysis]], [[lsp]] 등 별도 문서에서 다룬다.
 
 = Notation
 
@@ -42,15 +45,15 @@ Note Link 등 어떤 내용은 단일한 Document로는 resolve 할 수 없고, 
 
 Project는 여러 `.maki` 파일이 모인 source root이다. root로부터 recursive한 파일 시스템으로 이루어져있다.
 
-Indexer는 Project 내의 유효한 index를 모아야한다.
-
 == Block
+--^ id: document-block
 
 Block은 Document 내의 기본적인 구조 단위이다.
 
 자세한 내용은 [[#Block]] 참고.
 
 == Inline
+--^ id: document-inline
 
 Inline은 일부 Block 내의 부가적인 구조 단위이다.
 
@@ -73,7 +76,7 @@ maki 문법의 지배적인 멘탈 모델에 대해 소개한다.
   단, 아무 도구도 없이 키보드로 모두 치는 상황은 고려하지 않는다.
   아래의 둘을 차등적으로 가정한다. (1)은 항상 가정하고, (2)는 미래를 위해 예약한다.
   1. Vim, Helix, Emacs 같은 멀티 라인 에디팅 모델
-  2. LSP (미래)
+  2. LSP 같은 문법 보조 도구
 - 읽기 편해야한다.
   - 렌더링 결과 뿐 아니라 코드 그 자체도 읽기 편해야한다.
 - 의미를 담기 편해야 한다.
@@ -109,11 +112,9 @@ container는 그럴 수 없는 경우에 한정적으로 사용한다.
 1. 중요한 의미를 갖는 inline text는 semantic하게 표현해야한다.
    - Date를 `<2026-06-02>`, `[2026-06-02]` 등으로 표현하여 의미를 갖게 한다.
    - Note Link를 `[[link]]` 문법으로 외부 링크와 구분한다.
-   - 이로써 indexer는 semantic하고 유효한 index를 수집할 수 있다.
 2. 부가적 의미를 갖는 block의 속성은 property로 표현해야한다.
    - 예를 들어 Code에 언어를 지정한다면 `lang` property를 사용한다.
-   - 일반적이고 공통적인 property는 본 문서(언어 스펙)에 기술하여 render, indexer가 공유해야한다.
-   - 이로써 renderer는 보다 의미를 담아 Block을 표현할 수 있다
+   - 일반적이고 공통적인 property의 의미는 본 문서에 기술한다.
 
 == Artifact Model
 
@@ -155,7 +156,7 @@ Paragraph는 글 문단을 나타낸다. 특별한 block-start line prefix로 �
 Paragraph는 blank line에서 끝난다. Paragraph 뒤에 block-start line, table start, reference definition start가 blank line 없이 오면 paragraph가 끝난다. Paragraph body는 line마다 [[#Inline]]으로 파싱하고, line 사이에는 soft break inline을 삽입한다.
 
 특별히 문단을 시작해야하는 문자가 block-start line prefix 또는 table start와 겹친다면, 바로 앞에 `\` 하나를 붙여 escape한다.
-Parser는 escape 뒤의 line이 실제 block start로 해석될 때만 `\`를 제거한다. `\\`는 첫 `\`를 escape하지 않는다.
+Escape 뒤의 line이 실제 block start로 해석될 때만 `\`를 제거한다. `\\`는 첫 `\`를 escape하지 않는다.
 
 예:
 
@@ -172,6 +173,13 @@ Parser는 escape 뒤의 line이 실제 block start로 해석될 때만 `\`를 �
 Heading은 문서 안의 section heading을 나타낸다. Atomic하며 body는 Inline으로 해석한다.
 
 `=` 개수가 heading level이다. stable syntax의 heading level은 1부터 6까지만 인정한다.
+Heading marker 뒤의 space는 필수이며 heading text는 비어 있을 수 있다.
+
+- property
+  - `id`: heading의 stable anchor를 지정한다.
+
+Heading anchor는 비어 있지 않은 `id` property가 있으면 그 값을, 없으면 raw heading text를 사용한다.
+같은 Document 안에 같은 anchor가 여러 번 나올 수는 있지만 해당 anchor를 가리키는 Heading Link는 ambiguous이다.
 
 예:
 
@@ -263,7 +271,7 @@ Container는 크게 두 가지를 의미한다.
 - parsing: raw
 - clustering: container
 
-Unknown Container는 container kind가 현재 core가 모르는 kind이거나, 비어있는 경우를 나타낸다. body를 raw하게 해석하여 fallback한다.
+Unknown Container는 stable syntax가 의미를 정의하지 않은 kind이거나, kind가 비어있는 경우를 나타낸다. body는 raw text로 해석한다.
 
 == List
 
@@ -310,7 +318,7 @@ Unordered List는 순서 의미가 없는 list item sequence를 나타낸다.
 : - [x] [<item body>]
 
 Todo List는 Unordered List item에 todo state를 부여한다.
-`[ ]`는 todo, `[x]`는 done state이다. State는 List Item AST에 보존해야한다.
+`[ ]`는 todo, `[x]`는 done state이며 List Item 의미의 일부이다.
 
 Marker는 unordered list marker 바로 뒤에서만 해석한다.
 Todo marker 뒤에는 EOL 또는 `<whitespace>`가 와야한다. Body가 있으면 marker 뒤 첫 whitespace 하나를 제외한 나머지를 Inline으로 파싱한다.
@@ -380,7 +388,7 @@ Table은 header와 data row를 가진 tabular block을 의미한다.
 - parsing: custom
 - clustering: continuous
 
-Property는 document 또는 block에 붙는 key-value metadata이다. renderer는 이 block을 직접 표현할 의무는 없다. 다만 property가 강한 의미를 가질 때 표현에 참고해야한다.
+Property는 document 또는 block에 붙는 key-value metadata이며 visible content가 아니다.
 
 - key와 value는 trim 후 사용한다.
 - key는 case-insensitive이다.
@@ -435,7 +443,6 @@ Property Value는 property key에 대응하는 scalar metadata value이다.
 
 - date
   - Date Marker로 이루어져 있을 경우.
-  - indexer는 이를 수집해야한다.
 
 예:
 
@@ -455,7 +462,7 @@ Reference Definition은 link 혹은 footnote에 대한 정의를 두는 block이
 - line prefix: `[`
 
 Root-level line의 첫 non-whitespace character가 `[`이고, line이 Reference Definition 문법에 맞으면 Reference Definition block을 시작한다.
-renderer는 이 block을 직접 표현할 의무는 없다. 다만 연관된 Inline Item을 표현할 때 참고해야한다.
+Reference Definition 자체는 visible content가 아니며 연관된 Inline의 의미를 제공한다.
 Reference Definition은 같은 Document 전체에서 유효하다.
 
 `mode: block` Quote와 `quote` container처럼 body를 nested Maki로 파싱할 때는 바깥 Document의 Reference Definition을 상속한다.
@@ -465,11 +472,11 @@ Nested body 안의 local definition이 같은 identifier의 바깥 definition보
 크게 두 종류가 있다.
 
 1. link definition
-   Inline link item, `[<title>]`을 target에 대한 링크로 만든다. indexer는 이를 수집해야한다.
+   Inline link item, `[<title>]`을 target에 대한 링크로 만든다.
    Title은 비어 있을 수 없고 `^`로 시작할 수 없다.
 
 2. footnote definition
-   Footnote item, `[^<label>]`을 body에 대한 footnote로 만든다. indexer는 이를 수집해야한다.
+   Footnote item, `[^<label>]`을 body에 대한 footnote로 만든다.
    Label은 비어 있을 수 없다.
    Body는 Inline으로 파싱한다.
 
@@ -481,8 +488,8 @@ Title과 label에는 `[`, `]`, newline이 들어갈 수 없다. Label에는 whit
 Link target은 양끝 whitespace를 trim한 뒤 비어 있을 수 없다. Footnote body는 비어 있을 수 있다.
 Footnote body의 trailing whitespace는 보존한다.
 
-같은 종류의 Reference Definition에서 동일한 title 또는 label이 여러 번 정의되면 duplicate reference definition parser warning 대상이다.
-중복된 경우 source에서 가장 먼저 나온 definition만 유효하며, 이후 definition은 resolution, indexing, rendering에서 무시한다.
+같은 종류의 Reference Definition에서 동일한 title 또는 label이 여러 번 정의되면 duplicate reference definition warning 대상이다.
+중복된 경우 source에서 가장 먼저 나온 definition만 유효하며, 이후 definition은 해석에서 무시한다.
 Link title과 footnote label은 서로 다른 namespace를 사용하므로 같은 문자열을 각각 정의할 수 있다.
 
 Reference Definition은 source에서 뒤에 있어도 앞서 나온 Inline Item에 적용한다.
@@ -501,15 +508,7 @@ Inline은 line body 안의 source span을 해석한 구조 단위이다.
 
 매칭되지 않은 source span은 Text로 남는다.
 
-각 타입은 아래와 같은 특징이 있다.
-
-1. Parsing
-   Body를 아래 방법 중 하나로 해석한다.
-   - raw : 해석하지 않고 텍스트 그대로 받는다.
-   - inline : body를 다시 Inline으로 해석한다.
-   - custom : 자체적인 방법으로.
-2. Indexing
-   Project Indexer가 수집해야하는 의미를 나타낸다.
+각 타입의 body는 raw text, 다시 해석하는 Inline, 또는 자체 규칙 중 하나로 해석한다.
 
 우선순위는 아래와 같다:
 
@@ -530,14 +529,12 @@ Inline은 line body 안의 source span을 해석한 구조 단위이다.
 == Text
 
 - parsing: raw
-- indexing: none
 
 Text는 특별한 Inline 문법으로 매칭되지 않은, 별도 semantic이 없는 source span이다.
 
 == Soft Break
 
 - parsing: generated
-- indexing: none
 
 Soft Break는 Paragraph 안의 source line boundary이다.
 source에 직접 쓰는 marker가 아니라, Paragraph가 여러 source line으로 구성될 때 line 사이에 삽입한다.
@@ -547,7 +544,6 @@ source에 직접 쓰는 marker가 아니라, Paragraph가 여러 source line으�
 : `<body>`
 
 - parsing: raw
-- indexing: none
 
 Inline Code는 짧은 code 또는 literal text span이다.
 
@@ -561,7 +557,6 @@ Body는 Inline으로 다시 파싱하지 않는다.
 : *<body>*
 
 - parsing: inline
-- indexing: body 안의 Inline을 따른다.
 
 Strong은 강조된 inline span이다.
 
@@ -589,7 +584,6 @@ Closing delimiter는 아래 조건을 만족해야한다.
 : /<body>/
 
 - parsing: inline
-- indexing: body 안의 Inline을 따른다.
 
 Italic은 기울여 강조한 inline span이다.
 
@@ -620,7 +614,6 @@ Italic body는 Inline으로 다시 파싱한다.
 : _{<text>}
 
 - parsing: raw
-- indexing: none
 
 Superscript는 `^{`로 시작하고, Subscript는 `_{`로 시작한다.
 Opening delimiter 뒤의 첫 `}`가 body를 닫는다.
@@ -638,7 +631,6 @@ Body는 Inline으로 다시 파싱하지 않는다.
 : =<body>=
 
 - parsing: inline
-- indexing: body 안의 Inline을 따른다.
 
 Highlight는 눈에 띄게 표시할 inline span이다.
 
@@ -657,7 +649,6 @@ Highlight body는 Inline으로 다시 파싱한다.
 
 - parsing: custom
 - title parsing: raw
-- indexing: Reference Definition target 중 Maki note href 후보는 Link Resolution 대상이고, HTTP/HTTPS href는 external link check 대상이다.
 
 Link는 title만 source body에 두고 target은 Reference Definition으로 분리하는 inline link이다.
 
@@ -667,7 +658,7 @@ Title은 Inline으로 다시 파싱하지 않는다.
 
 같은 Document 안에 동일한 title의 link definition이 있어야 Link로 해석한다.
 Reference Definition이 없으면 Text로 남긴다.
-동일한 title의 link definition이 여러 개 있으면 duplicate reference definition parser warning 대상이다.
+동일한 title의 link definition이 여러 개 있으면 duplicate reference definition warning 대상이다.
 
 Date Range와 Date Marker가 우선한다. 따라서 `[yyyy-mm-dd]` 또는 `[yyyy-mm-dd <display suffix>]`는 Link가 아니라 Date Marker이다.
 
@@ -687,7 +678,6 @@ Maki note href 후보의 자세한 규칙은 Reference Link To Note 참고.
 : [^<label>]
 
 - parsing: raw
-- indexing: footnote
 
 Footnote는 같은 Document 안의 footnote definition을 참조하는 inline item이다.
 
@@ -697,15 +687,9 @@ Label은 Inline으로 다시 파싱하지 않는다.
 
 같은 Document 안에 동일한 label의 footnote definition이 있어야 Footnote로 해석한다.
 footnote definition이 없으면 Text로 남긴다.
-동일한 label의 footnote definition이 여러 개 있으면 duplicate reference definition parser warning 대상이다.
+동일한 label의 footnote definition이 여러 개 있으면 duplicate reference definition warning 대상이다.
 
-Indexer는 유효한 footnote definition을 source 순서대로 수집하고, definition body 안의 Inline이 요구하는 index도 함께 수집한다.
-특히 Date Marker와 Date Range는 일반 Paragraph body와 같은 방식으로 date index에 포함한다.
-
-Renderer는 Footnote Inline과 definition body 사이의 관계를 보존해야한다.
-Footnote 목록을 별도 영역으로 표현하는 renderer는 유효한 definition을 source 순서대로 한 번씩 표현한다.
-동일한 Footnote Inline이 여러 번 등장해도 definition body는 한 번만 표현한다.
-Footnote backlink와 별도 footnote index page는 stable syntax 범위에 포함하지 않는다.
+동일한 Footnote Inline이 여러 번 등장해도 하나의 definition을 참조한다.
 
 예:
 
@@ -716,18 +700,19 @@ Footnote backlink와 별도 footnote index page는 stable syntax 범위에 포�
 
 == Note Link
 
-: [[<target>]]
+: [[<note target>]]
+: [[<note target>#<heading anchor>]]
+: [[#<heading anchor>]]
 
 - parsing: raw
-- indexing: note link
 
 Note Link는 Project 내부 note를 가리키는 link이다.
 
-Target은 `]]` 전까지의 문자열이다.
+Target은 `]]` 전까지의 문자열이다. 첫 `#`는 note target과 heading anchor를 구분한다.
 Target은 Inline으로 다시 파싱하지 않는다.
 
 Note Link는 Link Resolution 규칙을 따른다.
-Heading fragment resolution은 지원하지 않으므로 `[[#heading]]`은 ambiguous이다.
+Note target이 비어 있고 heading anchor만 있으면 현재 Document의 Heading을 가리킨다.
 
 예:
 
@@ -735,6 +720,7 @@ Heading fragment resolution은 지원하지 않으므로 `[[#heading]]`은 ambig
 : [[maki-syntax]]
 : [[docs/maki-syntax]]
 : [[#heading]]
+: [[maki-syntax#Heading]]
 
 == Hyper Link
 
@@ -742,7 +728,6 @@ Heading fragment resolution은 지원하지 않으므로 `[[#heading]]`은 ambig
 : <https://<body>>
 
 - parsing: custom
-- indexing: external link
 
 Hyper Link는 source text에 그대로 적은 외부 HTTP/HTTPS link이다.
 
@@ -763,12 +748,11 @@ Hyper Link의 title과 target은 angle bracket을 제외한 body 문자열이다
 : <yyyy-mm-dd <display suffix>>
 
 - parsing: custom
-- indexing: date. Property Value 안의 Date Marker도 collector가 수집해야한다.
 
 Date Marker는 날짜를 semantic하게 표시하는 inline이다.
 
 `[date]`는 reference date이고, `<date>`는 event date이다.
-Date body에서 첫 `yyyy-mm-dd`가 index key이다.
+Date body에서 첫 `yyyy-mm-dd`가 의미상 날짜 값이다.
 그 뒤의 suffix는 표시용 body로 보존한다.
 
 Date body의 처음 10자는 `yyyy-mm-dd`여야 한다.
@@ -788,14 +772,11 @@ Date validity는 year, month, day 범위와 leap year를 검사한다.
 : <yyyy-mm-dd>--<yyyy-mm-dd>
 
 - parsing: custom
-- indexing: date range
 
 Date Range는 같은 kind의 두 Date Marker가 이루는 기간이다.
 
 양 끝 marker kind가 같아야한다.
 Start date는 end date보다 늦을 수 없다.
-
-Indexer는 Date Range를 하나의 기간 occurrence로 수집해야한다.
 
 예:
 
@@ -807,13 +788,13 @@ Indexer는 Date Range를 하나의 기간 occurrence로 수집해야한다.
 
 Link Resolution은 note target을 Project 안의 note와 연결하는 규칙이다.
 
-Note Link target은 항상 Note Link Target Normalization과 Resolution Order를 따른다.
+Note Link의 note target은 항상 Note Link Target Normalization과 Resolution Order를 따른다.
 Reference Definition target은 [[#Reference Link To Note]]의 note target 후보일 때만 Note Link Target Normalization과 Resolution Order를 따른다.
 
 Resolution result는 아래 셋 중 하나이다.
 
 1. found
-   단일 note로 resolve된 상태.
+   단일 note 또는 그 안의 단일 heading으로 resolve된 상태.
 2. broken
    대상 note를 찾지 못한 상태.
 3. ambiguous
@@ -833,7 +814,7 @@ Note canonical path는 Project source root 기준 relative path에서 `.maki` ex
 : /docs/index.maki -> docs/index
 : docs/index.maki -> docs/index
 
-Note Link Target Normalization은 target을 canonical path 후보와 비교하기 전에 적용하는 정규화이다.
+Note Link Target Normalization은 note target을 canonical path 후보와 비교하기 전에 적용하는 정규화이다.
 
 Leading `/`를 제거하고 trailing `.maki`를 제거한다.
 
@@ -850,11 +831,10 @@ note target이 어떤 note를 가리키는지는 normalized target을 기준으�
 Lookup은 아래 순서로 진행한다.
 
 1. Normalized target이 canonical path와 정확히 같으면 found이다.
-2. Target이 `#`로 시작하면 ambiguous이다.
-3. Target에 `/`가 있으면 canonical path를 case-insensitive하게 찾는다.
-4. Target에 `/`가 없으면 현재 note와 같은 directory의 file stem을 case-insensitive하게 찾는다.
-5. Sibling file stem에서 찾지 못하면 Project 전체 file stem을 case-insensitive하게 찾는다.
-6. 후보가 없으면 broken이다.
+2. Target에 `/`가 있으면 canonical path를 case-insensitive하게 찾는다.
+3. Target에 `/`가 없으면 현재 note와 같은 directory의 file stem을 case-insensitive하게 찾는다.
+4. Sibling file stem에서 찾지 못하면 Project 전체 file stem을 case-insensitive하게 찾는다.
+5. 후보가 없으면 broken이다.
 
 예:
 
@@ -862,6 +842,19 @@ Lookup은 아래 순서로 진행한다.
 : [[docs/maki-syntax]]
 : [[/docs/maki-syntax.maki]]
 : [[maki-syntax]]
+
+== Heading Resolution
+
+Note Link target에 `#`가 있으면 첫 `#` 앞을 note target, 뒤를 heading anchor로 해석한다.
+
+1. note target이 비어 있으면 현재 Document를 선택한다.
+2. note target이 있으면 Resolution Order로 note를 먼저 선택한다.
+3. heading anchor가 비어 있으면 broken이다.
+4. 선택한 Document에서 anchor가 정확히 같은 Heading을 찾는다.
+5. 정확히 같은 Heading이 없으면 case-insensitive하게 찾는다.
+6. 후보가 하나이면 found, 여러 개이면 ambiguous, 없으면 broken이다.
+
+`id` property가 있는 Heading은 raw heading text가 아니라 `id` 값만 anchor로 사용한다.
 
 == Reference Link To Note
 
@@ -891,15 +884,9 @@ Reference Definition target이라도 local Maki note href로 볼 수 있으면 N
 
 Note target 후보는 Note Link Target Normalization과 Resolution Order를 따른다.
 
-= Diagnostics
+= Syntax Warning
 
-Diagnostics는 source 또는 Project에서 발견한 문제를 나타낸다.
-
-== Parser Warning
-
-Parser Warning은 source 하나를 parser가 읽는 동안 발견한 문법 경고이다.
-
-현재 Parser Warning은 아래 경우에 발생한다.
+문법을 복구하여 계속 해석할 수 있지만 source에 문제가 있는 경우 warning이 발생한다.
 
 1. invalid property
    Property line body에 `:`가 없을 때.
@@ -909,20 +896,3 @@ Parser Warning은 source 하나를 parser가 읽는 동안 발견한 문법 경�
    Property에 Property를 붙였을 때.
 4. duplicate reference definition
    같은 Document 안의 같은 종류 Reference Definition에서 동일한 title 또는 label을 여러 번 정의했을 때.
-
-Parser Warning은 source path와 source line을 가져야한다.
-
-== Project Diagnostic
-
-Project Diagnostic은 Project index를 만든 뒤 알 수 있는 문제이다.
-
-현재 Project Diagnostic은 아래 문제를 포함한다.
-
-- parser warning
-- broken note link
-- ambiguous note link
-- broken external HTTP/HTTPS link
-- note read failure
-
-Project Diagnostic은 source path를 가져야한다.
-Source line을 특정할 수 있으면 source line도 가져야한다.

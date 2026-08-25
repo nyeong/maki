@@ -1,6 +1,7 @@
 use super::diagnostic::{ParseDiagnostic, ParseDiagnosticKind};
-use super::line::{LinePrefix, LineToken, scan_line};
+use super::line::{LinePrefix, LineToken, scan_line, scan_line_at};
 use super::types::{ListKind, TableRowKind, TodoState};
+use crate::source::SourceSpan;
 use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq)]
@@ -24,6 +25,7 @@ pub(super) enum ReferenceDefinitionDraftKind<'a> {
 #[derive(Debug, PartialEq)]
 pub(super) struct ReferenceDefinitionDraft<'a> {
     pub(super) line: usize,
+    pub(super) span: SourceSpan,
     pub(super) raw_line: &'a str,
     pub(super) kind: ReferenceDefinitionDraftKind<'a>,
 }
@@ -42,6 +44,7 @@ pub(super) enum BlockDraft<'a> {
     /// --^, --v
     Property {
         line: usize,
+        span: SourceSpan,
         raw_line: &'a str,
         indent: usize,
         kind: PropertyKind,
@@ -200,6 +203,7 @@ fn paragraph_line<'a>(line: &LineToken<'a>) -> &'a str {
         indent: 0,
         kind: LinePrefix::None,
         raw_line,
+        ..
     } = line
     else {
         return line.raw_line();
@@ -264,6 +268,7 @@ fn parse_container_draft<'a>(
     let mut raw_lines = vec![];
     let line = cursor.line_number();
     let raw_line = cursor.peek()?.raw_line();
+    let span = cursor.peek()?.span();
     let header = cursor.peek()?.body()?.trim();
     let (kind, args) = parse_container_header(header)?;
     let fence_len = *fence_len;
@@ -281,6 +286,7 @@ fn parse_container_draft<'a>(
     if !closed {
         diagnostics.push(ParseDiagnostic {
             line,
+            span,
             kind: ParseDiagnosticKind::UnclosedContainer { raw_line },
         });
     }
@@ -303,6 +309,7 @@ fn parse_property_draft<'a>(
     let property_kind = kind.as_property_kind()?;
     let line = cursor.line_number();
     let raw_line = cursor.peek()?.raw_line();
+    let span = cursor.peek()?.span();
     let kind = *kind;
     let indent = *indent;
     let mut items = vec![];
@@ -319,11 +326,13 @@ fn parse_property_draft<'a>(
         let line = cursor.line_number();
         let token = cursor.next()?;
         let raw_line = token.raw_line();
+        let span = token.span();
         let body = token.body()?;
 
         let Some((key, value)) = body.split_once(':') else {
             diagnostics.push(ParseDiagnostic {
                 line,
+                span,
                 kind: ParseDiagnosticKind::InvalidProperty { raw_line },
             });
             continue;
@@ -334,6 +343,7 @@ fn parse_property_draft<'a>(
 
     Some(BlockDraft::Property {
         line,
+        span,
         raw_line,
         indent,
         kind: property_kind,
@@ -353,6 +363,7 @@ fn parse_reference_definition_line<'a>(
         indent: 0,
         kind: LinePrefix::Reference,
         raw_line,
+        ..
     } = token
     else {
         return None;
@@ -385,6 +396,7 @@ fn parse_reference_definition_line<'a>(
 
     Some(ReferenceDefinitionDraft {
         line,
+        span: token.span(),
         raw_line,
         kind,
     })
@@ -455,14 +467,21 @@ fn line_is_indented_at_least(line: &LineToken<'_>, indent: usize) -> bool {
 
 fn strip_line_indent<'a>(line: &LineToken<'a>, indent: usize) -> LineToken<'a> {
     match line {
-        LineToken::Blank { .. } => LineToken::Blank { raw_line: "" },
+        LineToken::Blank { span, .. } => LineToken::Blank {
+            raw_line: "",
+            span: *span,
+        },
         LineToken::Line {
             raw_line,
             indent: line_indent,
             ..
         } => {
             debug_assert!(*line_indent >= indent);
-            scan_line(&raw_line[indent..])
+            let span = line.span();
+            scan_line_at(
+                &raw_line[indent..],
+                SourceSpan::new(span.start + indent, span.end),
+            )
         }
     }
 }
@@ -479,9 +498,15 @@ fn parse_list_item_child_drafts<'a>(
         }
 
         while cursor.pos < next_index {
-            cursor.next();
+            let blank_span = cursor
+                .next()
+                .expect("peeked blank line should be available")
+                .span();
             if !child_lines.is_empty() {
-                child_lines.push(LineToken::Blank { raw_line: "" });
+                child_lines.push(LineToken::Blank {
+                    raw_line: "",
+                    span: blank_span,
+                });
             }
         }
 
@@ -725,11 +750,19 @@ pub(super) fn build_drafts<'a>(
             continue;
         };
 
-        if let (BlockDraft::Property { line, raw_line, .. }, Some(BlockDraft::Property { .. })) =
-            (&draft, drafts.last())
+        if let (
+            BlockDraft::Property {
+                line,
+                span,
+                raw_line,
+                ..
+            },
+            Some(BlockDraft::Property { .. }),
+        ) = (&draft, drafts.last())
         {
             diagnostics.push(ParseDiagnostic {
                 line: *line,
+                span: *span,
                 kind: ParseDiagnosticKind::PropertyOnProperty { raw_line },
             });
             continue;
@@ -762,6 +795,7 @@ fn collect_duplicate_reference_diagnostics<'a>(
             if !inserted {
                 diagnostics.push(ParseDiagnostic {
                     line: definition.line,
+                    span: definition.span,
                     kind: ParseDiagnosticKind::DuplicateReferenceDefinition {
                         raw_line: definition.raw_line,
                     },

@@ -10,9 +10,11 @@ readme = "README.md"
 members = [
     "crates/maki-core",
     "crates/maki-http",
+    "crates/maki-lsp",
     "crates/maki-serve",
 ]
 
 [dependencies]
 maki-core = { path = "crates/maki-core" }
+maki-lsp = { path = "crates/maki-lsp" }
 maki-serve = { path = "crates/maki-serve" }

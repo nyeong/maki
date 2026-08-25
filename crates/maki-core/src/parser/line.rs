@@ -1,14 +1,17 @@
 use super::draft::PropertyKind;
+use crate::source::SourceSpan;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum LineToken<'a> {
     Blank {
         raw_line: &'a str,
+        span: SourceSpan,
     },
     Line {
         indent: usize,
         kind: LinePrefix,
         raw_line: &'a str,
+        span: SourceSpan,
     },
 }
 
@@ -28,10 +31,17 @@ pub(super) enum LinePrefix {
 }
 
 pub(super) fn scan_line(line: &str) -> LineToken<'_> {
+    scan_line_at(line, SourceSpan::new(0, line.len()))
+}
+
+pub(super) fn scan_line_at(line: &str, span: SourceSpan) -> LineToken<'_> {
     // TODO: 현재는 들여쓰기를 space만 지원하는데, 필요시 탭도 지원하도록
     let indent = line.chars().take_while(|&c| c == ' ').count();
     if line.trim().is_empty() {
-        return LineToken::Blank { raw_line: line };
+        return LineToken::Blank {
+            raw_line: line,
+            span,
+        };
     }
 
     let prefix = scan_line_prefix(&line[indent..]);
@@ -40,6 +50,7 @@ pub(super) fn scan_line(line: &str) -> LineToken<'_> {
         indent,
         kind: prefix,
         raw_line: line,
+        span,
     }
 }
 
@@ -107,21 +118,35 @@ fn scan_line_prefix(raw_text: &str) -> LinePrefix {
 // 구성에 맞다면 Some(prefix의 개수), 구성에 맞지 않다면 None
 fn count_prefix_run(raw_line: &str, prefix: char, delimiter: char) -> Option<usize> {
     let mut count = 0;
+    let mut found_delimiter = false;
 
     for c in raw_line.chars() {
         if c == prefix {
             count += 1;
         } else if c == delimiter {
+            found_delimiter = true;
             break;
         } else {
             return None;
         }
     }
-    (count > 0).then_some(count)
+    (count > 0 && found_delimiter).then_some(count)
 }
 
 pub(super) fn scan_lines(source: &str) -> Vec<LineToken<'_>> {
-    source.lines().map(scan_line).collect()
+    let mut offset = 0;
+    source
+        .split_inclusive('\n')
+        .map(|line_with_ending| {
+            let line = line_with_ending
+                .strip_suffix('\n')
+                .unwrap_or(line_with_ending);
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let span = SourceSpan::new(offset, offset + line.len());
+            offset += line_with_ending.len();
+            scan_line_at(line, span)
+        })
+        .collect()
 }
 
 impl LinePrefix {
@@ -159,6 +184,12 @@ impl<'a> LineToken<'a> {
         }
     }
 
+    pub(super) fn span(&self) -> SourceSpan {
+        match self {
+            LineToken::Blank { span, .. } | LineToken::Line { span, .. } => *span,
+        }
+    }
+
     pub(super) fn body(&self) -> Option<&'a str> {
         match self {
             LineToken::Blank { .. } => None,
@@ -166,6 +197,7 @@ impl<'a> LineToken<'a> {
                 raw_line,
                 indent,
                 kind,
+                ..
             } => {
                 let content = &raw_line[*indent..];
                 let body = &content[kind.width()..];
