@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fmt::Display,
     fs,
@@ -82,6 +83,9 @@ pub enum Error {
     SymlinkUnsupported {
         path: PathBuf,
     },
+    InvalidCommitTimestamp {
+        raw: String,
+    },
     Maki {
         source: MakiError,
     },
@@ -129,6 +133,9 @@ impl Display for Error {
                     "git checkout contains unsupported symlink: {}",
                     path.display()
                 )
+            }
+            Error::InvalidCommitTimestamp { raw } => {
+                write!(f, "git log returned invalid commit timestamp: {raw}")
             }
             Error::Maki { source } => write!(f, "{}", source),
         }
@@ -248,11 +255,15 @@ impl GitSource {
         let mut config = MakiConfig::load_project(checkout.root())?;
         config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(checkout.root());
-        Ok(Maki::load_with_config_metered(
-            &source_root,
-            config,
-            metrics,
-        )?)
+        let mut maki = Maki::load_with_config_metered(&source_root, config, metrics)?;
+        let source_paths = maki
+            .notes()
+            .map(|note| note.source_path().to_path_buf())
+            .collect::<Vec<_>>();
+        let modified_times =
+            self.git_modified_times_for_checkout(checkout, &source_root, &source_paths)?;
+        maki.apply_recent_modified_times(&modified_times);
+        Ok(maki)
     }
 
     pub fn record_active(&self, checkout: &GitCheckout) -> Result<(), Error> {
@@ -357,6 +368,91 @@ impl GitSource {
         ]))?;
         Ok(output.trim().to_string())
     }
+
+    fn git_modified_times_for_checkout(
+        &self,
+        checkout: &GitCheckout,
+        source_root: &Path,
+        source_paths: &[PathBuf],
+    ) -> Result<BTreeMap<PathBuf, SystemTime>, Error> {
+        let mut wanted = source_paths.iter().cloned().collect::<BTreeSet<_>>();
+        let mut modified_times = BTreeMap::new();
+        if wanted.is_empty() {
+            return Ok(modified_times);
+        }
+
+        let source_prefix = source_root
+            .strip_prefix(checkout.root())
+            .unwrap_or_else(|_| Path::new(""));
+        let pathspec = if is_project_root_source(source_prefix) {
+            Path::new(".")
+        } else {
+            source_prefix
+        };
+        let output = git_output(args([
+            os("--git-dir"),
+            self.mirror_dir.as_os_str(),
+            os("log"),
+            os("--format=format:commit:%ct"),
+            os("--name-only"),
+            OsStr::new(checkout.commit()),
+            os("--"),
+            pathspec.as_os_str(),
+        ]))?;
+
+        let mut current_time = None;
+        for line in output.lines() {
+            if let Some(raw) = line.strip_prefix("commit:") {
+                current_time = Some(parse_commit_timestamp(raw)?);
+                continue;
+            }
+
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let Some(modified) = current_time else {
+                continue;
+            };
+            let git_path = Path::new(line);
+            let Some(source_path) = source_path_from_git_path(git_path, source_prefix) else {
+                continue;
+            };
+            if wanted.remove(source_path) {
+                modified_times.insert(source_path.to_path_buf(), modified);
+            }
+            if wanted.is_empty() {
+                break;
+            }
+        }
+
+        Ok(modified_times)
+    }
+}
+
+fn source_path_from_git_path<'a>(git_path: &'a Path, source_prefix: &Path) -> Option<&'a Path> {
+    if is_project_root_source(source_prefix) {
+        Some(git_path)
+    } else {
+        git_path.strip_prefix(source_prefix).ok()
+    }
+}
+
+fn is_project_root_source(source_prefix: &Path) -> bool {
+    source_prefix.as_os_str().is_empty() || source_prefix == Path::new(".")
+}
+
+fn parse_commit_timestamp(raw: &str) -> Result<SystemTime, Error> {
+    let seconds = raw
+        .parse::<u64>()
+        .map_err(|_| Error::InvalidCommitTimestamp {
+            raw: raw.to_string(),
+        })?;
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))
+        .ok_or_else(|| Error::InvalidCommitTimestamp {
+            raw: raw.to_string(),
+        })
 }
 
 pub fn spawn_updater(

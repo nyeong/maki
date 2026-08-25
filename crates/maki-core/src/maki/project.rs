@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use crate::{
     analysis::{self, ProjectAnalysis, SourceSnapshot},
@@ -199,6 +199,17 @@ impl Maki {
 
     pub fn recent_entries(&self) -> &[RecentEntry] {
         &self.recent_entries
+    }
+
+    pub fn apply_recent_modified_times(&mut self, modified_times: &BTreeMap<PathBuf, SystemTime>) {
+        for note in self.notes.values_mut() {
+            if let Some(modified) = modified_times.get(note.source_path()) {
+                note.modified = Some(*modified);
+            }
+        }
+
+        let note_metadata_entries = self.notes.values().map(Note::metadata_entry).collect();
+        self.recent_entries = collect_recent_entries(note_metadata_entries);
     }
 
     pub fn sitemap_entries(&self) -> &[SitemapEntry] {
