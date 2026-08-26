@@ -129,7 +129,7 @@
 - [x] Paragraph prefix escape
   [[maki-syntax]]는 `\`로 block-start line prefix를 escape한다고 정의하지만, parser는 backslash를 Text에 그대로 보존한다.
 - [x] Quote mode
-  [[maki-syntax]]는 `mode: block|plain`을 정의하지만, renderer는 `mode` property를 사용하지 않고 항상 inner Maki로 파싱한다.
+  [[maki-syntax]]는 `mode: block|pre|text`를 정의하며, raw mode에서는 inner Maki로 파싱하지 않는다.
 - [x] Container header와 property
   [[maki-syntax]]는 `---code`처럼 fence 바로 뒤에 kind를 쓰는 형태와 built-in block의 property를 허용한다.
   scanner는 kind 앞 whitespace가 있어야 container로 인식하고, renderer는 code/quote container에 붙은 `lang`/`mode` property를 사용하지 않는다.
@@ -218,7 +218,7 @@ parser 결과를 Project index와 diagnostics에 연결한다.
 Docs consistency 검토에서 원래 차이 목록에 빠졌던 stable syntax를 구현한다.
 
 - [x] Block-start prefix escape에서 `\`를 제거한다.
-- [x] Quote와 quote container의 `mode: plain`을 raw body로 처리한다.
+- [x] Quote와 quote container의 `mode: pre|text`를 raw body로 처리한다.
 - [x] `---code` container header와 built-in container의 `lang`/`mode` property를 지원한다.
 - [x] `|` table separator를 지원하고 `|`/`+` 혼용을 거부한다.
 - [x] Nested Maki가 바깥 Document reference table을 상속한다.

@@ -320,11 +320,21 @@ impl<'a> Renderer<'a> {
         mode: Option<&str>,
         references: &parser::ReferenceDefinitions<'_>,
     ) {
-        if mode == Some("plain") {
-            self.html.push_str("<blockquote>");
-            self.render_pre(lines);
-            self.html.push_str("</blockquote>");
-            return;
+        match mode {
+            Some("pre") => {
+                self.html.push_str("<blockquote>");
+                self.render_pre(lines);
+                self.html.push_str("</blockquote>");
+                return;
+            }
+            Some("text") => {
+                self.html
+                    .push_str("<blockquote><div class=\"maki-quote-text\">");
+                self.render_raw_lines(lines);
+                self.html.push_str("</div></blockquote>");
+                return;
+            }
+            _ => {}
         }
 
         let source = lines.join("\n");

@@ -1,4 +1,4 @@
-use super::assets::{PROJECT_NAVIGATION_HTML, SEARCH_SCRIPT, TOC_SCRIPT};
+use super::assets::{DEFAULT_CSS, PROJECT_NAVIGATION_HTML, SEARCH_SCRIPT, TOC_SCRIPT};
 use super::pages::format_unix_seconds_kst;
 use super::*;
 use crate::{
@@ -314,9 +314,9 @@ fn nested_maki_blocks_resolve_their_reference_definitions() {
 }
 
 #[test]
-fn quote_plain_mode_and_container_properties_are_rendered() {
+fn quote_raw_modes_and_container_properties_are_rendered() {
     let parsed = parser::parse(
-        r#"--v mode: plain
+        r#"--v mode: pre
 > = Raw heading
 > [site]
 
@@ -325,11 +325,15 @@ fn quote_plain_mode_and_container_properties_are_rendered() {
 fn main() {}
 ---
 
---v mode: plain
+--v mode: text
 ---quote
 = Raw container heading
 [site]
 ---
+
+--v mode: block
+> = Parsed heading
+> [site]
 
 [site]: https://example.com"#,
     );
@@ -338,8 +342,23 @@ fn main() {}
 
     assert!(html.contains("<blockquote><pre>= Raw heading\n[site]</pre></blockquote>"));
     assert!(html.contains("<pre><code class=\"language-rust\">fn main() {}</code></pre>"));
-    assert!(html.contains("<blockquote><pre>= Raw container heading\n[site]</pre></blockquote>"));
-    assert!(!html.contains("href=\"https://example.com\""));
+    assert!(html.contains(
+        "<blockquote><div class=\"maki-quote-text\">= Raw container heading\n[site]</div></blockquote>"
+    ));
+    assert!(html.contains("<blockquote><h2 id=\"Parsed heading\">Parsed heading</h2>"));
+    assert_eq!(html.matches("href=\"https://example.com\"").count(), 1);
+}
+
+#[test]
+fn quote_text_mode_css_preserves_newlines_and_wraps_long_words() {
+    let rule = DEFAULT_CSS
+        .split(".maki-quote-text {")
+        .nth(1)
+        .and_then(|css| css.split('}').next())
+        .unwrap();
+
+    assert!(rule.contains("white-space: pre-wrap"));
+    assert!(rule.contains("overflow-wrap: anywhere"));
 }
 
 #[test]

@@ -6,7 +6,7 @@ use std::{
 
 use crate::parser::{self, BlockKind, Inline};
 
-use super::{MAKI_SOURCE_EXTENSION, note::NoteRef};
+use super::{MAKI_SOURCE_EXTENSION, note::NoteRef, quote_mode_is_raw};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ExternalLinkRef {
@@ -305,7 +305,7 @@ fn collect_block_external_links(
                 }
             }
         }
-        BlockKind::Quote { lines } if block.property("mode") != Some("plain") => {
+        BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
             collect_maki_lines_external_links(external_links, source_path, lines, references)
         }
         BlockKind::Table { header, rows, .. } => {
@@ -315,7 +315,7 @@ fn collect_block_external_links(
             }
         }
         BlockKind::Container { kind, lines, .. }
-            if *kind == "quote" && block.property("mode") != Some("plain") =>
+            if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
         {
             collect_maki_lines_external_links(external_links, source_path, lines, references)
         }

@@ -14,6 +14,10 @@ pub const PROJECT_FILE_NAME: &str = "maki.toml";
 pub(super) const MAKI_EXTENSION: &str = "maki";
 pub(super) const MAKI_SOURCE_EXTENSION: &str = ".maki";
 
+pub(crate) fn quote_mode_is_raw(mode: Option<&str>) -> bool {
+    matches!(mode, Some("pre" | "text"))
+}
+
 pub trait ProjectLoadMeter {
     fn record_project_load_phase(&self, phase: &'static str, duration: Duration);
 }

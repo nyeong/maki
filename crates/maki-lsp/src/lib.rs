@@ -461,7 +461,7 @@ fn completion_items(project: &ProjectAnalysis, source: &str, offset: usize) -> V
     if let Some(body) = property_body {
         if let Some((key, _)) = body.split_once(':') {
             let values: &[&str] = match key.trim().to_ascii_lowercase().as_str() {
-                "mode" => &["block", "plain"],
+                "mode" => &["block", "pre", "text"],
                 "status" => &["todo", "doing", "done"],
                 "lang" => &["maki", "rust", "javascript", "typescript", "nix", "shell"],
                 _ => &[],
@@ -611,5 +611,17 @@ mod tests {
         assert!(notes.iter().any(|item| item.label == "other"));
         assert!(headings.iter().any(|item| item.label == "Heading"));
         assert!(properties.iter().any(|item| item.label == "title"));
+    }
+
+    #[test]
+    fn completion_offers_current_quote_modes() {
+        let project = analyze_documents(&BTreeMap::new());
+        let source = "--v mode: ";
+        let modes = completion_items(&project, source, source.len())
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(modes, vec!["block", "pre", "text"]);
     }
 }

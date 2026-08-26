@@ -210,15 +210,15 @@ fn diagnostics_do_not_report_missing_footnote_definitions() {
 }
 
 #[test]
-fn diagnostics_ignore_links_inside_plain_quotes() {
-    let project = temp_project("plain-quote-diagnostics");
+fn diagnostics_ignore_links_inside_raw_quotes() {
+    let project = temp_project("raw-quote-diagnostics");
     write_note_with_content(
         &project,
         "start.maki",
-        r#"--v mode: plain
+        r#"--v mode: pre
 > [[not-a-link]]
 
---v mode: plain
+--v mode: text
 ---quote
 [[also-not-a-link]]
 ---"#,

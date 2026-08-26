@@ -294,7 +294,7 @@ pub fn property_description(key: &str) -> Option<&'static str> {
         "title" => Some("Document title."),
         "id" => Some("Stable heading anchor."),
         "lang" => Some("Code language."),
-        "mode" => Some("Quote parsing mode: block or plain."),
+        "mode" => Some("Quote parsing mode: block, pre, or text."),
         "created" | "date" | "deadline" | "updated" => Some("Date metadata."),
         "status" => Some("Conventional workflow status."),
         _ => None,

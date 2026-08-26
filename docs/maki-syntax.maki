@@ -220,12 +220,13 @@ Code Block은 code 혹은 raw text를 의미한다. body를 raw로 해석하며 
 - property
   - `mode`: parsing mode를 지정한다.
     - `block`: block으로 parsing한다. 기본값.
-    - `plain`: raw로 parsing한다.
+    - `pre`: raw text로 parsing하고 줄바꿈을 보존한다.
+    - `text`: raw text로 parsing하고 줄바꿈을 보존하되 긴 줄을 word-wrap한다.
 
 Quote는 인용문을 나타낸다.
 
-시, MMS 등을 올바르게 표현하기 위해 mode property를 지원한다. 줄바꿈을 보존해야한다면 Code 대신 Quote에 `mode: plain` property로 쓰면 된다.
-`mode: plain`에서는 body를 nested Maki로 파싱하거나 index하지 않고 raw line으로 보존한다.
+시, MMS 등을 올바르게 표현하기 위해 mode property를 지원한다. 줄바꿈을 그대로 보존해야 한다면 `mode: pre`, 줄바꿈을 보존하면서 화면 너비에 맞춰 긴 줄을 감싸야 한다면 `mode: text`를 쓴다.
+`mode: pre`와 `mode: text`에서는 body를 nested Maki로 파싱하거나 index하지 않고 raw line으로 보존한다.
 
 예:
 
@@ -467,7 +468,7 @@ Reference Definition은 같은 Document 전체에서 유효하다.
 
 `mode: block` Quote와 `quote` container처럼 body를 nested Maki로 파싱할 때는 바깥 Document의 Reference Definition을 상속한다.
 Nested body 안의 local definition이 같은 identifier의 바깥 definition보다 우선하며, local definition은 바깥 body에는 적용되지 않는다.
-`mode: plain` body는 Maki로 파싱하지 않으므로 Reference Definition을 상속하거나 정의하지 않는다.
+`mode: pre`와 `mode: text` body는 Maki로 파싱하지 않으므로 Reference Definition을 상속하거나 정의하지 않는다.
 
 크게 두 종류가 있다.
 
