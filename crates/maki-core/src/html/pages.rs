@@ -503,6 +503,10 @@ fn push_date_day_html(renderer: &mut Renderer<'_>, date_index: &DateIndex, date:
     if !containing_periods.is_empty() {
         push_date_link_list_section(renderer, "Containing Periods", containing_periods);
     }
+    let containing_ranges = date_range_backlinks(date_index, date);
+    if !containing_ranges.is_empty() {
+        push_date_backlinks_section(renderer, "Containing Ranges", date_index, containing_ranges);
+    }
 }
 
 fn date_year_month_items(date_index: &DateIndex, year: u16) -> Vec<DateLinkItem> {
@@ -699,15 +703,30 @@ fn direct_date_backlinks(date_index: &DateIndex, date: Date) -> Vec<&DateBacklin
         .unwrap_or_default()
 }
 
+fn date_range_backlinks(date_index: &DateIndex, date: Date) -> Vec<&DateBacklink> {
+    date_index
+        .backlinks_for(&date)
+        .map(|backlinks| {
+            backlinks
+                .iter()
+                .filter(|backlink| is_range_date_relation(backlink.relation()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn direct_date_backlink_count(date_index: &DateIndex, date: Date) -> usize {
     direct_date_backlinks(date_index, date).len()
 }
 
 fn is_direct_date_relation(relation: DateRelation) -> bool {
+    matches!(relation, DateRelation::Single)
+}
+
+fn is_range_date_relation(relation: DateRelation) -> bool {
     matches!(
         relation,
-        DateRelation::Single
-            | DateRelation::Range
+        DateRelation::Range
             | DateRelation::RangeStart
             | DateRelation::RangeMiddle
             | DateRelation::RangeEnd

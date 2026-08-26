@@ -510,21 +510,25 @@ Task with property date.
     assert!(month_body.contains("<h3 id=\"Backlinks\">Backlinks</h3>"));
     assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
     assert!(month_body.contains("<h3 id=\"Weeks\">Weeks</h3>"));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-15\">2026-08-15 Sat</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-16\">2026-08-16 Sun</a>"));
+    assert!(!month_body.contains("href=\"/@/dates/2026-08-17\""));
     assert!(!month_body.contains("href=\"/@/dates/2026-08-18\""));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a>"));
+    assert!(!month_body.contains("href=\"/@/dates/2026-08-19\""));
     assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
     assert!(!month_body.contains("href=\"/home#date-inline-home-maki-2\""));
     assert!(!month_body.contains("href=\"/home#date-property-home-maki-2\""));
     assert_text_order(
         &month_body,
         &[
-            "href=\"/@/dates/2026-08-17\"",
-            "href=\"/@/dates/2026-08-19\"",
+            "href=\"/@/dates/2026-08-15\"",
+            "href=\"/@/dates/2026-08-16\"",
             "href=\"/@/dates/2026-08-20\"",
         ],
     );
 
+    let range_start = handle_request(&state, &http::Request::get("/@/dates/2026-08-17")).unwrap();
+    let range_start_body = String::from_utf8(range_start.body().to_vec()).unwrap();
     let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
     let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
     let empty_detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-21")).unwrap();
@@ -536,16 +540,40 @@ Task with property date.
     let note_body = String::from_utf8(note.body().to_vec()).unwrap();
     fs::remove_dir_all(root).unwrap();
 
+    assert_eq!(range_start.status(), http::StatusCode::Ok);
+    assert!(range_start_body.contains("<h3 id=\"Containing Ranges\">Containing Ranges</h3>"));
+    assert!(range_start_body.contains("date, range start, inline"));
+    assert_text_order(
+        &range_start_body,
+        &[
+            "<h3 id=\"Backlinks\">Backlinks</h3>",
+            "No date markers.",
+            "<h3 id=\"Containing Ranges\">Containing Ranges</h3>",
+            "date, range start, inline",
+        ],
+    );
+
     assert_eq!(detail.status(), http::StatusCode::Ok);
     assert!(detail_body.contains("<title>Date 2026-08-18 Tue</title>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08-17\">← 2026-08-17 Mon</a>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed →</a>"));
     assert!(detail_body.contains("<a href=\"/@/dates/2026-08\">↑ 2026-08</a>"));
+    assert!(detail_body.contains("<h3 id=\"Backlinks\">Backlinks</h3>"));
+    assert!(detail_body.contains("<h3 id=\"Containing Ranges\">Containing Ranges</h3>"));
     assert!(detail_body.contains("[2026-08-17]--[2026-08-19]"));
     assert!(detail_body.contains("range"));
     assert!(detail_body.contains("<a href=\"/home#date-inline-home-maki-2\">Home</a>"));
     assert!(detail_body.contains("date, range, inline"));
     assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
+    assert_text_order(
+        &detail_body,
+        &[
+            "<h3 id=\"Backlinks\">Backlinks</h3>",
+            "No date markers.",
+            "<h3 id=\"Containing Ranges\">Containing Ranges</h3>",
+            "date, range, inline",
+        ],
+    );
 
     assert_eq!(empty_detail.status(), http::StatusCode::Ok);
     assert!(empty_detail_body.contains("<title>Date 2026-08-21 Fri</title>"));
