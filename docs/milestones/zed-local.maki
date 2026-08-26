@@ -47,7 +47,7 @@ Reference Definition 존재 여부에 따른 Link/Footnote 의미, 날짜 유효
 == Zed extension
 
 - Maki language metadata와 `.maki` suffix 등록
-- 로컬 `tree-sitter-maki` Git 저장소의 고정 revision 사용
+- private Forgejo `tree-sitter-maki` Git 저장소의 고정 revision 사용
 - Zed가 지원하는 capture 이름의 highlighting query
 - heading outline과 기본 bracket matching
 - `PATH`에서 `maki`를 찾아 `maki lsp`를 실행하는 최소 Rust adapter
@@ -69,8 +69,8 @@ Reference Definition 존재 여부에 따른 Link/Footnote 의미, 날짜 유효
 : maki-zed          : extension manifest, language config/query, Rust adapter
 
 각 저장소는 독립적인 의미 단위로 커밋한다.
-로컬 검증 단계에서는 `maki-zed/extension.toml`의 grammar repository를 `file:///Users/nyeong/Repos/tree-sitter-maki`로 둔다.
-배포 준비 시 remote repository URL과 공개된 commit revision으로 교체한다.
+로컬 검증 단계에서는 `maki-zed/extension.toml`의 grammar repository를 private Forgejo SSH remote로 둔다.
+배포 준비 시 public repository URL과 공개된 commit revision으로 교체한다.
 
 = 설계 결정
 

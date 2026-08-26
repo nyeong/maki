@@ -50,12 +50,13 @@ extension은 `.maki` language metadata, `tree-sitter-maki` grammar/query, `maki 
 로컬 extension은 Zed의 `lsp.maki-lsp.binary` 설정을 먼저 사용하고, 설정이 없으면 사용자의 `PATH`에서 `maki`를 찾는다.
 `maki-zed`의 Nix development shell은 고정한 local Maki package와 `wasm32-wasip2` Rust target을 제공한다.
 
-: cd /Users/nyeong/Repos/maki-zed
+: export MAKI_WORKSPACE=/path/to/maki-workspace
+: cd "$MAKI_WORKSPACE/maki-zed"
 : direnv allow
 : ./scripts/verify.sh
-: nix develop -c zed --foreground <maki-project>
+: nix develop -c zed --foreground "$MAKI_WORKSPACE/maki"
 
-Zed command palette에서 `zed: install dev extension`을 실행하고 `/Users/nyeong/Repos/maki-zed`를 선택한다.
+Zed command palette에서 `zed: install dev extension`을 실행하고 `$MAKI_WORKSPACE/maki-zed` checkout을 선택한다.
 설치 뒤 `.maki` 문서의 language가 Maki인지, heading outline과 diagnostics가 표시되는지 확인한다.
 문제가 있으면 `zed: open log` 또는 foreground terminal output을 확인한다.
 
@@ -66,7 +67,7 @@ Zed command palette에서 `zed: install dev extension`을 실행하고 `/Users/n
 :   "lsp": {
 :     "maki-lsp": {
 :       "binary": {
-:         "path": "/Users/nyeong/Repos/maki/target/debug/maki",
+:         "path": "/path/to/maki-workspace/maki/target/debug/maki",
 :         "arguments": ["lsp"]
 :       }
 :     }
@@ -76,7 +77,7 @@ Zed command palette에서 `zed: install dev extension`을 실행하고 `/Users/n
 Maki worktree에서 `Maki: build LSP` task를 실행한 뒤 `editor: restart language server` action을 실행하면 새 binary가 반영된다.
 query만 수정했으면 `zed: reload extensions`, Rust adapter나 grammar를 수정했으면 `maki-zed` flake에서 Zed를 실행해 `zed: rebuild dev extension`을 사용한다.
 
-현재 local manifest는 `tree-sitter-maki`를 `file:///Users/nyeong/Repos/tree-sitter-maki`에서 읽는다.
+현재 local manifest는 `tree-sitter-maki`의 고정 revision을 private Forgejo SSH remote에서 읽는다.
 Marketplace 배포 전에는 public repository URL과 공개된 commit revision으로 바꿔야 한다.
 
 extension MVP 범위는 [[milestones/zed-local]], 반복 개발 절차는 [[milestones/zed-dev-loop]]에 기록한다.

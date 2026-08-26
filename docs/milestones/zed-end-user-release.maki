@@ -20,7 +20,7 @@ Nix 사용자는 우선 지원하되, Zed extension registry 사용자가 반드
 = 현재 차이
 
 - `maki-zed`와 `tree-sitter-maki` Forgejo 저장소는 private이다.
-- extension grammar URL은 `/Users/nyeong/Repos/tree-sitter-maki` local path다.
+- extension grammar URL은 개인 접근권한이 필요한 private Forgejo SSH remote다.
 - extension은 `PATH` 또는 수동 binary override에서 `maki`를 찾는다.
 - 세 저장소에 배포 가능한 license file이 없다.
 - Maki release tag, platform binary, checksum, compatibility policy가 없다.
