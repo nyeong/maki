@@ -118,6 +118,19 @@ updates. Put `maki.toml` at the repository root and set its `source` when notes
 live in a subdirectory. `--metrics HOST:PORT` enables a separate Prometheus
 listener that serves `GET /metrics`.
 
+Before a dogfood deployment, validate that the Maki and dotfiles checkouts are
+clean, on `main`, synchronized with their remotes, and that the deploy host is
+reachable:
+
+```bash
+DOTFILES_DIR=/path/to/dotfiles ./scripts/deploy-dogfood.sh --check
+```
+
+Run the same command without `--check` to update the dotfiles Maki input and
+activate its `MAKI_DEPLOY_TARGET` (default: `nixbox`). The script defaults both
+Git remotes to `origin`; alternate checkout, remote, target, host, and SSH user
+values are configurable through the environment documented by `--help`.
+
 The NixOS module supports multiple named local or Git-backed targets:
 
 ```nix
