@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use maki_core::{Error as MakiError, Maki, MakiConfig, MakiConfigOverrides, html, parser};
 use maki_serve::{git_source, metrics::Metrics, web};
 
-use crate::cli::{Command, ServeOptions, ServeSource};
+use crate::cli::{Command, ServeOptions, ServeSource, VersionFormat};
 use crate::output::{emit_parse_warnings, emit_project_diagnostic_summary};
 
 #[derive(Debug)]
@@ -194,9 +194,24 @@ fn is_project_source_path(path: &Path, source_root: &Path) -> Result<bool, RunEr
 
 pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
     match command {
+        Command::Version { format } => {
+            let version = env!("CARGO_PKG_VERSION");
+            match format {
+                VersionFormat::Text => println!("maki {version}"),
+                VersionFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "name": "maki",
+                        "version": version,
+                    })
+                ),
+            }
+            Ok(())
+        }
         Command::Serve { source, options } => run_serve(source, options),
         Command::Build { file } => run_build(file),
-        Command::Lsp => maki_lsp::run_stdio().map_err(|error| RunError::Lsp(error.to_string())),
+        Command::Lsp => maki_lsp::run_stdio_with_version(env!("CARGO_PKG_VERSION"))
+            .map_err(|error| RunError::Lsp(error.to_string())),
     }
 }
 

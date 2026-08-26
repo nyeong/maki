@@ -5,6 +5,9 @@ use maki_serve::{git_source, web};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Command {
+    Version {
+        format: VersionFormat,
+    },
     Serve {
         source: ServeSource,
         options: ServeOptions,
@@ -13,6 +16,12 @@ pub(crate) enum Command {
         file: PathBuf,
     },
     Lsp,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum VersionFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug, PartialEq)]
@@ -216,6 +225,20 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
     let command = args.get(1).ok_or(CliError::MissingCommand)?;
 
     match command.as_str() {
+        "--version" => {
+            let format = match args.get(2).map(String::as_str) {
+                None => VersionFormat::Text,
+                Some("--json") => VersionFormat::Json,
+                Some(option) if option.starts_with("--") => {
+                    return Err(CliError::UnknownOption(option.to_string()));
+                }
+                Some(argument) => return Err(CliError::UnexpectedArgument(argument.to_string())),
+            };
+            if let Some(argument) = args.get(3) {
+                return Err(CliError::UnexpectedArgument(argument.clone()));
+            }
+            Ok(Command::Version { format })
+        }
         "serve" => parse_serve_args(args),
         "build" => {
             // TODO: 에러 유형 바꾸기

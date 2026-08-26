@@ -82,6 +82,30 @@ fn test_parse_unknown_command() {
 }
 
 #[test]
+fn test_parse_version_command() {
+    assert_eq!(
+        parse_args(&args(&["maki", "--version"])),
+        Ok(Command::Version {
+            format: VersionFormat::Text,
+        })
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "--version", "--json"])),
+        Ok(Command::Version {
+            format: VersionFormat::Json,
+        })
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "--version", "--yaml"])),
+        Err(CliError::UnknownOption("--yaml".to_string()))
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "--version", "--json", "extra"])),
+        Err(CliError::UnexpectedArgument("extra".to_string()))
+    );
+}
+
+#[test]
 fn test_parse_lsp_command() {
     assert_eq!(
         parse_args(&["maki".to_string(), "lsp".to_string()]),

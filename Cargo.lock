@@ -243,6 +243,7 @@ dependencies = [
  "maki-core",
  "maki-lsp",
  "maki-serve",
+ "serde_json",
 ]
 
 [[package]]

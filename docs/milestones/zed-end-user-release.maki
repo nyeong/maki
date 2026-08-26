@@ -77,6 +77,9 @@ Extension ID는 unique kebab-case여야 하고 `zed`나 `extension`을 포함할
 Maki는 machine-readable version을 제공하고, extension은 LSP를 시작하기 전에 최소 지원 version을 확인한다.
 LSP initialize response의 `serverInfo.version`도 같은 version을 보고해 호환성 진단에 사용한다.
 
+현재 `maki --version --json`은 CLI package version을 machine-readable object로 제공하고,
+`maki lsp`의 initialize response는 같은 version을 `serverInfo.version`으로 보고한다.
+
 == Maki artifact
 
 초기 platform matrix:
@@ -126,7 +129,7 @@ release는 versioned archive, SHA-256 checksum, 변경사항, source commit을 �
 == 2. Maki binary release
 
 - [ ] Nix flake install command를 clean environment에서 검증한다.
-- [ ] release version을 출력하는 machine-readable CLI contract를 추가한다.
+- [x] release version을 출력하는 machine-readable CLI contract를 추가한다.
 - [ ] 네 platform의 versioned artifact를 build한다.
 - [ ] checksum과 source provenance를 publish한다.
 - [ ] artifact install/uninstall/rollback 절차를 검증한다.

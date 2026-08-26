@@ -55,6 +55,8 @@ maki serve my-notes
 ## Commands
 
 ```bash
+maki --version
+maki --version --json
 maki serve .
 maki build docs/index.maki > index.html
 maki lsp
@@ -71,6 +73,10 @@ source root get project-aware link resolution; other files render as standalone
 HTML.
 
 `maki lsp` starts the stdio language server for editor integration.
+
+`maki --version --json` prints a stable machine-readable object containing the
+CLI name and package version. The LSP initialize response reports the same
+version through `serverInfo.version`.
 
 ## Configuration
 
