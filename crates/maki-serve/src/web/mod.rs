@@ -54,6 +54,7 @@ const DATES_PATH: &str = "/@/dates";
 const DATES_PATH_WITH_SLASH: &str = "/@/dates/";
 const DATES_PATH_PREFIX: &str = "/@/dates/";
 const LIVE_RELOAD_PATH: &str = "/.maki/events";
+const FAVICON_PATH: &str = "/favicon.ico";
 const PROJECT_INDEX_PATH: &str = "/.maki/project-index.json";
 const SEARCH_INDEX_PATH: &str = "/.maki/search-index.json";
 const SEARCH_PATH: &str = "/.maki/search";

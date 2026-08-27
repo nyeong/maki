@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -145,15 +145,6 @@ impl AppState {
         result
     }
 
-    fn current_root(&self) -> Result<PathBuf, MakiError> {
-        let project = self
-            .project
-            .read()
-            .map_err(|_| MakiError::ReadDirectoryFailed(PathBuf::from(".")))?;
-
-        Ok(project.maki.root().to_path_buf())
-    }
-
     pub(super) fn replace_maki(&self, next: Maki) -> Result<(), MakiError> {
         let root = next.root().to_path_buf();
         let notes_len = next.notes_len();
@@ -180,15 +171,24 @@ impl AppState {
         }
     }
 
+    pub(super) fn project_path(&self, path: &Path) -> PathBuf {
+        self.project_root.join(path)
+    }
+
     pub(super) fn live_reload(&self) -> Option<&LiveReload> {
         self.live_reload.as_ref()
     }
 
     pub(super) fn watched_snapshot(&self) -> Result<FileSnapshot, std::io::Error> {
-        let source_root = self
-            .current_root()
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        collect_watched_project_snapshot(&self.project_root, &source_root)
+        let project = self
+            .project
+            .read()
+            .map_err(|_| std::io::Error::other("failed to read project state"))?;
+        collect_watched_project_snapshot(
+            &self.project_root,
+            project.maki.root(),
+            project.maki.config().favicon(),
+        )
     }
 
     #[cfg(test)]

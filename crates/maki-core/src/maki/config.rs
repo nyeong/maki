@@ -6,6 +6,7 @@ use super::{Error, PROJECT_FILE_NAME};
 pub struct MakiConfig {
     project_title: Option<String>,
     source_dir: PathBuf,
+    favicon: Option<PathBuf>,
     home_mode: HomeMode,
     publish_policy: PublishPolicy,
 }
@@ -21,6 +22,16 @@ impl MakiConfig {
 
     pub fn publish_policy(&self) -> &PublishPolicy {
         &self.publish_policy
+    }
+
+    pub fn favicon(&self) -> Option<&Path> {
+        self.favicon.as_deref()
+    }
+
+    pub fn favicon_content_type(&self) -> Option<&'static str> {
+        self.favicon
+            .as_deref()
+            .and_then(favicon_content_type_for_path)
     }
 
     pub fn project_source_root(&self, project_root: &Path) -> PathBuf {
@@ -56,6 +67,10 @@ impl MakiConfig {
         if let Some(home) = project.home {
             config.set_home_note_ref(home);
         }
+        config.favicon = project
+            .serve_favicon
+            .map(|favicon| parse_project_favicon(&project_file, &favicon))
+            .transpose()?;
         Ok(config)
     }
 
@@ -73,6 +88,7 @@ impl Default for MakiConfig {
         Self {
             project_title: None,
             source_dir: PathBuf::from("."),
+            favicon: None,
             home_mode: HomeMode::Redirect("/README".to_string()),
             publish_policy: PublishPolicy::PublishAll,
         }
@@ -101,11 +117,13 @@ struct ProjectToml {
     title: Option<String>,
     source: Option<String>,
     home: Option<String>,
+    serve_favicon: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum TomlSection {
     Project,
+    Serve,
     Other,
 }
 
@@ -126,7 +144,7 @@ impl ProjectToml {
                 continue;
             }
 
-            if section != TomlSection::Project {
+            if section == TomlSection::Other {
                 continue;
             }
 
@@ -137,29 +155,43 @@ impl ProjectToml {
                     "expected key = value",
                 ));
             };
-            match raw_key.trim() {
-                "title" => {
-                    project.title = Some(parse_toml_string_value(
-                        path,
-                        line_number,
-                        raw_value.trim(),
-                    )?)
+            match section {
+                TomlSection::Project => match raw_key.trim() {
+                    "title" => {
+                        project.title = Some(parse_toml_string_value(
+                            path,
+                            line_number,
+                            raw_value.trim(),
+                        )?)
+                    }
+                    "home" => {
+                        project.home = Some(parse_toml_string_value(
+                            path,
+                            line_number,
+                            raw_value.trim(),
+                        )?)
+                    }
+                    "source" => {
+                        project.source = Some(parse_toml_string_value(
+                            path,
+                            line_number,
+                            raw_value.trim(),
+                        )?)
+                    }
+                    _ => continue,
+                },
+                TomlSection::Serve => {
+                    if raw_key.trim() == "favicon" {
+                        project.serve_favicon = Some(parse_toml_string_value(
+                            path,
+                            line_number,
+                            raw_value.trim(),
+                        )?);
+                    }
                 }
-                "home" => {
-                    project.home = Some(parse_toml_string_value(
-                        path,
-                        line_number,
-                        raw_value.trim(),
-                    )?)
+                TomlSection::Other => {
+                    unreachable!("other sections are skipped before parsing keys")
                 }
-                "source" => {
-                    project.source = Some(parse_toml_string_value(
-                        path,
-                        line_number,
-                        raw_value.trim(),
-                    )?)
-                }
-                _ => continue,
             }
         }
 
@@ -168,11 +200,39 @@ impl ProjectToml {
 }
 
 fn parse_project_source(project_file: &Path, source: &str) -> Result<PathBuf, Error> {
+    parse_project_relative_path(
+        project_file,
+        source,
+        "project.source must be a relative path inside the project",
+    )
+}
+
+fn parse_project_favicon(project_file: &Path, source: &str) -> Result<PathBuf, Error> {
+    let path = parse_project_relative_path(
+        project_file,
+        source,
+        "serve.favicon must be a relative path inside the project",
+    )?;
+    if favicon_content_type_for_path(&path).is_none() {
+        return Err(Error::InvalidProjectFile(
+            project_file.to_path_buf(),
+            "serve.favicon must be a PNG, SVG, ICO, WebP, or JPEG file".to_string(),
+        ));
+    }
+
+    Ok(path)
+}
+
+fn parse_project_relative_path(
+    project_file: &Path,
+    source: &str,
+    error_message: &str,
+) -> Result<PathBuf, Error> {
     let path = Path::new(source);
     if source.is_empty() || path.components().any(is_outside_project_component) {
         return Err(Error::InvalidProjectFile(
             project_file.to_path_buf(),
-            "project.source must be a relative path inside the project".to_string(),
+            error_message.to_string(),
         ));
     }
 
@@ -211,7 +271,23 @@ fn parse_toml_section(path: &Path, line_number: usize, line: &str) -> Result<Tom
 
     match section {
         "project" => Ok(TomlSection::Project),
+        "serve" => Ok(TomlSection::Serve),
         _ => Ok(TomlSection::Other),
+    }
+}
+
+fn favicon_content_type_for_path(path: &Path) -> Option<&'static str> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) if extension.eq_ignore_ascii_case("png") => Some("image/png"),
+        Some(extension) if extension.eq_ignore_ascii_case("svg") => Some("image/svg+xml"),
+        Some(extension) if extension.eq_ignore_ascii_case("ico") => Some("image/x-icon"),
+        Some(extension) if extension.eq_ignore_ascii_case("webp") => Some("image/webp"),
+        Some(extension)
+            if extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg") =>
+        {
+            Some("image/jpeg")
+        }
+        _ => None,
     }
 }
 

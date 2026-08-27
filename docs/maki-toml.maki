@@ -1,5 +1,5 @@
 --^ title: maki.toml
---^ updated: [2026-08-26]
+--^ updated: [2026-08-28]
 --^ status: stable
 
 = 개요
@@ -14,12 +14,16 @@
 : title = "My Notes"
 : source = "docs"
 : home = "index"
+: 
+: [serve]
+: favicon = "assets/favicon.png"
 
 이 설정은 다음 의미를 가진다.
 
 - 프로젝트 이름은 `My Notes`이다.
 - `.maki` 파일은 프로젝트 루트의 `docs/` 아래에서 찾는다.
 - 웹의 `/`는 `/index`로 redirect한다.
+- `maki serve`는 `assets/favicon.png`를 `/favicon.ico`로 서빙하고 HTML head에 favicon link를 넣는다.
 
 = 프로젝트 루트
 
@@ -109,11 +113,37 @@ Note link도 source root를 기준으로 해석하므로 `[[project/plan]]`처�
 CLI의 `maki serve --index-redirect <route>`를 사용하면 `maki.toml`의 `home`보다 우선한다.
 NixOS module에서는 target의 `indexRedirect`가 같은 override 역할을 한다.
 
+= [serve]
+
+`[serve]` table은 `maki serve`가 HTTP로 내보내는 부가 파일을 설정한다.
+
+== favicon
+
+선택 값이다.
+
+--v lang: toml
+: [serve]
+: favicon = "assets/favicon.png"
+
+프로젝트 루트 기준의 이미지 파일을 favicon으로 사용한다.
+설정하면 `maki serve`는 모든 HTML page의 head에 아래 link를 넣고, 같은 파일을 `/favicon.ico`에서도 서빙한다.
+
+--v lang: html
+: <link rel="icon" href="/favicon.ico" type="image/png">
+
+현대 브라우저는 명시적인 `rel="icon"` link와 PNG/SVG/ICO 같은 단일 아이콘 파일을 잘 처리한다.
+따라서 Maki는 크기별 icon metadata나 자동 resize를 생성하지 않고, 설정된 파일을 그대로 서빙한다.
+앱 설치용 manifest나 Apple touch icon이 필요해지는 경우에는 별도 설정을 추가할 수 있다.
+
+`favicon`은 프로젝트 루트 기준의 lexical relative path여야 한다.
+빈 값, absolute path, `..` component는 거부한다.
+지원 확장자는 `.png`, `.svg`, `.ico`, `.webp`, `.jpg`, `.jpeg`이다.
+
 = 지원하는 TOML 형식
 
 현재 구현은 `maki.toml`에서 필요한 TOML subset만 읽는다.
 
-- `[project]` table만 설정으로 읽는다.
+- `[project]`, `[serve]` table만 설정으로 읽는다.
 - 알 수 없는 table과 key는 무시한다.
 - 설정 값은 한 줄짜리 quoted string이어야 한다.
 - `"` basic string과 `'` literal string을 사용할 수 있다.

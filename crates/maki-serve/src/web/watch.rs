@@ -94,6 +94,7 @@ pub(super) fn collect_watched_file_snapshot(root: &Path) -> Result<FileSnapshot,
 pub(super) fn collect_watched_project_snapshot(
     project_root: &Path,
     source_root: &Path,
+    favicon: Option<&Path>,
 ) -> Result<FileSnapshot, std::io::Error> {
     let mut snapshot = collect_watched_file_snapshot(source_root)?;
 
@@ -104,6 +105,17 @@ pub(super) fn collect_watched_project_snapshot(
                 &mut snapshot,
                 PathBuf::from("__project__").join(PROJECT_FILE_NAME),
                 &project_file,
+            )?;
+        }
+    }
+
+    if let Some(favicon) = favicon {
+        let favicon_path = project_root.join(favicon);
+        if favicon_path.is_file() {
+            insert_file_stamp(
+                &mut snapshot,
+                PathBuf::from("__project__").join(favicon),
+                &favicon_path,
             )?;
         }
     }

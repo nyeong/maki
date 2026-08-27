@@ -5,7 +5,7 @@ use super::live_reload::{LiveReload, LiveReloadError, LiveReloadEvent};
 use super::routes::{handle_request, response_for_request};
 use super::server::{handle_connection, read_request_head};
 use super::state::AppState;
-use super::watch::collect_watched_file_snapshot;
+use super::watch::{collect_watched_file_snapshot, collect_watched_project_snapshot};
 use crate::http;
 use std::fs;
 use std::io::{Cursor, Read, Write};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::metrics::Metrics;
-use maki_core::{Maki, MakiConfig};
+use maki_core::{Maki, MakiConfig, MakiConfigOverrides};
 
 fn repo_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -191,6 +191,50 @@ fn test_project_title_suffixes_served_html_titles() {
 }
 
 #[test]
+fn test_project_favicon_is_linked_and_served() {
+    let root = std::env::temp_dir().join(format!("maki-favicon-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("notes")).unwrap();
+    fs::create_dir_all(root.join("assets")).unwrap();
+    fs::write(
+        root.join("maki.toml"),
+        "[project]\nsource = \"notes\"\n\n[serve]\nfavicon = \"assets/favicon.png\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("notes/home.maki"), "--^ title: Home\n\nbody").unwrap();
+    fs::write(root.join("assets/favicon.png"), b"fake png favicon").unwrap();
+
+    let config = MakiConfig::load_project(&root).unwrap();
+    let source_root = config.project_source_root(&root);
+    let maki = Maki::load_with_config(&source_root, config).unwrap();
+    let state = AppState::new_with_overrides(
+        root.clone(),
+        maki,
+        MakiConfigOverrides::default(),
+        true,
+        Metrics::disabled(),
+    );
+
+    let note = handle_request(&state, &http::Request::get("/home")).unwrap();
+    let note_body = String::from_utf8(note.body().to_vec()).unwrap();
+    let favicon = response_for_request(&state, &http::Request::get("/favicon.ico")).unwrap();
+    let head = response_for_request(
+        &state,
+        &http::Request::new(http::Method::Head, "/favicon.ico"),
+    )
+    .unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+
+    assert!(note_body.contains("<link rel=\"icon\" href=\"/favicon.ico\" type=\"image/png\">"));
+    assert_eq!(favicon.get_header("Content-Type"), Some("image/png"));
+    assert_eq!(favicon.get_header("Cache-Control"), Some("no-cache"));
+    assert_eq!(favicon.body(), b"fake png favicon");
+    assert_eq!(head.get_header("Content-Type"), Some("image/png"));
+    assert!(head.body().is_empty());
+}
+
+#[test]
 fn test_search_index_escapes_json_strings() {
     let root = std::env::temp_dir().join(format!("maki-search-json-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -354,6 +398,27 @@ fn test_watched_file_snapshot_includes_runtime_assets() {
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-external-links.js")));
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-search.js")));
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-toc.js")));
+}
+
+#[test]
+fn test_watched_project_snapshot_includes_configured_favicon() {
+    let root = std::env::temp_dir().join(format!("maki-favicon-watch-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("notes")).unwrap();
+    fs::create_dir_all(root.join("assets")).unwrap();
+    fs::write(root.join("notes/home.maki"), "body").unwrap();
+    fs::write(root.join("assets/favicon.png"), b"favicon").unwrap();
+
+    let snapshot = collect_watched_project_snapshot(
+        &root,
+        &root.join("notes"),
+        Some(Path::new("assets/favicon.png")),
+    )
+    .unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+
+    assert!(snapshot.contains_key(&PathBuf::from("__project__/assets/favicon.png")));
 }
 
 #[test]
