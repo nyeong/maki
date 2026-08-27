@@ -59,6 +59,54 @@ fn nested_unordered_list() {
 }
 
 #[test]
+fn parse_list_item_contains_quote_code_and_table_blocks() {
+    let parsed = parse(
+        r#"- nested blocks
+  > quoted
+  >
+  > body
+  : fn main() {}
+  :
+  | Name | Value |
+  |---+---|
+  | quote | nested |"#,
+    );
+
+    assert!(parsed.diagnostics.is_empty());
+    let BlockKind::List { items } = &parsed.document.blocks[0].kind else {
+        panic!("expected a list");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].children.len(), 3);
+
+    let BlockKind::Quote { lines } = &items[0].children[0].kind else {
+        panic!("expected a nested quote block");
+    };
+    assert_eq!(lines, &vec!["quoted", "", "body"]);
+
+    let BlockKind::Code { lines, lang } = &items[0].children[1].kind else {
+        panic!("expected a nested code block");
+    };
+    assert_eq!(lines, &vec!["fn main() {}", ""]);
+    assert_eq!(*lang, None);
+
+    let BlockKind::Table {
+        header,
+        alignments,
+        rows,
+    } = &items[0].children[2].kind
+    else {
+        panic!("expected a nested table block");
+    };
+    assert_eq!(header.cells[0].body, vec![Inline::Text("Name")]);
+    assert_eq!(header.cells[1].body, vec![Inline::Text("Value")]);
+    assert_eq!(alignments.len(), 2);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].cells[0].body, vec![Inline::Text("quote")]);
+    assert_eq!(rows[0].cells[1].body, vec![Inline::Text("nested")]);
+}
+
+#[test]
 fn parse_todo_list_item_states_and_strict_fallbacks() {
     let parsed = parse(
         r#"- [ ]

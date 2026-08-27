@@ -300,6 +300,10 @@ Item 내에 다른 Block을 실을 수 있다.
 :   > a quote
 : - and this is a code block
 :   : a code
+: - and this is a table block
+:   | name | value |
+:   |---+---|
+:   | quote | nested |
 
 === Unordered List
 
