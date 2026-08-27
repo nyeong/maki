@@ -560,7 +560,12 @@ fn render_cacheable_response(
             .set_header("Content-Type", "application/json; charset=utf-8")
             .set_body(project_index_json(maki)?)),
         ResponseCacheKey::NotePage(path) => {
-            let html = maki.render_html_with_site_title(path, AssetMode::External, site_title)?;
+            let html = maki.render_html_with_site_header(
+                path,
+                AssetMode::External,
+                site_title,
+                site_header,
+            )?;
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(with_served_html_chrome(state, maki, html)))
@@ -673,10 +678,11 @@ pub(super) fn handle_request(
                 .set_body(path.as_bytes())),
         },
         Err(MakiError::NoteNotFound(_path)) => {
-            let html = html::render_not_found_page(
+            let html = html::render_not_found_page_with_site_header(
                 &target.path,
                 AssetMode::External,
                 maki.config().project_title(),
+                maki.config().favicon().is_some(),
             );
             Ok(http::Response::new(http::StatusCode::NotFound)
                 .set_header("Content-Type", "text/html; charset=utf-8")

@@ -888,10 +888,20 @@ pub fn render_not_found_page(
     asset_mode: AssetMode,
     site_title: Option<&str>,
 ) -> String {
+    render_not_found_page_with_site_header(path, asset_mode, site_title, false)
+}
+
+pub fn render_not_found_page_with_site_header(
+    path: &str,
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+    site_header: bool,
+) -> String {
     let mut renderer = Renderer::new_with_context(
         RenderContext::default()
             .with_asset_mode(asset_mode)
-            .with_site_title(site_title),
+            .with_site_title(site_title)
+            .with_site_header(site_header),
     );
     renderer.begin_project_page("Not Found");
     renderer.push_raw("<main class=\"maki-not-found-page\">");

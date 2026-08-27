@@ -221,6 +221,8 @@ fn test_project_favicon_is_linked_and_served() {
     let meta_body = String::from_utf8(meta.body().to_vec()).unwrap();
     let search = handle_request(&state, &http::Request::get("/.maki/search")).unwrap();
     let search_body = String::from_utf8(search.body().to_vec()).unwrap();
+    let missing = handle_request(&state, &http::Request::get("/missing")).unwrap();
+    let missing_body = String::from_utf8(missing.body().to_vec()).unwrap();
     let favicon = response_for_request(&state, &http::Request::get("/favicon.ico")).unwrap();
     let head = response_for_request(
         &state,
@@ -231,8 +233,8 @@ fn test_project_favicon_is_linked_and_served() {
     fs::remove_dir_all(root).unwrap();
 
     assert!(note_body.contains("<link rel=\"icon\" href=\"/favicon.ico\" type=\"image/png\">"));
-    assert!(note_body.contains("<header class=\"maki-nav\">"));
-    assert!(!note_body.contains("maki-site-header-search"));
+    assert!(note_body.contains("<header class=\"maki-site-header maki-site-header-search\">"));
+    assert!(note_body.contains("<img src=\"/favicon.ico\" alt=\"\" width=\"48\" height=\"48\">"));
     assert!(meta_body.contains("<header class=\"maki-site-header maki-site-header-search\">"));
     assert!(meta_body.contains("<img src=\"/favicon.ico\" alt=\"\" width=\"48\" height=\"48\">"));
     assert!(meta_body.contains(
@@ -241,6 +243,11 @@ fn test_project_favicon_is_linked_and_served() {
     assert!(meta_body.contains("<nav class=\"maki-site-links\" aria-label=\"Project indexes\"><a href=\"/@/recents\">Recents</a><a href=\"/@/sitemap\">Sitemap</a><a href=\"/@/dates\">Dates</a></nav>"));
     assert!(search_body.contains("maki-site-header-search"));
     assert!(search_body.contains("<form class=\"maki-search\" action=\"/.maki/search\""));
+    assert_eq!(missing.status(), http::StatusCode::NotFound);
+    assert!(missing_body.contains("maki-site-header-search"));
+    assert!(
+        missing_body.contains("<img src=\"/favicon.ico\" alt=\"\" width=\"48\" height=\"48\">")
+    );
     assert_eq!(favicon.get_header("Content-Type"), Some("image/png"));
     assert_eq!(favicon.get_header("Cache-Control"), Some("no-cache"));
     assert_eq!(favicon.body(), b"fake png favicon");
