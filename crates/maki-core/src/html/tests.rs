@@ -343,6 +343,21 @@ fn quote_line_renders_inner_maki_blocks() {
 }
 
 #[test]
+fn quote_attribution_separator_is_not_an_unknown_container() {
+    let parsed = parser::parse(
+        r#"> 인간은 생체컴퓨터이기 때문에 항온항습이 중요하다..
+>
+> --- [@woohyong]"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(!html.contains("maki-container-unknown"), "{html}");
+    assert!(html.contains("---"), "{html}");
+    assert!(html.contains("@woohyong"), "{html}");
+}
+
+#[test]
 fn nested_maki_blocks_resolve_their_reference_definitions() {
     let parsed = parser::parse(
         r#"> [quoted]

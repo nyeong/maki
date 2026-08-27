@@ -997,6 +997,41 @@ fn main() {}
 }
 
 #[test]
+fn parse_keeps_invalid_container_kinds_as_paragraphs() {
+    for source in ["--- [@woohyong]", "--- code/bash", "--- 코드"] {
+        let parsed = parse(source);
+
+        assert!(parsed.diagnostics.is_empty(), "{source}");
+        assert_eq!(parsed.document.blocks.len(), 1, "{source}");
+        assert!(
+            matches!(parsed.document.blocks[0].kind, BlockKind::Paragraph { .. }),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn parse_accepts_container_kind_character_boundaries() {
+    for kind in ["code", "custom-kind", "custom_kind", "123"] {
+        let source = format!("---{kind}\nbody\n---");
+        let parsed = parse(&source);
+
+        assert!(parsed.diagnostics.is_empty(), "{kind}");
+        let BlockKind::Container {
+            kind: parsed_kind,
+            args,
+            lines,
+        } = &parsed.document.blocks[0].kind
+        else {
+            panic!("expected {kind} to be a container kind");
+        };
+        assert_eq!(*parsed_kind, kind);
+        assert!(args.is_empty());
+        assert_eq!(lines, &vec!["body"]);
+    }
+}
+
+#[test]
 fn parse_removes_escape_before_block_start_prefixes() {
     let parsed = parse(
         r#"\= heading text
