@@ -488,3 +488,5 @@ mod git;
 mod metrics;
 #[path = "milestone_quality/serve.rs"]
 mod serve;
+#[path = "milestone_quality/version.rs"]
+mod version;

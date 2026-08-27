@@ -25,8 +25,13 @@ use maki_core::{Maki, MakiConfig};
 pub type LspResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 pub fn run_stdio() -> LspResult<()> {
+    run_stdio_with_version(env!("CARGO_PKG_VERSION"))
+}
+
+pub fn run_stdio_with_version(version: &str) -> LspResult<()> {
     let (connection, io_threads) = Connection::stdio();
-    let initialize = connection.initialize(serde_json::to_value(server_capabilities())?)?;
+    let (initialize_id, initialize) = connection.initialize_start()?;
+    connection.initialize_finish(initialize_id, initialize_result(version))?;
     let params: InitializeParams = serde_json::from_value(initialize)?;
     let root = workspace_root(&params)?;
     let mut server = Server::new(root)?;
@@ -35,6 +40,16 @@ pub fn run_stdio() -> LspResult<()> {
     drop(connection);
     io_threads.join()?;
     Ok(())
+}
+
+fn initialize_result(version: &str) -> serde_json::Value {
+    serde_json::json!({
+        "capabilities": server_capabilities(),
+        "serverInfo": {
+            "name": "maki",
+            "version": version,
+        },
+    })
 }
 
 fn server_capabilities() -> ServerCapabilities {
@@ -599,6 +614,15 @@ fn diagnostic_code(kind: AnalysisDiagnosticKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initialize_result_reports_server_version() {
+        let result = initialize_result("1.2.3");
+
+        assert_eq!(result["serverInfo"]["name"], "maki");
+        assert_eq!(result["serverInfo"]["version"], "1.2.3");
+        assert!(result["capabilities"].is_object());
+    }
 
     #[test]
     fn lsp_ranges_use_utf16_columns() {
