@@ -77,21 +77,13 @@ where
 
     let method = request.method().as_str();
     let route = route_label_for_request(state, &request);
-    let started = Instant::now();
-    let _inflight = state.metrics().track_http_inflight_request();
 
     if request.method() == http::Method::Get && request.target() == LIVE_RELOAD_PATH {
-        let result = handle_live_reload_connection(state, stream);
-        let status = result
-            .as_ref()
-            .map(|status| status.code())
-            .unwrap_or(http::StatusCode::InternalServerError.code())
-            .to_string();
-        state
-            .metrics()
-            .record_http_request(method, route, status, started.elapsed(), 0);
-        return result.map(|_| ());
+        return handle_live_reload_connection(state, stream).map(|_| ());
     }
+
+    let started = Instant::now();
+    let _inflight = state.metrics().track_http_inflight_request();
 
     let response = match response_for_request(state, &request) {
         Ok(response) => response,
