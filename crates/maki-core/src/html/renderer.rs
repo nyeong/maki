@@ -155,11 +155,25 @@ impl<'a> Renderer<'a> {
         self.html.push_str("\" aria-hidden=\"true\"></span>");
     }
 
-    fn render_date_stamp_link(&mut self, stamp: DateStamp<'_>, occurrence_id: &str) {
+    fn render_date_stamp_link(
+        &mut self,
+        stamp: DateStamp<'_>,
+        occurrence_id: &str,
+        is_location: bool,
+    ) {
         let href = maki::date_occurrence_href(stamp.target(), occurrence_id);
         self.html.push_str("<a class=\"");
+        if is_location {
+            self.html.push_str("maki-date-location ");
+        }
         self.html.push_str(date_stamp_class(stamp.kind()));
-        self.html.push_str("\" href=\"");
+        self.html.push('"');
+        if is_location {
+            self.html.push_str(" id=\"");
+            self.escape_html_attr_into(occurrence_id);
+            self.html.push('"');
+        }
+        self.html.push_str(" href=\"");
         self.escape_html_attr_into(&href);
         self.html.push_str("\">");
         self.render_date_stamp_text(stamp);
@@ -215,8 +229,7 @@ impl<'a> Renderer<'a> {
 
     fn render_date_stamp(&mut self, stamp: DateStamp<'_>) {
         if let Some(occurrence_id) = self.next_inline_date_occurrence_id() {
-            self.render_date_location(&occurrence_id);
-            self.render_date_stamp_link(stamp, &occurrence_id);
+            self.render_date_stamp_link(stamp, &occurrence_id, true);
         } else {
             self.render_date_stamp_text(stamp);
         }
@@ -224,10 +237,9 @@ impl<'a> Renderer<'a> {
 
     fn render_date_range(&mut self, range: DateRange<'_>) {
         if let Some(occurrence_id) = self.next_inline_date_occurrence_id() {
-            self.render_date_location(&occurrence_id);
-            self.render_date_stamp_link(range.start(), &occurrence_id);
+            self.render_date_stamp_link(range.start(), &occurrence_id, true);
             self.html.push_str(DATE_RANGE_SEPARATOR_HTML);
-            self.render_date_stamp_link(range.end(), &occurrence_id);
+            self.render_date_stamp_link(range.end(), &occurrence_id, false);
         } else {
             self.render_date_stamp_text(range.start());
             self.html.push_str(DATE_RANGE_SEPARATOR_HTML);

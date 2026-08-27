@@ -83,6 +83,39 @@ fn render_ordered_list_with_child_paragraph() {
 }
 
 #[test]
+fn render_ordered_schedule_with_nested_lists() {
+    let parsed = parser::parse(
+        r#"1. [2026-09-04 Fri 14:30]
+   - 시간
+     - 14:30 국립중앙박물관 어메이징 타일랜드
+     - 15:30 국립중앙박물관 한국인의 밥상
+     - 16:30 저녁
+   - 현장 결제
+     - [ ] 국립중앙박물관 어메이징 타일랜드 전시 (13,000 원)
+     - [ ] 국립중앙박물관 한국인의 밥상 (13,000 원)
+   - 비고
+     - 파란색을 입고 와야함"#,
+    );
+
+    let html = render_document_with_context(
+        &parsed.document,
+        RenderContext::default().with_date_source_path(std::path::Path::new("index.maki")),
+    );
+    let body = html.split_once("</head>").unwrap().1;
+
+    assert!(
+        body.starts_with(
+            "<body><ol><li><a class=\"maki-date-location maki-date-stamp maki-date-stamp-reference\" id=\"date-inline-index-maki-1\" href=\"/@/dates/2026-09-04#date-inline-index-maki-1\">[2026-09-04 Fri 14:30]</a><ul><li>시간<ul><li>14:30 국립중앙박물관"
+        ),
+        "{body}"
+    );
+    assert!(!body.contains("<li><span class=\"maki-date-location\""));
+    assert!(body.contains(
+        "<li class=\"maki-todo-item\" data-todo-state=\"todo\"><input class=\"maki-todo-checkbox\""
+    ));
+}
+
+#[test]
 fn render_todo_list_items_as_disabled_checkboxes() {
     let parsed = parser::parse(
         r#"- [ ] todo

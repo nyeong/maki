@@ -67,7 +67,7 @@ End-user release branch에서는 로컬 개발 전용 설정이 남아 있으면
 
 태그 기반 release pipeline을 만든다.
 
-- [ ] `maki --version --json` 또는 동등한 machine-readable version contract를 추가한다.
+- [x] `maki --version --json` 또는 동등한 machine-readable version contract를 추가한다.
 - [ ] `maki-vX.Y.Z` tag에서 macOS aarch64/x86_64, Linux aarch64/x86_64 artifact를 build한다.
 - [ ] versioned archive와 SHA-256 checksum을 생성한다.
 - [ ] Cargo.lock, flake.lock, source commit, build system 정보를 provenance로 남긴다.

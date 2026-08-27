@@ -25,8 +25,13 @@ use maki_core::{Maki, MakiConfig};
 pub type LspResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 pub fn run_stdio() -> LspResult<()> {
+    run_stdio_with_version(env!("CARGO_PKG_VERSION"))
+}
+
+pub fn run_stdio_with_version(version: &str) -> LspResult<()> {
     let (connection, io_threads) = Connection::stdio();
-    let initialize = connection.initialize(serde_json::to_value(server_capabilities())?)?;
+    let (initialize_id, initialize) = connection.initialize_start()?;
+    connection.initialize_finish(initialize_id, initialize_result(version))?;
     let params: InitializeParams = serde_json::from_value(initialize)?;
     let root = workspace_root(&params)?;
     let mut server = Server::new(root)?;
@@ -35,6 +40,16 @@ pub fn run_stdio() -> LspResult<()> {
     drop(connection);
     io_threads.join()?;
     Ok(())
+}
+
+fn initialize_result(version: &str) -> serde_json::Value {
+    serde_json::json!({
+        "capabilities": server_capabilities(),
+        "serverInfo": {
+            "name": "maki",
+            "version": version,
+        },
+    })
 }
 
 fn server_capabilities() -> ServerCapabilities {
@@ -486,6 +501,19 @@ fn completion_items(project: &ProjectAnalysis, source: &str, offset: usize) -> V
 }
 
 fn heading_symbols(source: &str, headings: &[HeadingOccurrence]) -> Vec<DocumentSymbol> {
+    fn section_span(
+        source_len: usize,
+        headings: &[HeadingOccurrence],
+        heading_index: usize,
+    ) -> SourceSpan {
+        let heading = &headings[heading_index];
+        let end = headings[heading_index + 1..]
+            .iter()
+            .find(|candidate| candidate.level <= heading.level)
+            .map_or(source_len, |candidate| candidate.span.start);
+        SourceSpan::new(heading.span.start, end)
+    }
+
     fn build(
         source: &str,
         headings: &[HeadingOccurrence],
@@ -497,10 +525,11 @@ fn heading_symbols(source: &str, headings: &[HeadingOccurrence]) -> Vec<Document
             if heading.level <= parent_level {
                 break;
             }
+            let heading_index = *index;
             *index += 1;
             let children = build(source, headings, index, heading.level);
             let (Some(range), Some(selection_range)) = (
-                lsp_range(source, heading.span),
+                lsp_range(source, section_span(source.len(), headings, heading_index)),
                 lsp_range(source, heading.title_span),
             ) else {
                 continue;
@@ -587,6 +616,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn initialize_result_reports_server_version() {
+        let result = initialize_result("1.2.3");
+
+        assert_eq!(result["serverInfo"]["name"], "maki");
+        assert_eq!(result["serverInfo"]["version"], "1.2.3");
+        assert!(result["capabilities"].is_object());
+    }
+
+    #[test]
     fn lsp_ranges_use_utf16_columns() {
         let source = "한글 😀 link";
         let span = SourceSpan::new(source.find("link").unwrap(), source.len());
@@ -623,5 +661,75 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(modes, vec!["block", "pre", "text"]);
+    }
+
+    #[test]
+    fn document_symbols_follow_heading_hierarchy_and_cover_sections() {
+        let source = "= Parent\nintro\n== Child 😀\nbody\n= Sibling\nend\n";
+        let analysis = maki_core::analysis::analyze_document(Path::new("index.maki"), source);
+        let symbols = heading_symbols(source, &analysis.headings);
+
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "Parent");
+        assert_eq!(
+            symbols[0].range,
+            Range::new(Position::new(0, 0), Position::new(4, 0))
+        );
+        assert_eq!(
+            symbols[0].selection_range,
+            Range::new(Position::new(0, 2), Position::new(0, 8))
+        );
+
+        let children = symbols[0]
+            .children
+            .as_ref()
+            .expect("Parent should contain Child");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "Child 😀");
+        assert_eq!(
+            children[0].range,
+            Range::new(Position::new(2, 0), Position::new(4, 0))
+        );
+
+        assert_eq!(symbols[1].name, "Sibling");
+        assert_eq!(
+            symbols[1].range,
+            Range::new(Position::new(4, 0), Position::new(6, 0))
+        );
+    }
+
+    #[test]
+    fn workspace_symbol_search_finds_headings_case_insensitively() {
+        let documents = BTreeMap::from([(
+            PathBuf::from("notes/alpha.maki"),
+            "--^ title: Alpha\n\n= Overview\n== Details\n".to_string(),
+        )]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            documents,
+        };
+        let params = WorkspaceSymbolParams {
+            query: "DETAIL".to_string(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let WorkspaceSymbolResponse::Flat(symbols) = server.workspace_symbols(params) else {
+            panic!("workspace symbols should use the flat response form");
+        };
+
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "Details");
+        assert_eq!(symbols[0].kind, SymbolKind::NAMESPACE);
+        assert_eq!(symbols[0].container_name.as_deref(), Some("Alpha"));
+        assert_eq!(
+            symbols[0].location.uri.as_str(),
+            "file:///workspace/notes/alpha.maki"
+        );
+        assert_eq!(
+            symbols[0].location.range,
+            Range::new(Position::new(3, 3), Position::new(3, 10))
+        );
     }
 }

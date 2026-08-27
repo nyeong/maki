@@ -156,6 +156,23 @@
                 touch $out
               '';
 
+          deploy-dogfood-script =
+            pkgs.runCommand "maki-deploy-dogfood-script"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.git
+                  pkgs.nix
+                  pkgs.openssh
+                ];
+              }
+              ''
+                export HOME="$TMPDIR/home"
+                mkdir -p "$HOME"
+                bash ${source}/scripts/ci/test-deploy-dogfood.sh
+                touch $out
+              '';
+
           nixos-module-eval = pkgs.runCommand "maki-nixos-module-eval" { } ''
             docs_exec_start=${lib.escapeShellArg docsExecStart}
             case "$docs_exec_start" in

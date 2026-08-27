@@ -18,3 +18,4 @@ members = [
 maki-core = { path = "crates/maki-core" }
 maki-lsp = { path = "crates/maki-lsp" }
 maki-serve = { path = "crates/maki-serve" }
+serde_json = "1.0"

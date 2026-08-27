@@ -55,6 +55,8 @@ maki serve my-notes
 ## Commands
 
 ```bash
+maki --version
+maki --version --json
 maki serve .
 maki build docs/index.maki > index.html
 maki lsp
@@ -71,6 +73,10 @@ source root get project-aware link resolution; other files render as standalone
 HTML.
 
 `maki lsp` starts the stdio language server for editor integration.
+
+`maki --version --json` prints a stable machine-readable object containing the
+CLI name and package version. The LSP initialize response reports the same
+version through `serverInfo.version`.
 
 ## Configuration
 
@@ -117,6 +123,19 @@ truth.
 updates. Put `maki.toml` at the repository root and set its `source` when notes
 live in a subdirectory. `--metrics HOST:PORT` enables a separate Prometheus
 listener that serves `GET /metrics`.
+
+Before a dogfood deployment, validate that the Maki and dotfiles checkouts are
+clean, on `main`, synchronized with their remotes, and that the deploy host is
+reachable:
+
+```bash
+DOTFILES_DIR=/path/to/dotfiles ./scripts/deploy-dogfood.sh --check
+```
+
+Run the same command without `--check` to update the dotfiles Maki input and
+activate its `MAKI_DEPLOY_TARGET` (default: `nixbox`). The script defaults both
+Git remotes to `origin`; alternate checkout, remote, target, host, and SSH user
+values are configurable through the environment documented by `--help`.
 
 The NixOS module supports multiple named local or Git-backed targets:
 

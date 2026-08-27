@@ -39,7 +39,7 @@ Zed가 extension 자체를 compile할 때만 `wasm32-wasip2` target이 필요하
 :   "lsp": {
 :     "maki-lsp": {
 :       "binary": {
-:         "path": "/Users/nyeong/Repos/maki/target/debug/maki",
+:         "path": "/path/to/maki-workspace/maki/target/debug/maki",
 :         "arguments": ["lsp"]
 :       }
 :     }
@@ -59,7 +59,8 @@ Zed가 extension 자체를 compile할 때만 `wasm32-wasip2` target이 필요하
 extension Rust와 grammar rebuild가 필요할 때만 다음 process를 사용한다.
 
 --v lang: bash
-: nix develop /Users/nyeong/Repos/maki-zed -c zed --foreground /Users/nyeong/Repos/maki
+: cd /path/to/maki-workspace
+: nix develop ./maki-zed -c zed --foreground ./maki
 
 이 shell은 Zed extension compile에 필요한 `wasm32-wasip2` target과 검증 도구를 제공한다.
 
