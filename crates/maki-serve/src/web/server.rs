@@ -11,9 +11,10 @@ use maki_core::Error as MakiError;
 
 use super::error::{Error, not_found};
 use super::live_reload::handle_live_reload_connection;
+use super::request_pool::RequestPool;
 use super::routes::{response_for_request, route_label_for_request};
 use super::state::AppState;
-use super::{LIVE_RELOAD_PATH, MAX_REQUEST_HEAD_SIZE, MetricsEndpoint};
+use super::{LIVE_RELOAD_PATH, MAX_REQUEST_HEAD_SIZE, MetricsEndpoint, REQUEST_WORKER_COUNT};
 
 pub(super) fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, Error> {
     // TODO: 최적화 가능
@@ -151,28 +152,34 @@ pub(super) fn spawn_metrics_listener(
     listener: TcpListener,
     metrics: Metrics,
     endpoint: MetricsEndpoint,
-) {
-    thread::spawn(move || {
-        println!(
-            "Metrics listening on http://{}:{}/metrics",
-            endpoint.host, endpoint.port
-        );
+) -> std::io::Result<()> {
+    let request_pool = RequestPool::new("metrics", REQUEST_WORKER_COUNT)?;
 
-        for stream in listener.incoming() {
-            let mut stream = match stream {
-                Ok(stream) => stream,
-                Err(source) => {
-                    eprintln!("Failed to accept metrics connection: {}", source);
-                    continue;
-                }
-            };
+    thread::Builder::new()
+        .name("maki-metrics-listener".to_string())
+        .spawn(move || {
+            println!(
+                "Metrics listening on http://{}:{}/metrics",
+                endpoint.host, endpoint.port
+            );
 
-            let metrics = metrics.clone();
-            thread::spawn(move || {
-                if let Err(error) = handle_metrics_connection(&metrics, &mut stream) {
-                    eprintln!("Failed to handle metrics connection: {}", error);
-                }
-            });
-        }
-    });
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(stream) => stream,
+                    Err(source) => {
+                        eprintln!("Failed to accept metrics connection: {}", source);
+                        continue;
+                    }
+                };
+
+                let metrics = metrics.clone();
+                request_pool.execute(move || {
+                    if let Err(error) = handle_metrics_connection(&metrics, &mut stream) {
+                        eprintln!("Failed to handle metrics connection: {}", error);
+                    }
+                });
+            }
+        })?;
+
+    Ok(())
 }
