@@ -3,9 +3,12 @@ use std::path::{Path, PathBuf};
 use super::context::AssetMode;
 
 pub(in crate::html) const DEFAULT_CSS: &str = include_str!("../../../../assets/maki.css");
+pub(in crate::html) const EXTERNAL_LINKS_SCRIPT: &str =
+    include_str!("../../../../assets/maki-external-links.js");
 pub(in crate::html) const SEARCH_SCRIPT: &str = include_str!("../../../../assets/maki-search.js");
 pub(in crate::html) const TOC_SCRIPT: &str = include_str!("../../../../assets/maki-toc.js");
 pub const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
+pub const EXTERNAL_LINKS_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-external-links.js";
 pub const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
 pub const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
 pub(in crate::html) const PROJECT_NAVIGATION_HTML: &str = r#"<header class="maki-nav">
@@ -56,6 +59,12 @@ const RUNTIME_ASSETS: &[RuntimeAsset] = &[
         embedded: DEFAULT_CSS,
     },
     RuntimeAsset {
+        request_path: EXTERNAL_LINKS_SCRIPT_ASSET_PATH,
+        file_name: "maki-external-links.js",
+        content_type: "application/javascript; charset=utf-8",
+        embedded: EXTERNAL_LINKS_SCRIPT,
+    },
+    RuntimeAsset {
         request_path: SEARCH_SCRIPT_ASSET_PATH,
         file_name: "maki-search.js",
         content_type: "application/javascript; charset=utf-8",
@@ -97,6 +106,12 @@ pub(in crate::html) fn push_stylesheet(html: &mut String, asset_mode: AssetMode)
 
 pub(in crate::html) fn push_project_navigation(html: &mut String, asset_mode: AssetMode) {
     html.push_str(PROJECT_NAVIGATION_HTML);
+    push_script(
+        html,
+        asset_mode,
+        EXTERNAL_LINKS_SCRIPT,
+        EXTERNAL_LINKS_SCRIPT_ASSET_PATH,
+    );
     push_script(html, asset_mode, SEARCH_SCRIPT, SEARCH_SCRIPT_ASSET_PATH);
     push_script(html, asset_mode, TOC_SCRIPT, TOC_SCRIPT_ASSET_PATH);
 }

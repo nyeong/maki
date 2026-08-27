@@ -176,7 +176,7 @@ project page에는 nav shell, search input, meta index link, TOC/search scripts�
 근거:
 
 - `crates/maki-core/src/html/`: project navigation, runtime assets, link rendering, built-in containers, search/recents/diagnostics/not-found pages.
-- `assets/maki.css`, `assets/maki-search.js`, `assets/maki-toc.js`.
+- `assets/maki.css`, `assets/maki-external-links.js`, `assets/maki-search.js`, `assets/maki-toc.js`.
 - `templates/*.maki`: compile-time embed되는 사람이 읽는 meta page의 maki template.
 
 평가:
