@@ -58,6 +58,7 @@ fn test_handle_unknown_path_returns_not_found() {
     assert!(body.contains("<title>Not Found</title>"));
     assert!(body.contains("<header class=\"maki-nav\">"));
     assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-external-links.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
     assert!(body.contains("<code>/missing</code>"));
@@ -74,6 +75,7 @@ fn test_rendered_note_includes_live_reload_script() {
     let body = String::from_utf8(response.body().to_vec()).unwrap();
 
     assert!(body.contains("<link rel=\"stylesheet\" href=\"/.maki/assets/maki.css\">"));
+    assert!(body.contains("<script src=\"/.maki/assets/maki-external-links.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
     assert!(body.contains("new EventSource(\"/.maki/events\")"));
@@ -319,6 +321,19 @@ fn test_runtime_asset_routes_return_source_assets() {
     assert_eq!(js.get_header("Cache-Control"), Some("no-cache"));
     assert!(js_body.contains("SEARCH_INDEX_PATH"));
 
+    let external_links = handle_request(
+        &state,
+        &http::Request::get("/.maki/assets/maki-external-links.js"),
+    )
+    .unwrap();
+    let external_links_body = String::from_utf8(external_links.body().to_vec()).unwrap();
+    assert_eq!(
+        external_links.get_header("Content-Type"),
+        Some("application/javascript; charset=utf-8")
+    );
+    assert_eq!(external_links.get_header("Cache-Control"), Some("no-cache"));
+    assert!(external_links_body.contains("faviconUrlForHref"));
+
     let toc = handle_request(&state, &http::Request::get("/.maki/assets/maki-toc.js")).unwrap();
     let toc_body = String::from_utf8(toc.body().to_vec()).unwrap();
     assert_eq!(
@@ -335,6 +350,7 @@ fn test_watched_file_snapshot_includes_runtime_assets() {
     let snapshot = collect_watched_file_snapshot(&root).unwrap();
 
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki.css")));
+    assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-external-links.js")));
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-search.js")));
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-toc.js")));
 }
