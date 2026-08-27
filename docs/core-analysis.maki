@@ -1,6 +1,6 @@
 --^ title: Core Analysis
 --^ status: draft
---^ updated: [2026-08-25]
+--^ updated: [2026-08-27]
 
 = 개요
 
@@ -29,6 +29,7 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - heading occurrence: level, title, anchor, marker span, title span
 - property occurrence: direction, key/value, line/key/value span
 - note link occurrence: 전체 span, target span, resolution
+- reference link occurrence: title, target, marker 전체 span, title span
 - date occurrence: visible inline/property value origin, property key, kind, span
 - diagnostic: source path, span, kind, message
 
@@ -37,6 +38,7 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - Block span은 첫 source line 시작부터 마지막 source line body 끝까지다. Line ending은 제외한다.
 - Heading marker span은 `=` run만 포함하고 title span은 delimiter space 뒤의 text만 포함한다.
 - Note Link target span은 `[[`, `]]`를 제외한다.
+- Reference Link span은 `[`, `]`를 포함하고 title span은 delimiter를 제외한다.
 - Property key/value span은 prefix, `:`, 양끝 whitespace를 제외한다.
 - Parser warning은 문제가 있는 source line span을 우선 사용한다.
 - Project semantic warning은 문제가 있는 semantic target span을 사용한다.

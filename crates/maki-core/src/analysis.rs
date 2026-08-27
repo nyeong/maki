@@ -19,6 +19,7 @@ pub struct DocumentAnalysis {
     pub blocks: Vec<BlockOccurrence>,
     pub headings: Vec<HeadingOccurrence>,
     pub note_links: Vec<NoteLinkOccurrence>,
+    pub reference_links: Vec<ReferenceLinkOccurrence>,
     pub properties: Vec<PropertyOccurrence>,
     pub dates: Vec<DateOccurrence>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
@@ -65,6 +66,23 @@ pub struct NoteLinkOccurrence {
     pub span: SourceSpan,
     pub target_span: SourceSpan,
     pub resolution: Option<LinkResolution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceLinkOccurrence {
+    pub title: String,
+    pub target: String,
+    pub span: SourceSpan,
+    pub title_span: SourceSpan,
+}
+
+#[derive(Default)]
+struct DocumentOccurrences {
+    blocks: Vec<BlockOccurrence>,
+    headings: Vec<HeadingOccurrence>,
+    note_links: Vec<NoteLinkOccurrence>,
+    reference_links: Vec<ReferenceLinkOccurrence>,
+    dates: Vec<DateOccurrence>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,31 +162,14 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         .title()
         .map(str::to_owned)
         .unwrap_or_else(|| file_stem(path));
-    let mut blocks = Vec::new();
-    let mut headings = Vec::new();
-    let mut note_links = Vec::new();
-    let mut dates = Vec::new();
+    let mut occurrences = DocumentOccurrences::default();
 
     for block in &parsed.document.blocks {
-        collect_block(
-            source,
-            &source_map,
-            block,
-            &mut blocks,
-            &mut headings,
-            &mut note_links,
-            &mut dates,
-        );
+        collect_block(source, &source_map, block, &mut occurrences);
     }
     for definition in parsed.document.reference_definitions().iter() {
         if let parser::ReferenceDefinition::Footnote { body, .. } = definition {
-            collect_inlines(
-                source,
-                body,
-                DateOrigin::VisibleInline,
-                &mut note_links,
-                &mut dates,
-            );
+            collect_inlines(source, body, DateOrigin::VisibleInline, &mut occurrences);
         }
     }
     for property in &properties {
@@ -180,11 +181,10 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
             DateOrigin::PropertyValue {
                 key: property.key.clone(),
             },
-            &mut note_links,
-            &mut dates,
+            &mut occurrences,
         );
     }
-    blocks.sort_by_key(|block| block.span);
+    occurrences.blocks.sort_by_key(|block| block.span);
 
     let diagnostics = parsed
         .diagnostics
@@ -202,11 +202,12 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         canonical_path: canonical_path(path),
         title,
         document_span,
-        blocks,
-        headings,
-        note_links,
+        blocks: occurrences.blocks,
+        headings: occurrences.headings,
+        note_links: occurrences.note_links,
+        reference_links: occurrences.reference_links,
         properties,
-        dates,
+        dates: occurrences.dates,
         diagnostics,
     }
 }
@@ -305,15 +306,12 @@ fn collect_block(
     source: &str,
     source_map: &SourceMap<'_>,
     block: &Block<'_>,
-    blocks: &mut Vec<BlockOccurrence>,
-    headings: &mut Vec<HeadingOccurrence>,
-    note_links: &mut Vec<NoteLinkOccurrence>,
-    dates: &mut Vec<DateOccurrence>,
+    occurrences: &mut DocumentOccurrences,
 ) {
     let mut body_spans = Vec::new();
     let kind = match &block.kind {
         BlockKind::Paragraph { body } => {
-            collect_inlines(source, body, DateOrigin::VisibleInline, note_links, dates);
+            collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
             collect_inline_source_spans(source, body, &mut body_spans);
             AnalysisBlockKind::Paragraph
         }
@@ -326,7 +324,7 @@ fn collect_block(
             body,
             raw_body,
         } => {
-            collect_inlines(source, body, DateOrigin::VisibleInline, note_links, dates);
+            collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
             if let Some(title_span) = slice_span(source, raw_body) {
                 let span = whole_line_span(source_map, title_span);
                 let marker_start = title_span.start.saturating_sub(level + 1);
@@ -335,7 +333,7 @@ fn collect_block(
                     .property("id")
                     .filter(|id| !id.is_empty())
                     .unwrap_or(raw_body);
-                headings.push(HeadingOccurrence {
+                occurrences.headings.push(HeadingOccurrence {
                     level: *level,
                     title: (*raw_body).to_string(),
                     anchor: anchor.to_string(),
@@ -349,18 +347,10 @@ fn collect_block(
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_inlines(
-                    source,
-                    &item.body,
-                    DateOrigin::VisibleInline,
-                    note_links,
-                    dates,
-                );
+                collect_inlines(source, &item.body, DateOrigin::VisibleInline, occurrences);
                 collect_inline_source_spans(source, &item.body, &mut body_spans);
                 for child in &item.children {
-                    collect_block(
-                        source, source_map, child, blocks, headings, note_links, dates,
-                    );
+                    collect_block(source, source_map, child, occurrences);
                 }
             }
             AnalysisBlockKind::List
@@ -372,13 +362,7 @@ fn collect_block(
         BlockKind::Table { header, rows, .. } => {
             for row in std::iter::once(header).chain(rows) {
                 for cell in &row.cells {
-                    collect_inlines(
-                        source,
-                        &cell.body,
-                        DateOrigin::VisibleInline,
-                        note_links,
-                        dates,
-                    );
+                    collect_inlines(source, &cell.body, DateOrigin::VisibleInline, occurrences);
                     collect_inline_source_spans(source, &cell.body, &mut body_spans);
                 }
             }
@@ -403,7 +387,7 @@ fn collect_block(
                     } => {
                         body_spans.extend(slice_span(source, label));
                         body_spans.extend(slice_span(source, raw_body));
-                        collect_inlines(source, body, DateOrigin::VisibleInline, note_links, dates);
+                        collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
                     }
                 }
             }
@@ -412,7 +396,7 @@ fn collect_block(
     };
 
     if let Some(span) = covering_line_span(source_map, &body_spans) {
-        blocks.push(BlockOccurrence {
+        occurrences.blocks.push(BlockOccurrence {
             kind,
             span,
             body_spans,
@@ -424,14 +408,13 @@ fn collect_inlines(
     source: &str,
     inlines: &[Inline<'_>],
     origin: DateOrigin,
-    note_links: &mut Vec<NoteLinkOccurrence>,
-    dates: &mut Vec<DateOccurrence>,
+    occurrences: &mut DocumentOccurrences,
 ) {
     for inline in inlines {
         match inline {
             Inline::NoteLink { target } => {
                 if let Some(target_span) = slice_span(source, target) {
-                    note_links.push(NoteLinkOccurrence {
+                    occurrences.note_links.push(NoteLinkOccurrence {
                         target: (*target).to_string(),
                         span: SourceSpan::new(
                             target_span.start.saturating_sub(2),
@@ -442,15 +425,30 @@ fn collect_inlines(
                     });
                 }
             }
-            Inline::DateStamp(stamp) => collect_date(source, *stamp, origin.clone(), dates),
+            Inline::Link { title, target } => {
+                if let Some(title_span) = slice_span(source, title) {
+                    occurrences.reference_links.push(ReferenceLinkOccurrence {
+                        title: (*title).to_string(),
+                        target: target.trim().to_string(),
+                        span: SourceSpan::new(
+                            title_span.start.saturating_sub(1),
+                            (title_span.end + 1).min(source.len()),
+                        ),
+                        title_span,
+                    });
+                }
+            }
+            Inline::DateStamp(stamp) => {
+                collect_date(source, *stamp, origin.clone(), &mut occurrences.dates)
+            }
             Inline::DateRange(range) => {
                 for stamp in [range.start(), range.end()] {
-                    collect_date(source, stamp, origin.clone(), dates);
+                    collect_date(source, stamp, origin.clone(), &mut occurrences.dates);
                 }
             }
             _ => {
                 if let Some(children) = inline.nested_inlines() {
-                    collect_inlines(source, children, origin.clone(), note_links, dates);
+                    collect_inlines(source, children, origin.clone(), occurrences);
                 }
             }
         }
@@ -780,6 +778,22 @@ mod tests {
         assert_eq!(analysis.properties.len(), 2);
         assert_eq!(analysis.note_links[0].target, "다른문서#詳細");
         assert_eq!(analysis.dates[0].origin, DateOrigin::VisibleInline);
+    }
+
+    #[test]
+    fn document_analysis_locates_reference_link_markers() {
+        let source = "- [김치]\n\n[김치]: https://hakkeido.com/\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.reference_links.len(), 1);
+        let reference = &analysis.reference_links[0];
+        assert_eq!(reference.title, "김치");
+        assert_eq!(reference.target, "https://hakkeido.com/");
+        assert_eq!(&source[reference.span.start..reference.span.end], "[김치]");
+        assert_eq!(
+            &source[reference.title_span.start..reference.title_span.end],
+            "김치"
+        );
     }
 
     #[test]
