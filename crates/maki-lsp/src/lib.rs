@@ -528,8 +528,10 @@ fn heading_symbols(source: &str, headings: &[HeadingOccurrence]) -> Vec<Document
             let heading_index = *index;
             *index += 1;
             let children = build(source, headings, index, heading.level);
+            let section = section_span(source.len(), headings, heading_index);
+            let symbol_span = SourceSpan::new(heading.title_span.start, section.end);
             let (Some(range), Some(selection_range)) = (
-                lsp_range(source, section_span(source.len(), headings, heading_index)),
+                lsp_range(source, symbol_span),
                 lsp_range(source, heading.title_span),
             ) else {
                 continue;
@@ -673,7 +675,7 @@ mod tests {
         assert_eq!(symbols[0].name, "Parent");
         assert_eq!(
             symbols[0].range,
-            Range::new(Position::new(0, 0), Position::new(4, 0))
+            Range::new(Position::new(0, 2), Position::new(4, 0))
         );
         assert_eq!(
             symbols[0].selection_range,
@@ -688,13 +690,13 @@ mod tests {
         assert_eq!(children[0].name, "Child 😀");
         assert_eq!(
             children[0].range,
-            Range::new(Position::new(2, 0), Position::new(4, 0))
+            Range::new(Position::new(2, 3), Position::new(4, 0))
         );
 
         assert_eq!(symbols[1].name, "Sibling");
         assert_eq!(
             symbols[1].range,
-            Range::new(Position::new(4, 0), Position::new(6, 0))
+            Range::new(Position::new(4, 2), Position::new(6, 0))
         );
     }
 
