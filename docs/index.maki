@@ -9,6 +9,7 @@
 - core
   - [[maki-syntax]]
   - [[core-analysis]]
+  - [[knowledge-graph-mcp]]
 - config
   - [[maki-toml]]
 - serve

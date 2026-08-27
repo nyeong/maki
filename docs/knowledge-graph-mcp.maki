@@ -1,0 +1,369 @@
+--^ title: Knowledge Graph and MCP
+--^ status: proposal
+--^ updated: [2026-08-27]
+
+= 목적
+
+Maki project를 AI가 안전하고 예측 가능하게 탐색할 수 있는 read-only knowledge interface를 만든다.
+사용자는 local directory 또는 Git repository를 입력하고 다음 질문을 할 수 있어야 한다.
+
+- 특정 날짜와 관련된 문서는 무엇인가?
+- 일정, event, deadline은 언제인가?
+- 이 제목 또는 본문을 포함하는 문서는 무엇인가?
+- 이 문서는 무엇을 가리키고, 어떤 문서가 이 문서를 가리키는가?
+- 두 문서가 관련 있다고 말할 근거는 무엇인가?
+
+MCP server는 이 interface를 AI client에 연결하는 adapter다.
+MCP tool 목록부터 만들지 않고, 먼저 `maki-core`가 공유할 문서 관계와 query 의미를 정의한다.
+Web page, CLI, LSP, MCP가 같은 project snapshot과 같은 relation 결과를 사용해야 한다.
+
+= 비목표
+
+- 첫 버전에서 문서를 생성하거나 수정하는 MCP tool
+- embedding이나 LLM 판단으로 만든 관계를 canonical fact로 저장하는 것
+- Git repository 안의 build script, hook, container command를 실행하는 것
+- Maki가 여러 repository를 합친 global knowledge graph가 되는 것
+- 캘린더 서비스나 task manager와 양방향 동기화하는 것
+
+= 전체 구조
+
+: Directory or Git source
+: -> immutable source snapshot
+: -> parse and document facts
+: -> resolve and project graph
+: -> query service
+: -> Web / CLI / LSP / MCP adapters
+
+`maki-core`는 filesystem, Git, MCP transport를 알지 않는다.
+입력 adapter가 UTF-8 source snapshot을 만들고, core는 snapshot으로부터 document fact와 project graph를 만든다.
+MCP는 core query 결과를 JSON schema와 resource로 바꾸는 protocol adapter만 맡는다.
+
+= Source 계약
+
+== Local directory
+
+초기 명령 형태는 다음과 같다.
+
+--v lang: bash
+: maki mcp .
+: maki mcp /path/to/notes
+
+입력 path에서 가장 가까운 `maki.toml`을 찾는 규칙과 configured source root 해석은 `serve`와 같아야 한다.
+Manifest가 없으면 입력 directory를 plain note root로 읽는 현재 local serve fallback을 사용할 수 있다.
+
+Local source가 바뀌면 새 immutable snapshot을 완성한 뒤 원자적으로 교체한다.
+한 tool call은 시작할 때 선택한 snapshot 하나만 읽는다.
+
+== Git repository
+
+초기 명령 형태는 기존 Git serve option과 맞춘다.
+
+--v lang: bash
+: maki mcp --git https://example.invalid/notes.git --branch main --state-dir /path/to/state
+
+- repository root의 `maki.toml`과 configured source root를 사용한다.
+- mirror, release checkout, fetch interval, symlink 거부 정책은 기존 `GitSource` 동작을 재사용한다.
+- refresh가 완료되기 전에는 이전 snapshot을 계속 제공한다.
+- clone/fetch 실패는 현재 snapshot을 손상시키지 않고 diagnostic으로 남긴다.
+- commit hash는 snapshot revision으로 쓸 수 있지만 credential이 포함된 remote URL은 결과에 노출하지 않는다.
+
+Git source 관리가 현재 `maki-serve`에 있으므로 MCP가 web server에 의존하지 않게 source runtime 경계를 분리해야 한다.
+이는 별도 crate일 수도 있고 CLI runtime의 공유 module일 수도 있지만, clone/fetch 구현을 둘로 복제하지 않는다.
+
+= 문서 관계 모델
+
+== Identity
+
+첫 버전의 graph scope는 Maki project 하나다.
+
+- `DocumentId`: source-root-relative path에서 `.maki`를 제거한 case-preserving canonical path.
+- `HeadingAnchor`: heading의 `id` property 또는 현재 heading anchor 규칙으로 만든 anchor.
+- `SourceSpan`: UTF-8 source의 zero-based half-open byte range.
+- `OccurrenceId`: snapshot 안에서 source path, occurrence kind, span으로 식별하는 근거 ID.
+
+경로의 case-folded 값은 검색과 link resolution key일 뿐 identity가 아니다.
+두 파일이 같은 normalized key를 가지면 하나로 합치지 않고 ambiguous로 남긴다.
+
+Heading과 일반 block은 처음부터 모두 영구 graph node로 만들지 않는다.
+Heading은 `DocumentId#HeadingAnchor`로 target이 될 수 있다.
+일반 block은 stable `id`가 없으므로 document 안의 source locator로 표현하고, source 수정 뒤에도 같은 ID라고 약속하지 않는다.
+
+== Document fact와 project relation
+
+Document fact는 문서 하나만 parse해서 얻을 수 있는 정보다.
+
+- title, heading, property와 property owner
+- outgoing note link의 raw target과 source span
+- date marker의 raw target, kind, origin과 source span
+- content search를 위한 searchable text chunk와 source span
+
+Project relation은 여러 document fact와 resolution context가 있어야 만들어지는 정보다.
+
+- note link의 resolved document 또는 heading target
+- resolved target에서 source document로 찾는 backlink
+- 날짜 또는 기간 query와 marker target의 match 관계
+- broken 또는 ambiguous target diagnostic
+
+이 구분을 유지하면 문서 하나가 바뀔 때 이전 fact contribution을 제거하고 새 contribution을 더할 수 있다.
+
+== Relation과 evidence
+
+Relation은 최소한 아래 값을 가진다.
+
+--v lang: text
+: Relation {
+:   subject: DocumentId,
+:   subject_owner: document | block locator,
+:   kind: RelationKind,
+:   target: DocumentTarget | TemporalTarget,
+:   evidence: OccurrenceId + SourceSpan + context,
+:   resolution: direct | derived | broken | ambiguous
+: }
+
+`subject_owner`는 property가 document에 붙었는지, heading/list item 같은 block에 붙었는지를 보존한다.
+문서 단위 결과에서는 이를 `subject`로 모을 수 있지만, 일정의 실제 주체와 근거를 잃으면 안 된다.
+
+첫 canonical relation kind는 아래와 같다.
+
+- `links_to`: `[[note]]`, `[[note#heading]]` 또는 Maki note를 가리키는 resolved reference link.
+- `references_date`: visible `[date]` reference.
+- `event_on`: visible `<date>` event.
+- `scheduled_for`: `scheduled` property의 date.
+- `deadline_on`: `deadline` property의 date.
+- `has_date_metadata`: 그 외 property key의 date. 원래 key도 evidence에 보존한다.
+
+Date target은 day 하나로 미리 펼친 edge 목록이 아니라 원문 target을 보존한다.
+
+- exact day
+- month
+- ISO week
+- closed date range
+
+Query 시점에 요청한 day/range와 target의 관계를 `exact`, `range_contains`, `period_contains`, `overlaps`로 설명한다.
+따라서 `[2026-08]`가 `2026-08-14` query에 나타나더라도, 문서가 그 날을 직접 언급한 것처럼 보이지 않는다.
+
+== Backlink
+
+Backlink는 별도의 작성 문법이나 독립 fact가 아니다.
+`links_to` relation의 target에서 subject를 찾는 inverse query다.
+
+--v lang: text
+: A --links_to at occurrence X--> B#heading
+: B#heading --incoming lookup--> A with occurrence X
+
+- resolved link만 canonical backlink가 된다.
+- broken link는 raw target reverse lookup에 남겨 새 문서나 rename 후 다시 resolve할 수 있게 한다.
+- ambiguous link는 후보와 diagnostic을 반환할 수 있지만 모든 후보의 backlink로 간주하지 않는다.
+- 같은 source document가 같은 target을 여러 번 가리키면 document summary는 하나로 묶을 수 있어도 occurrence evidence는 모두 보존한다.
+- document backlink query는 그 문서 자체와 문서 안 heading을 향한 link를 함께 반환할 수 있다. `exact_target` filter로 둘을 분리한다.
+
+== 관련 문서
+
+“관련”은 근거 없이 하나의 점수로 표현하지 않는다.
+첫 버전의 related document는 다음 graph neighborhood를 명시적으로 조합한 결과다.
+
+- outgoing: 현재 문서가 직접 link한 문서
+- incoming: 현재 문서 또는 그 heading으로 backlink를 가진 문서
+- shared temporal target: 같은 date/period를 직접 언급한 문서. 명시적으로 요청할 때만 포함한다.
+
+각 결과는 relation kind, direction, target, occurrence context를 함께 반환한다.
+2-hop traversal, shared neighbor score, embedding similarity는 나중에 추가할 수 있지만 `derived`라고 표시하고 canonical link와 섞지 않는다.
+
+= Query 계약
+
+모든 query는 adapter와 무관한 core service로 제공한다.
+Web, CLI, MCP가 각자 검색이나 relation ranking을 다시 구현하지 않는다.
+
+공통 결과에는 다음이 들어간다.
+
+- `snapshot_revision`
+- document id, title, source path
+- 일치하거나 관계를 만든 source span과 짧은 context
+- relation/date match kind처럼 결과가 나온 이유
+- 다음 page를 위한 opaque cursor
+
+Cursor에는 snapshot revision을 결합한다.
+다음 page 요청 전에 source가 바뀌었다면 결과를 조용히 섞지 않고 stale cursor error를 반환한다.
+
+== 제목 검색
+
+`search_titles(query, kinds, limit, cursor)`를 제공한다.
+
+- 기본 scope는 document title이다.
+- 선택적으로 heading과 filename을 포함한다.
+- exact, prefix, substring 순의 deterministic ranking을 유지한다.
+- case-insensitive matching을 하되 결과 title과 source spelling은 보존한다.
+- 빈 query는 전체 목록 pagination으로만 사용하고 무제한 결과를 반환하지 않는다.
+
+== 내용 검색
+
+`search_content(query, scope, limit, cursor)`를 제공한다.
+
+- 첫 버전은 deterministic literal text search다.
+- `scope`는 visible body, property, code/raw 또는 이들의 명시적 조합이다.
+- analysis 단계에서 searchable text chunk와 원문 span의 대응을 만든다.
+- 결과는 document 전체가 아니라 match span 주변의 bounded context를 반환한다.
+- syntax marker 자체가 우연히 맞은 결과와 사용자가 읽는 본문 match를 구분한다.
+- 정규식, fuzzy search, stemming, embedding search는 별도 mode로 나중에 추가한다.
+
+== 날짜별 문서 탐색
+
+`browse_dates(from, to, kinds, directness, group_by, limit, cursor)`를 제공한다.
+
+- `kinds`: reference, event, scheduled, deadline, metadata.
+- `directness`: direct만 또는 period/range에서 파생된 포함 관계까지.
+- `group_by`: occurrence, document, day.
+- date range와 period marker는 원래 marker와 query match kind를 함께 반환한다.
+- document grouping을 선택해도 occurrence count와 대표 evidence를 제공하고, 필요하면 occurrence를 더 읽을 수 있어야 한다.
+
+== 스케줄 탐색
+
+`browse_schedule(from, to, kinds, include_completed, limit, cursor)`를 제공한다.
+
+Schedule의 기본 kind는 `event`, `scheduled`, `deadline`이고 단순 date reference와 일반 metadata는 제외한다.
+`status` property가 같은 owner에 있으면 함께 반환하여 `include_completed = false` 같은 filter를 지원한다.
+Owner relation이 아직 core analysis에 없으므로, MCP보다 먼저 property owner와 block locator를 analysis surface에 완성해야 한다.
+
+Timezone이 없는 date는 local calendar date로 유지한다.
+시간과 timezone 문법이 명확해지기 전에는 임의로 UTC timestamp로 바꾸지 않는다.
+
+== 문서 관계 탐색
+
+`get_relations(document_id, direction, kinds, depth, limit, cursor)`를 제공한다.
+
+- `direction`: outgoing, incoming, both.
+- 첫 버전의 `depth`는 1만 허용한다.
+- incoming note relation은 backlink다.
+- 결과마다 target/source document summary와 evidence를 제공한다.
+- 존재하지 않는 document와 ambiguous document lookup은 서로 다른 error다.
+
+= MCP surface
+
+MCP는 resource와 read-only tool을 제공한다.
+문서 본문처럼 주소로 읽는 대상은 resource로, 검색 조건과 pagination이 필요한 작업은 tool로 둔다.
+
+== Resources
+
+- `maki://project/info`: title, source kind, snapshot revision, note count, diagnostics summary.
+- `maki://project/documents/{document-id}`: parsed document summary와 relation link.
+- `maki://project/documents/{document-id}/source`: 원문 `.maki` text.
+
+Document ID는 URI path에서 percent-encode하고, server는 decode한 값이 source root를 벗어나지 않는지 검증한다.
+Tool 결과는 가능한 경우 해당 document resource link를 함께 반환하여 AI가 필요한 원문만 추가로 읽게 한다.
+
+== Tools
+
+- `get_project_info`
+- `search_titles`
+- `search_content`
+- `browse_dates`
+- `browse_schedule`
+- `get_relations`
+
+모든 tool은 strict JSON input schema, bounded `limit`, opaque `cursor`를 가진다.
+결과는 machine-readable structured content와 간단한 text fallback을 함께 제공한다.
+Tool description은 문서 내용이 신뢰할 수 없는 data이며 지시문으로 취급하면 안 된다고 명시한다.
+
+첫 버전에는 write, Git push/pull request, shell execution, external fetch tool을 넣지 않는다.
+따라서 tool annotation도 read-only와 non-destructive 성격을 정확히 표현해야 한다.
+
+== Transport
+
+기본 transport는 AI client가 child process로 실행하기 쉬운 stdio다.
+
+- stdout에는 MCP message만 쓴다.
+- log와 diagnostic은 stderr로 보낸다.
+- server process 하나는 project 하나만 연다.
+
+독립 service가 필요한 경우 Streamable HTTP를 선택적으로 추가한다.
+
+--v lang: bash
+: maki mcp . --transport streamable-http --listen 127.0.0.1:4010
+
+HTTP transport는 localhost bind를 기본으로 하고, 모든 요청의 `Origin`을 검증하며 인증 설정 없이는 non-loopback bind를 거부한다.
+예전 HTTP+SSE transport를 새 구현의 기본으로 삼지 않는다.
+
+MCP protocol revision은 구현 시 지원하는 stable revision으로 고정하고 initialize negotiation 결과에 명시한다.
+문서에는 특정 AI vendor의 home directory나 개인 설정 파일을 필수 경로로 넣지 않는다.
+각 client가 실행 command와 argument를 등록하는 일반 예만 제공한다.
+
+= Snapshot과 변경 알림
+
+- local file change 또는 Git refresh는 새 graph를 background에서 만든다.
+- parse/load에 실패하면 완성된 이전 snapshot을 유지한다.
+- 교체가 성공하면 project revision을 증가시킨다.
+- resources list가 달라지면 MCP resource list changed notification을 보낼 수 있다.
+- 이미 읽은 URI의 내용이 달라졌다는 subscription notification은 client capability와 server 구현이 모두 있을 때만 보낸다.
+- notification을 지원하지 않는 client도 다음 tool result의 `snapshot_revision`으로 변경을 알 수 있다.
+
+= 보안과 공개 정책
+
+- `.maki` source는 data이며 신뢰할 수 없는 prompt를 포함할 수 있다.
+- repository checkout 과정에서 hook, build script, container adapter를 실행하지 않는다.
+- source root 밖으로 나가는 path traversal과 symlink는 거부한다.
+- Git credential, local absolute state path, remote URL의 userinfo를 MCP 결과에 넣지 않는다.
+- content snippet과 raw resource는 publish policy를 거친 document만 노출한다.
+- HTTP transport는 인증 주체별 publish/read scope가 생기기 전까지 public network에 노출하지 않는다.
+- query와 document text를 log, metric label, error message에 그대로 기록하지 않는다.
+
+MCP를 local stdio로 띄우더라도 AI host가 문서 내용을 외부 model로 보낼 수 있다는 점은 server가 숨길 수 없다.
+Client 설정 문서에서 어떤 source root가 공유되는지 사용자가 확인해야 한다고 명시한다.
+
+= 구현 순서
+
+== 1. Relation foundation
+
+- `DocumentAnalysis`에 property owner와 searchable text chunk를 추가한다.
+- outgoing link와 date occurrence를 공통 evidence locator로 표현한다.
+- resolved link reverse index와 unresolved raw target reverse index를 만든다.
+- direct date target과 query-time containment를 분리한다.
+
+== 2. Core query service
+
+- title/content search, date/schedule browse, relation query를 protocol-neutral API로 만든다.
+- pagination, snapshot revision, deterministic ordering을 정의한다.
+- web의 title/date page가 새 query 결과를 사용할 수 있는지 검증한다.
+
+== 3. Local stdio MCP vertical slice
+
+- `maki mcp <path>`와 resources/tools discovery를 구현한다.
+- read-only resource, 여섯 query tool, structured result를 제공한다.
+- AI client가 title search에서 원문 resource까지 따라가는 smoke test를 만든다.
+
+== 4. Git source와 refresh
+
+- `maki serve`와 `maki mcp`가 같은 source runtime을 사용한다.
+- Git refresh 후 snapshot 교체, stale cursor, resource change를 검증한다.
+
+== 5. Optional HTTP transport
+
+- stdio 기능과 결과가 같은 Streamable HTTP adapter를 추가한다.
+- localhost default, Origin validation, authentication, request size limit을 검증한다.
+
+= 첫 vertical slice 완료 조건
+
+- [ ] [analysis] property occurrence가 document/block owner와 source span을 가진다.
+- [ ] [graph] resolved outgoing link와 inverse backlink가 같은 occurrence evidence를 공유한다.
+- [ ] [graph] broken/ambiguous link를 canonical backlink로 잘못 만들지 않는다.
+- [ ] [query] title과 content search가 bounded context와 deterministic pagination을 제공한다.
+- [ ] [query] day/range 탐색이 direct와 period/range containment를 구분한다.
+- [ ] [query] schedule 탐색이 reference/metadata를 기본 결과에서 제외한다.
+- [ ] [mcp] local directory를 stdio MCP server로 열 수 있다.
+- [ ] [mcp] resource와 read-only tool 결과가 같은 snapshot revision을 보고한다.
+- [ ] [security] source root escape, symlink, untrusted repository command 실행을 막는 test가 있다.
+- [ ] [docs] generic AI client에 command와 argument를 등록하는 vendor-neutral 예제가 있다.
+
+= 열린 결정
+
+- content search에서 code/raw text를 기본 포함할지 opt-in으로 둘지.
+- schedule의 completed status 값을 `done` 하나로 고정할지 project config로 확장할지.
+- heading anchor가 명시적 `id`가 아닐 때 resource URI의 안정성을 어디까지 약속할지.
+- private Git credential 전달을 Git CLI 환경에만 맡길지 별도 credential helper 설정을 둘지.
+- MCP crate를 `maki-mcp`로 분리할지 root binary 안 protocol module로 시작할지.
+
+= 참고
+
+- MCP server primitives: <https://modelcontextprotocol.io/specification/2025-11-25/server/index>
+- MCP resources: <https://modelcontextprotocol.io/specification/2025-11-25/server/resources>
+- MCP tools: <https://modelcontextprotocol.io/specification/2025-11-25/server/tools>
+- MCP transports: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
