@@ -2,18 +2,6 @@
   const SEARCH_INDEX_PATH = "/.maki/search-index.json";
   const SEARCH_PATH = "/.maki/search";
   const MAX_RESULTS = 8;
-  const forms = document.querySelectorAll("[data-maki-search]");
-  if (!forms.length) return;
-
-  let entriesPromise;
-  const loadEntries = () => {
-    if (!entriesPromise) {
-      entriesPromise = fetch(SEARCH_INDEX_PATH, {
-        headers: { Accept: "application/json" },
-      }).then((response) => (response.ok ? response.json() : []));
-    }
-    return entriesPromise;
-  };
   const normalize = (value) => value.toLocaleLowerCase();
   const matchRank = (entry, query) => {
     const title = normalize(entry.title || "");
@@ -33,12 +21,37 @@
   const findMatches = (entries, rawQuery) => {
     const query = normalize(rawQuery.trim());
     if (!query) return [];
+    const seenPaths = new Set();
     return entries
       .map((entry) => ({ entry, rank: matchRank(entry, query) }))
       .filter((match) => match.rank)
       .sort(compareMatches)
+      .filter((match) => {
+        if (seenPaths.has(match.entry.path)) return false;
+        seenPaths.add(match.entry.path);
+        return true;
+      })
       .slice(0, MAX_RESULTS)
       .map((match) => match.entry);
+  };
+  const displayTitle = (entry) =>
+    entry.kind === "heading" ? `#${entry.title}` : entry.title;
+
+  if (typeof __makiSearchUnitTestExports === "function") {
+    __makiSearchUnitTestExports({ displayTitle, findMatches });
+  }
+
+  const forms = document.querySelectorAll("[data-maki-search]");
+  if (!forms.length) return;
+
+  let entriesPromise;
+  const loadEntries = () => {
+    if (!entriesPromise) {
+      entriesPromise = fetch(SEARCH_INDEX_PATH, {
+        headers: { Accept: "application/json" },
+      }).then((response) => (response.ok ? response.json() : []));
+    }
+    return entriesPromise;
   };
 
   forms.forEach((form) => {
@@ -78,7 +91,7 @@
 
       const title = document.createElement("span");
       title.className = "maki-search-result-title";
-      title.textContent = entry.title;
+      title.textContent = displayTitle(entry);
       const source = document.createElement("span");
       source.className = "maki-search-result-source";
       source.textContent = `${entry.kind || "note"}: ${entry.source_path}`;
