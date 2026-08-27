@@ -48,6 +48,7 @@ pub(crate) use dates::{
 };
 pub use diagnostics::{ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary};
 pub use error::Error;
+pub use files::{is_discoverable_maki_path, list_maki_files};
 pub use links::NoteLinkResolution;
 pub(crate) use links::{is_external_href, note_link_target_for_href};
 pub use note::{Note, NoteRef, RecentEntry, SearchEntry, SearchEntryKind, SitemapEntry};

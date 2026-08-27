@@ -20,7 +20,7 @@ use maki_core::analysis::{
     LinkResolution, ProjectAnalysis, SourceSnapshot, analyze_project, property_description,
 };
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
-use maki_core::{Maki, MakiConfig};
+use maki_core::{Maki, MakiConfig, is_discoverable_maki_path, list_maki_files};
 
 pub type LspResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -218,11 +218,14 @@ impl Server {
     }
 
     fn relative_path(&self, uri: &Url) -> Option<PathBuf> {
-        uri.to_file_path()
+        let relative = uri
+            .to_file_path()
             .ok()?
             .strip_prefix(&self.source_root)
             .ok()
-            .map(Path::to_path_buf)
+            .map(Path::to_path_buf)?;
+
+        is_discoverable_maki_path(&relative).then_some(relative)
     }
 
     fn document_for_uri(&self, uri: &Url) -> Option<(&str, &DocumentAnalysis)> {
@@ -420,26 +423,13 @@ fn source_root(workspace_root: &Path) -> LspResult<PathBuf> {
 }
 
 fn load_documents(root: &Path) -> LspResult<BTreeMap<PathBuf, String>> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        documents: &mut BTreeMap<PathBuf, String>,
-    ) -> LspResult<()> {
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                visit(root, &path, documents)?;
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("maki") {
-                let relative = path.strip_prefix(root)?.to_path_buf();
-                documents.insert(relative, std::fs::read_to_string(path)?);
-            }
-        }
-        Ok(())
-    }
-
     let mut documents = BTreeMap::new();
-    visit(root, root, &mut documents)?;
+    let files = list_maki_files(root)
+        .map_err(|error| format!("failed to discover Maki documents: {error}"))?;
+    for relative in files {
+        let source = std::fs::read_to_string(root.join(&relative))?;
+        documents.insert(relative, source);
+    }
     Ok(documents)
 }
 
@@ -643,6 +633,37 @@ fn diagnostic_code(kind: AnalysisDiagnosticKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestWorkspace {
+        root: PathBuf,
+    }
+
+    impl Drop for TestWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn temp_workspace(name: &str) -> TestWorkspace {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("maki-lsp-{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        TestWorkspace { root }
+    }
+
+    fn write_workspace_file(workspace: &TestWorkspace, path: &str, content: &str) {
+        let path = workspace.root.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
 
     #[test]
     fn initialize_result_reports_server_version() {
@@ -655,6 +676,47 @@ mod tests {
             result["capabilities"]["documentLinkProvider"]["resolveProvider"],
             false
         );
+    }
+
+    #[test]
+    fn workspace_loading_bounds_duplicated_hidden_and_generated_trees() {
+        let workspace = temp_workspace("hidden-tree");
+        write_workspace_file(&workspace, "index.maki", "= Included");
+        write_workspace_file(&workspace, ".hidden.maki", "= Excluded");
+        write_workspace_file(&workspace, ".git/README.maki", "= Excluded");
+        write_workspace_file(&workspace, ".jj/repo/store.maki", "= Excluded");
+        write_workspace_file(&workspace, "node_modules/package/README.maki", "= Excluded");
+        write_workspace_file(&workspace, "target/generated.maki", "= Excluded");
+
+        for copy in 0..8 {
+            for note in 0..8 {
+                write_workspace_file(
+                    &workspace,
+                    &format!(".direnv/flake-inputs/copy-{copy}/notes/{note}.maki"),
+                    "= Duplicated hidden note",
+                );
+            }
+        }
+
+        let server = Server::new(workspace.root.clone()).unwrap();
+
+        assert_eq!(
+            server.documents.keys().cloned().collect::<Vec<_>>(),
+            vec![PathBuf::from("index.maki")]
+        );
+        assert_eq!(server.analysis.documents.len(), 1);
+
+        let hidden_uri = Url::from_file_path(
+            workspace
+                .root
+                .join(".direnv/flake-inputs/copy-0/notes/0.maki"),
+        )
+        .unwrap();
+        assert_eq!(server.relative_path(&hidden_uri), None);
+
+        let outside_uri =
+            Url::from_file_path(workspace.root.parent().unwrap().join("outside.maki")).unwrap();
+        assert_eq!(server.relative_path(&outside_uri), None);
     }
 
     #[test]
