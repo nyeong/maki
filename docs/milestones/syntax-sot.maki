@@ -76,7 +76,7 @@
 - [x] Superscript / Subscript
   문서에는 `^{sup}`, `_{sub}`가 있지만 AST/parser/renderer가 없다.
 - [x] Highlight
-  문서 우선순위에는 `=highlight=`가 있지만 AST/parser/renderer가 없다.
+  문서 우선순위에는 `::highlight::`가 있지만 AST/parser/renderer가 없다.
 
 == Reference / Index / Diagnostics
 
@@ -176,7 +176,7 @@ inline parser를 새 우선순위와 새 AST에 맞춘다.
 - [x] bare HTTP/HTTPS auto-link를 제거한다.
 - [x] `/italic/`을 파싱한다.
 - [x] `^{sup}`와 `_{sub}`를 파싱한다.
-- [x] `=highlight=`를 파싱한다.
+- [x] `::highlight::`를 파싱한다.
 - [x] inline priority를 [[maki-syntax]] 순서로 고정한다.
 
 --v status: done
