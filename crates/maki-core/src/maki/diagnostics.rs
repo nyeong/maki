@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::parser::{self, BlockKind, Inline};
 
 use super::links::{ExternalLinkCheck, check_external_link, note_link_target_for_href};
-use super::{Maki, NoteLinkResolution, NoteRef};
+use super::{Maki, NoteLinkResolution, NoteRef, quote_mode_is_raw};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDiagnostic {
@@ -291,7 +291,7 @@ fn collect_block_link_diagnostics(
                 }
             }
         }
-        BlockKind::Quote { lines } if block.property("mode") != Some("plain") => {
+        BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
             collect_maki_lines_link_diagnostics(
                 diagnostics,
                 maki,
@@ -308,7 +308,7 @@ fn collect_block_link_diagnostics(
             }
         }
         BlockKind::Container { kind, lines, .. }
-            if *kind == "quote" && block.property("mode") != Some("plain") =>
+            if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
         {
             collect_maki_lines_link_diagnostics(
                 diagnostics,

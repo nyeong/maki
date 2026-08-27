@@ -558,6 +558,11 @@ blockquote {
   color: var(--muted);
 }
 
+.maki-quote-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 blockquote > :first-child {
   margin-top: 0;
 }

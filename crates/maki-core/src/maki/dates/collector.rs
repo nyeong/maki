@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::parser::{self, BlockKind, DateRange, DateStamp, Inline};
 
 use super::super::note::{Note, NoteRef};
+use super::super::quote_mode_is_raw;
 use super::context::{
     DateTraversalContext, block_date_context, document_date_context, list_item_line_date_context,
     property_date_context, table_body_row_date_context, table_row_date_context,
@@ -207,7 +208,7 @@ fn collect_block_dates(
                 collect_list_item_dates(collector, item, context, references);
             }
         }
-        BlockKind::Quote { lines } if block.property("mode") != Some("plain") => {
+        BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
             collect_maki_lines_dates(collector, lines, context, references)
         }
         BlockKind::Table { header, rows, .. } => {
@@ -221,7 +222,7 @@ fn collect_block_dates(
             }
         }
         BlockKind::Container { kind, lines, .. }
-            if *kind == "quote" && block.property("mode") != Some("plain") =>
+            if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
         {
             collect_maki_lines_dates(collector, lines, context, references)
         }

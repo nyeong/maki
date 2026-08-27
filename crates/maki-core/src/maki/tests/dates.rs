@@ -242,15 +242,15 @@ Body[^release].
 }
 
 #[test]
-fn date_index_ignores_dates_inside_plain_quotes() {
-    let project = temp_project("plain-quote-date-index");
+fn date_index_ignores_dates_inside_raw_quotes() {
+    let project = temp_project("raw-quote-date-index");
     write_note_with_content(
         &project,
         "start.maki",
-        r#"--v mode: plain
+        r#"--v mode: pre
 > [2026-08-24]
 
---v mode: plain
+--v mode: text
 ---quote
 [2026-08-25]
 ---"#,

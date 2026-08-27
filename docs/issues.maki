@@ -385,7 +385,7 @@ Property는 자유 key-value로 두되, 아래 key는 renderer/query/index가 �
 - `publish`
 
 quote에는 `url`, `from`, `mode`가 특히 중요하다.
-`mode`는 `maki`, `plain`, `pre`를 우선 지원하면 된다.
+`mode`는 `block`, `pre`, `text`를 우선 지원하면 된다.
 
 == 성공 기준
 
