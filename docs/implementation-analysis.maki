@@ -1,12 +1,12 @@
 --^ title: Implementation Analysis
---^ date: [2026-08-25]
+--^ date: [2026-08-27]
 
 = 결론
 
 현재 maki는 v0/v1의 프로젝트 단위 렌더링·서빙을 넘어 v2 polishing, v5 관측성, v4 분석/LSP의 첫 vertical slice까지 구현한 상태다.
 syntax SoT에 맞춘 parser와 HTML renderer, `NoteIndex`, project diagnostics/search/runtime assets/git source serving/Prometheus metrics에 더해 `SourceMap`, `DocumentAnalysis`/`ProjectAnalysis`, stdio `maki lsp`, sitemap, project index JSON export가 들어와 있다.
 
-v4 분석 surface는 heading, note link, property, date와 parser/semantic diagnostic의 source range를 제공하고 note/heading link를 snapshot 안에서 resolve한다.
+v4 분석 surface는 heading, note link, reference link marker, property, date와 parser/semantic diagnostic의 source range를 제공하고 note/heading link를 snapshot 안에서 resolve한다.
 `Maki` runtime은 load 시점의 source snapshot과 owned `ProjectAnalysis`를 보관하며, note title, heading search, heading link resolution, project index JSON export가 이 snapshot을 재사용한다.
 parser AST 자체는 아직 저장하지 않으므로 render/date/diagnostics collector의 parse 중복은 일부 남아 있다.
 located occurrence는 기존 AST가 빌린 source slice에서 range를 복원하므로 nested Maki body와 reference definition target까지 완전히 다루지는 않는다.
@@ -273,8 +273,8 @@ route/kind/status/cache/source/result/phase 같은 낮은 cardinality label만 �
 
 - byte offset 기반 `SourceSpan`과 LF/CRLF line index가 있다.
 - byte column과 UTF-16 code unit position을 상호 변환하며 한글/일본어/emoji 테스트가 있다.
-- document/block/heading/note-link/property/date occurrence와 parser/semantic diagnostic range가 있다.
-- stdio LSP가 open/change/close, diagnostics, definition, completion, document/workspace symbol, hover를 처리한다.
+- document/block/heading/note-link/reference-link/property/date occurrence와 parser/semantic diagnostic range가 있다.
+- stdio LSP가 open/change/close, diagnostics, definition, HTTP/HTTPS reference document link, completion, document/workspace symbol, hover를 처리한다.
 - editor의 저장하지 않은 전체 buffer가 source snapshot을 대체한다.
 - `tree-sitter-maki`가 stable syntax fixture와 이 저장소의 전체 `docs/**/*.maki`를 오류 없이 파싱한다.
 - `maki-zed` local extension이 `.maki` language, highlighting/outline/bracket query와 `maki lsp` command를 등록한다.

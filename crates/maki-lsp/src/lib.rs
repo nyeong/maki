@@ -8,12 +8,12 @@ use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    InitializeParams, Location, MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind,
-    PublishDiagnosticsParams, Range, ServerCapabilities, SymbolInformation, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, InitializeParams, Location,
+    MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams,
+    Range, ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use maki_core::analysis::{
     AnalysisDiagnosticKind, DateOrigin, DefinitionTarget, DocumentAnalysis, HeadingOccurrence,
@@ -57,6 +57,10 @@ fn server_capabilities() -> ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         definition_provider: Some(OneOf::Left(true)),
+        document_link_provider: Some(DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: Default::default(),
+        }),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
@@ -119,6 +123,10 @@ impl Server {
             "textDocument/definition" => {
                 let params: GotoDefinitionParams = serde_json::from_value(request.params)?;
                 serde_json::to_value(self.definition(params))?
+            }
+            "textDocument/documentLink" => {
+                let params: DocumentLinkParams = serde_json::from_value(request.params)?;
+                serde_json::to_value(self.document_links(params))?
             }
             "textDocument/completion" => {
                 let params: CompletionParams = serde_json::from_value(request.params)?;
@@ -273,6 +281,25 @@ impl Server {
 
     fn location(&self, target: &DefinitionTarget) -> Option<Location> {
         self.symbol_location(&target.path, target.selection_span)
+    }
+
+    fn document_links(&self, params: DocumentLinkParams) -> Option<Vec<DocumentLink>> {
+        let (source, document) = self.document_for_uri(&params.text_document.uri)?;
+        Some(
+            document
+                .reference_links
+                .iter()
+                .filter_map(|reference| {
+                    let target = Url::parse(&reference.target).ok()?;
+                    matches!(target.scheme(), "http" | "https").then_some(DocumentLink {
+                        range: lsp_range(source, reference.span)?,
+                        target: Some(target),
+                        tooltip: None,
+                        data: None,
+                    })
+                })
+                .collect(),
+        )
     }
 
     fn completion(&self, params: CompletionParams) -> Option<CompletionResponse> {
@@ -624,6 +651,10 @@ mod tests {
         assert_eq!(result["serverInfo"]["name"], "maki");
         assert_eq!(result["serverInfo"]["version"], "1.2.3");
         assert!(result["capabilities"].is_object());
+        assert_eq!(
+            result["capabilities"]["documentLinkProvider"]["resolveProvider"],
+            false
+        );
     }
 
     #[test]
@@ -663,6 +694,47 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(modes, vec!["block", "pre", "text"]);
+    }
+
+    #[test]
+    fn document_links_open_url_reference_markers() {
+        let source = r#"- [요카토 추천 리스트]
+  - [김치]
+- [로컬]
+
+[요카토 추천 리스트]: https://docs.google.com/document/d/example/edit
+[김치]: https://hakkeido.com/
+[로컬]: other
+"#;
+        let documents = BTreeMap::from([(PathBuf::from("index.maki"), source.to_string())]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            documents,
+        };
+        let params = DocumentLinkParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: Url::parse("file:///workspace/index.maki").unwrap(),
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let links = server.document_links(params).unwrap();
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(
+            links[0].target.as_ref().map(Url::as_str),
+            Some("https://docs.google.com/document/d/example/edit")
+        );
+        assert_eq!(
+            links[1].target.as_ref().map(Url::as_str),
+            Some("https://hakkeido.com/")
+        );
+        assert_eq!(
+            links[1].range,
+            Range::new(Position::new(1, 4), Position::new(1, 8))
+        );
     }
 
     #[test]

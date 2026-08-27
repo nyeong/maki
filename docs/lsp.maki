@@ -1,6 +1,6 @@
 --^ title: Maki LSP
 --^ status: draft
---^ updated: [2026-08-26]
+--^ updated: [2026-08-27]
 
 = 개요
 
@@ -29,6 +29,7 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 
 - parser warning과 깨진/모호한 note·heading link diagnostics
 - note link와 heading link definition
+- HTTP/HTTPS Reference Link marker의 document link
 - note, heading, property key와 관습 value completion
 - heading document symbol
 - note title과 heading workspace symbol
@@ -36,7 +37,8 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 
 초기 구현은 문서 전체 동기화(`TextDocumentSyncKind::FULL`)를 사용하고 source snapshot 전체를 다시 분석한다.
 Completion은 cursor가 있는 line의 note link 또는 property 문맥을 기준으로 동작한다.
-Reference Definition target의 definition/diagnostics와 nested Maki body의 위치 기반 기능은 아직 지원하지 않는다.
+`[title]`의 Reference Definition target이 HTTP/HTTPS URL이면 marker 전체를 `textDocument/documentLink`로 제공한다.
+Reference Definition target source 자체의 definition/diagnostics와 nested Maki body의 위치 기반 기능은 아직 지원하지 않는다.
 
 = Editor 연결
 
