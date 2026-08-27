@@ -37,7 +37,8 @@ Maki의 Zed 지원은 세 저장소에 나뉜다.
 세 checkout에서 최초 한 번씩 `direnv allow`를 실행해야 하며, 검증 script 자체는 이 승인을 대신하지 않는다.
 
 --v lang: bash
-: cd /Users/nyeong/Repos/maki-zed
+: export MAKI_WORKSPACE=/path/to/maki-workspace
+: cd "$MAKI_WORKSPACE/maki-zed"
 : ./scripts/verify-stack.sh
 
 검증 순서는 다음과 같다.
