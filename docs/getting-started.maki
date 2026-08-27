@@ -1,0 +1,88 @@
+--^ title: Getting Started
+
+= 준비
+
+`maki` binary가 `PATH`에 있어야 한다.
+저장소 checkout에서는 Nix로 바로 실행할 수 있다.
+
+--v lang: bash
+: nix run .#maki -- serve .
+
+기본 주소는 <http://127.0.0.1:4000>이다.
+
+= 프로젝트 만들기
+
+Maki project는 `maki.toml`과 `.maki` source directory로 구성한다.
+
+--v lang: text
+: my-notes/
+:   maki.toml
+:   docs/
+:     index.maki
+:     notes/today.maki
+
+`maki.toml`:
+
+--v lang: toml
+: [project]
+: title = "My Notes"
+: source = "docs"
+: home = "index"
+
+`docs/index.maki`:
+
+--v lang: maki
+: --^ title: Home
+:
+: = Home
+:
+: 오늘 기록은 [[notes/today]]에서 확인한다.
+
+`docs/notes/today.maki`:
+
+--v lang: maki
+: --^ title: Today
+:
+: = Today
+:
+: - [ ] Maki project 시작하기
+
+= 웹으로 보기
+
+Project root에서 실행한다.
+
+--v lang: bash
+: maki serve .
+
+Maki는 현재 경로에서 상위로 올라가며 가장 가까운 `maki.toml`을 찾는다.
+입력 경로가 project root 또는 configured source root 안에 있으면 source root 전체를 serve한다.
+
+Source가 바뀌면 project를 reload하고 열린 page에 live reload event를 보낸다.
+검색, sitemap, 날짜와 diagnostics page는 [[web]]에서 설명한다.
+
+= 단일 HTML 만들기
+
+--v lang: bash
+: maki build docs/index.maki > index.html
+
+입력 파일이 configured source root 안에 있으면 project의 note/link resolution을 사용한다.
+Project 밖의 파일이거나 `maki.toml`이 없으면 standalone HTML로 render한다.
+
+= Editor 연결
+
+Language server는 stdio로 실행한다.
+
+--v lang: bash
+: maki lsp
+
+지원하는 diagnostics, completion과 navigation은 [[lsp]]에서 확인한다.
+Maki 문법 전체는 [[maki-syntax]], manifest 설정은 [[maki-toml]]을 참고한다.
+
+= 명령 요약
+
+- `maki --version`: 사람이 읽는 version 출력
+- `maki --version --json`: machine-readable version 출력
+- `maki serve [path]`: local project 또는 note directory serve
+- `maki serve --git <url>`: Git branch를 주기적으로 갱신하며 serve
+- `maki build <file>`: HTML을 stdout으로 출력
+- `maki lsp`: stdio language server 실행

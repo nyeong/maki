@@ -1,57 +1,44 @@
 --^ title: Maki에 대해
 
-Maki는 메타데이터를 추적할 수 있는 lightweight markup language이다.
+Maki는 metadata를 가진 plain text note를 project 단위로 연결하고 HTML로 build·serve하는 line-first lightweight markup language다.
 
-= 멘탈 모델
+= 왜 Maki인가
 
-== 필요성
+Markdown은 단순하고 널리 쓰이지만 project metadata와 구조화된 occurrence를 표현하는 방식이 제한적이다.
+Org mode는 풍부하지만 작성·처리 환경의 선택이 더 강하게 결합된다.
+Maki는 읽기 쉬운 source, line prefix 중심의 block과 자유로운 property를 사용한다.
 
-- Markdown은 단순하고 편리하지만 확장성이 낮고, 메타데이터 표현이 어렵다.
-- org는 확장성 좋고 풍부하지만 Emacs 의존성이 크다.
+= 문서 모델
 
-maki는 그 사이 어딘가에서 개인적인 필요성을 해결한다.
+- `.maki` 파일은 UTF-8 plain text source다.
+- Line이 모여 block을 만들고, 일부 block body에는 inline이 있다.
+- Heading, paragraph, list와 property는 line prefix를 중심으로 표현한다.
+- Code, quote와 raw text처럼 여러 줄 body가 필요한 경우 container를 사용할 수 있다.
+- Note Link는 source root 안의 다른 document와 heading을 연결한다.
+- Project는 `maki.toml`과 configured source root로 정의한다.
 
-== 의미론
+정확한 문법은 [[maki-syntax]], project 설정은 [[maki-toml]]에서 설명한다.
 
-- `maki` 파일은 소스이자 동시에 결과물이다.
-- 단일 파일로서는 불완전하게 기능하고, 프로젝트 단위로 완전하게 기능한다.
-- Line이 기본 단위이다
-  - Line이 모여서 Block을 형성한다
-  - Line 내에는 Inline이 있을 수 있다
-- 한정적인 용도로 Container Block을 사용한다
-- 불렛저널을 쓰듯 쓸 수 있어야
-- 도구의 도움 없어도 기본적으로 타이핑이 용이해야한다
+= Source readability
 
-== Source-Result
+Maki source는 renderer 없이 읽을 때도 문서의 의미가 드러나는 것을 우선한다.
 
-- 각 문서가 소스이자 결과면 좋겠음
-- 텍스트 문서만으로 의미가 완결되어야함
-- 예
-  - query block으로 쿼리한 결과를 별도 파일로 내보내지 않겠다면 문서 내에 포함되어야함
-  - result block 같은 개념이 있어야
+- Heading level은 `=` 개수로 보인다.
+- List와 quote marker는 line의 역할을 직접 표시한다.
+- `[[note]]`, `[reference]`, `[date]`, `<date>`는 서로 다른 의미를 source에 보존한다.
+- Property는 연결된 document 또는 block 가까이에 둔다.
+- Reference Definition은 본문 display와 긴 target을 분리한다.
 
-== Export와 Index
+= Project runtime
 
-- Maki source를 다른 도구에서 쓰려면 렌더링 결과가 아니라 구조화된 project index를 내보낼 수 있어야 한다.
-- JSON export는 AST/CST, note metadata, heading index, property occurrence, date occurrence, link occurrence처럼 순서와 중첩이 있는 자료에 적합하다.
-- TOML은 전체 AST export보다 `maki.toml`, property schema, query preset, container adapter 같은 설정과 관습 선언에 적합하다.
-- 따라서 `maki -> JSON`은 core data surface로 보고, `maki -> TOML`은 config/schema surface로 제한하는 편이 좋다.
+`maki build`는 한 note를 HTML로 출력한다.
+`maki serve`는 note route, raw source, search, sitemap, date page, diagnostics와 JSON index를 제공한다.
+`maki lsp`는 editor buffer와 project snapshot을 사용해 diagnostics, completion, symbol과 link navigation을 제공한다.
 
-= 참고함
+실행 방법은 [[getting-started]], HTTP surface는 [[web]], editor 기능은 [[lsp]]에서 확인한다.
 
-- 명백히 참고함
-  - org
-  - markdown
-- 참고하기 위해 메모함
-  - asciidoc
-  - reStructuredText
-  - 나무위키
-  - gemtext
-  - typst
-  - obsidian
-  - logseq
-  - MFM; Markup language for Misskey
-  - [djot]
-  - 불렛저널
+= 영향을 받은 형식과 도구
 
-[djot]: https://github.com/jgm/djot
+Maki의 문법과 사용 모델은 Markdown, Org mode, AsciiDoc, reStructuredText, Gemtext, Typst, Obsidian, Logseq, MFM, [Djot]과 불렛저널의 영향을 받았다.
+
+[Djot]: https://github.com/jgm/djot

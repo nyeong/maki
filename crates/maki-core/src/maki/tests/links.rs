@@ -27,13 +27,13 @@ fn resolve_note_link() {
     );
 
     assert_eq!(
-        maki.resolve_note_link(&NoteRef::new("index"), "v0"),
-        NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+        maki.resolve_note_link(&NoteRef::new("index"), "maki-toml"),
+        NoteLinkResolution::Found(NoteRef::new("maki-toml"))
     );
 
     assert_eq!(
-        maki.resolve_note_link(&NoteRef::new("index"), "milestones/v0"),
-        NoteLinkResolution::Found(NoteRef::new("milestones/v0"))
+        maki.resolve_note_link(&NoteRef::new("index"), "/maki-toml"),
+        NoteLinkResolution::Found(NoteRef::new("maki-toml"))
     );
 }
 

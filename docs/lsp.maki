@@ -1,5 +1,4 @@
 --^ title: Maki LSP
---^ status: draft
 --^ updated: [2026-08-27]
 
 = 개요
@@ -35,10 +34,10 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 - note title과 heading workspace symbol
 - property, link resolution, date marker hover
 
-초기 구현은 문서 전체 동기화(`TextDocumentSyncKind::FULL`)를 사용하고 source snapshot 전체를 다시 분석한다.
+Server는 문서 전체 동기화(`TextDocumentSyncKind::FULL`)를 사용하고 source snapshot 전체를 다시 분석한다.
 Completion은 cursor가 있는 line의 note link 또는 property 문맥을 기준으로 동작한다.
 `[title]`의 Reference Definition target이 HTTP/HTTPS URL이면 marker 전체를 `textDocument/documentLink`로 제공한다.
-Reference Definition target source 자체의 definition/diagnostics와 nested Maki body의 위치 기반 기능은 아직 지원하지 않는다.
+Reference Definition target source 자체의 definition/diagnostics와 nested Maki body의 위치 기반 기능은 지원하지 않는다.
 
 = Editor 연결
 
@@ -79,10 +78,8 @@ Zed command palette에서 `zed: install dev extension`을 실행하고 `$MAKI_WO
 Maki worktree에서 `Maki: build LSP` task를 실행한 뒤 `editor: restart language server` action을 실행하면 새 binary가 반영된다.
 query만 수정했으면 `zed: reload extensions`, Rust adapter나 grammar를 수정했으면 `maki-zed` flake에서 Zed를 실행해 `zed: rebuild dev extension`을 사용한다.
 
-현재 local manifest는 `tree-sitter-maki`의 고정 revision을 private Forgejo SSH remote에서 읽는다.
-Marketplace 배포 전에는 public repository URL과 공개된 commit revision으로 바꿔야 한다.
-
-extension MVP 범위는 [[milestones/zed-local]], 반복 개발 절차는 [[milestones/zed-dev-loop]]에 기록한다.
+Manifest는 `tree-sitter-maki`의 exact revision을 HTTPS repository에서 읽는다.
+설치, local development loop와 pinned LSP updater 사용법은 `maki-zed` 저장소의 README에서 설명한다.
 
 == VS Code
 
@@ -96,8 +93,8 @@ Maki 쪽 실행 계약은 아래처럼 단순하게 유지한다.
 - transport: stdio
 - document sync: full document sync
 
-따라서 VS Code에서 쓰려면 최소 extension 또는 generic LSP client extension이 이 계약을 `maki lsp`에 연결하면 된다.
-공식 VS Code extension packaging과 marketplace 배포는 현재 v4 범위가 아니며, 필요하면 Zed end-user release 이후 별도 마일스톤으로 분리한다.
+따라서 VS Code에서 쓰려면 extension 또는 generic LSP client extension이 이 계약을 `maki lsp`에 연결해야 한다.
+Maki 저장소는 VS Code extension package를 제공하지 않는다.
 
 - [Zed Developing Extensions]
 - [Zed Language Extensions]
