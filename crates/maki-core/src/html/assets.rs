@@ -106,6 +106,10 @@ pub(in crate::html) fn push_stylesheet(html: &mut String, asset_mode: AssetMode)
 
 pub(in crate::html) fn push_project_navigation(html: &mut String, asset_mode: AssetMode) {
     html.push_str(PROJECT_NAVIGATION_HTML);
+    push_project_scripts(html, asset_mode);
+}
+
+pub(in crate::html) fn push_project_scripts(html: &mut String, asset_mode: AssetMode) {
     push_script(
         html,
         asset_mode,

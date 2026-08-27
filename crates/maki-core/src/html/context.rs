@@ -20,6 +20,7 @@ pub struct RenderContext<'a> {
     pub(in crate::html) project_navigation: bool,
     pub(in crate::html) date_source_path: Option<&'a Path>,
     pub(in crate::html) site_title: Option<&'a str>,
+    pub(in crate::html) site_header: bool,
 }
 
 impl<'a> RenderContext<'a> {
@@ -33,6 +34,7 @@ impl<'a> RenderContext<'a> {
             project_navigation: true,
             date_source_path: None,
             site_title: None,
+            site_header: false,
         }
     }
 
@@ -53,6 +55,11 @@ impl<'a> RenderContext<'a> {
 
     pub fn with_site_title(mut self, site_title: Option<&'a str>) -> Self {
         self.site_title = site_title.filter(|title| !title.trim().is_empty());
+        self
+    }
+
+    pub fn with_site_header(mut self, enabled: bool) -> Self {
+        self.site_header = enabled;
         self
     }
 }

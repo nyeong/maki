@@ -198,7 +198,7 @@ fn test_project_favicon_is_linked_and_served() {
     fs::create_dir_all(root.join("assets")).unwrap();
     fs::write(
         root.join("maki.toml"),
-        "[project]\nsource = \"notes\"\n\n[serve]\nfavicon = \"assets/favicon.png\"\n",
+        "[project]\ntitle = \"Favicon & Fixture\"\nsource = \"notes\"\n\n[serve]\nfavicon = \"assets/favicon.png\"\n",
     )
     .unwrap();
     fs::write(root.join("notes/home.maki"), "--^ title: Home\n\nbody").unwrap();
@@ -217,6 +217,10 @@ fn test_project_favicon_is_linked_and_served() {
 
     let note = handle_request(&state, &http::Request::get("/home")).unwrap();
     let note_body = String::from_utf8(note.body().to_vec()).unwrap();
+    let meta = handle_request(&state, &http::Request::get("/@/")).unwrap();
+    let meta_body = String::from_utf8(meta.body().to_vec()).unwrap();
+    let search = handle_request(&state, &http::Request::get("/.maki/search")).unwrap();
+    let search_body = String::from_utf8(search.body().to_vec()).unwrap();
     let favicon = response_for_request(&state, &http::Request::get("/favicon.ico")).unwrap();
     let head = response_for_request(
         &state,
@@ -227,6 +231,16 @@ fn test_project_favicon_is_linked_and_served() {
     fs::remove_dir_all(root).unwrap();
 
     assert!(note_body.contains("<link rel=\"icon\" href=\"/favicon.ico\" type=\"image/png\">"));
+    assert!(note_body.contains("<header class=\"maki-nav\">"));
+    assert!(!note_body.contains("maki-site-header-search"));
+    assert!(meta_body.contains("<header class=\"maki-site-header maki-site-header-search\">"));
+    assert!(meta_body.contains("<img src=\"/favicon.ico\" alt=\"\" width=\"48\" height=\"48\">"));
+    assert!(meta_body.contains(
+        "<strong class=\"maki-site-title\"><a href=\"/\">Favicon &amp; Fixture</a></strong>"
+    ));
+    assert!(meta_body.contains("<nav class=\"maki-site-links\" aria-label=\"Project indexes\"><a href=\"/@/recents\">Recents</a><a href=\"/@/sitemap\">Sitemap</a><a href=\"/@/dates\">Dates</a></nav>"));
+    assert!(search_body.contains("maki-site-header-search"));
+    assert!(search_body.contains("<form class=\"maki-search\" action=\"/.maki/search\""));
     assert_eq!(favicon.get_header("Content-Type"), Some("image/png"));
     assert_eq!(favicon.get_header("Cache-Control"), Some("no-cache"));
     assert_eq!(favicon.body(), b"fake png favicon");
@@ -430,6 +444,8 @@ fn test_meta_index_links_internal_indexes() {
 
     assert_eq!(response.status(), http::StatusCode::Ok);
     assert!(body.contains("<title>Meta</title>"));
+    assert!(body.contains("<header class=\"maki-nav\">"));
+    assert!(!body.contains("maki-site-header-search"));
     assert!(body.contains("<a href=\"/@/recents\">Recents</a>"));
     assert!(body.contains("<a href=\"/@/sitemap\">Sitemap</a>"));
     assert!(body.contains("<a href=\"/@/diagnostics\">Diagnostics</a>"));

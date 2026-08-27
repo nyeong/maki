@@ -49,6 +49,87 @@ body {
   font-size: 0.95rem;
 }
 
+.maki-site-header {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  margin: -1.25rem 0 2rem;
+  padding-top: 1rem;
+  border-top: 2px solid var(--fg);
+}
+
+.maki-site-mark {
+  display: block;
+  width: 3rem;
+  height: 3rem;
+}
+
+.maki-site-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  object-fit: cover;
+}
+
+.maki-site-header-main {
+  min-width: 0;
+}
+
+.maki-site-header-row {
+  display: flex;
+  min-height: 1.65rem;
+  gap: 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.maki-site-title {
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.maki-site-title a,
+.maki-site-title a:visited {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.maki-site-title a:hover {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.maki-site-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  justify-content: flex-end;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.maki-site-links a,
+.maki-site-links a:visited {
+  color: var(--muted);
+}
+
+.maki-site-links a:hover {
+  color: var(--link);
+}
+
+.maki-site-header .maki-search {
+  width: 100%;
+  max-width: none;
+  margin: 0.55rem 0 0;
+}
+
+.maki-site-header .maki-search-input {
+  min-height: 2.5rem;
+}
+
 .maki-nav nav {
   display: flex;
   gap: 1rem;
@@ -644,6 +725,32 @@ th {
   .maki-nav {
     margin: 0 0 1.5rem;
     font-size: 1rem;
+  }
+
+  .maki-site-header {
+    grid-template-columns: 2.75rem minmax(0, 1fr);
+    gap: 0.75rem;
+    margin: 0 0 1.5rem;
+    padding-top: 0.75rem;
+  }
+
+  .maki-site-mark {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .maki-site-header-row {
+    display: block;
+  }
+
+  .maki-site-links {
+    margin-top: 0.15rem;
+    justify-content: flex-start;
+    font-size: 0.85rem;
+  }
+
+  .maki-site-header .maki-search {
+    margin-top: 0.5rem;
   }
 
   .maki-nav nav {
