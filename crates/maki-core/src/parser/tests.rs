@@ -176,6 +176,21 @@ fn parse_missing_references_and_legacy_links_as_text() {
 }
 
 #[test]
+fn parse_inline_handles_long_unclosed_delimiter_runs_as_text() {
+    let cases = [
+        "[".repeat(16_384),
+        "<".repeat(16_384),
+        "^{body ".repeat(2_048),
+        "*body ".repeat(2_048),
+        "=body ".repeat(2_048),
+    ];
+
+    for source in &cases {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+}
+
+#[test]
 fn parse_inline_supports_star_delimited_strong_text() {
     assert_eq!(
         parse_inline("Use *bold `code`* now."),
