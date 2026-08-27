@@ -225,6 +225,12 @@ fn paragraph_line<'a>(line: &LineToken<'a>) -> &'a str {
 fn parse_container_header(header: &str) -> Option<(&str, Vec<&str>)> {
     let mut parts = header.split_whitespace();
     let kind = parts.next().unwrap_or("");
+    if !kind
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return None;
+    }
     let args = parts.collect();
 
     Some((kind, args))
