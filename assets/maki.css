@@ -442,6 +442,23 @@ a.external-link::after {
   mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M15%203h6v6'/%3E%3Cpath%20d='M10%2014%2021%203'/%3E%3Cpath%20d='M18%2013v6a2%202%200%200%201-2%202H5a2%202%200%200%201-2-2V8a2%202%200%200%201%202-2h6'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
+a.external-link > .maki-external-link-favicon {
+  display: none;
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 0.25em;
+  object-fit: contain;
+  vertical-align: -0.08em;
+}
+
+a.maki-external-link-has-favicon > .maki-external-link-favicon {
+  display: inline-block;
+}
+
+a.maki-external-link-has-favicon::after {
+  content: none;
+}
+
 .broken-link,
 .ambiguous-link {
   position: relative;

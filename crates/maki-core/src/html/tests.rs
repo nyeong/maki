@@ -1,4 +1,6 @@
-use super::assets::{DEFAULT_CSS, PROJECT_NAVIGATION_HTML, SEARCH_SCRIPT, TOC_SCRIPT};
+use super::assets::{
+    DEFAULT_CSS, EXTERNAL_LINKS_SCRIPT, PROJECT_NAVIGATION_HTML, SEARCH_SCRIPT, TOC_SCRIPT,
+};
 use super::pages::format_unix_seconds_kst;
 use super::*;
 use crate::{
@@ -176,6 +178,12 @@ fn render_stable_inline_and_footnote_syntax() {
 }
 
 #[test]
+fn external_link_favicon_css_uses_the_script_state_class() {
+    assert!(DEFAULT_CSS.contains("a.maki-external-link-has-favicon >"));
+    assert!(DEFAULT_CSS.contains("a.maki-external-link-has-favicon::after"));
+}
+
+#[test]
 fn render_table_with_middle_separator() {
     let parsed = parser::parse(
         r#"| 일시 | 시간 |
@@ -218,7 +226,7 @@ fn project_rendering_includes_home_navigation() {
     );
 
     assert!(html.contains(&format!(
-        "{PROJECT_NAVIGATION_HTML}<script>{SEARCH_SCRIPT}</script><script>{TOC_SCRIPT}</script><h1"
+        "{PROJECT_NAVIGATION_HTML}<script>{EXTERNAL_LINKS_SCRIPT}</script><script>{SEARCH_SCRIPT}</script><script>{TOC_SCRIPT}</script><h1"
     )));
 }
 
@@ -238,12 +246,16 @@ fn project_rendering_can_use_external_assets() {
         "<link rel=\"stylesheet\" href=\"{CSS_ASSET_PATH}\">"
     )));
     assert!(html.contains(&format!(
+        "<script src=\"{EXTERNAL_LINKS_SCRIPT_ASSET_PATH}\"></script>"
+    )));
+    assert!(html.contains(&format!(
         "<script src=\"{SEARCH_SCRIPT_ASSET_PATH}\"></script>"
     )));
     assert!(html.contains(&format!(
         "<script src=\"{TOC_SCRIPT_ASSET_PATH}\"></script>"
     )));
     assert!(!html.contains("<style>:root"));
+    assert!(!html.contains(EXTERNAL_LINKS_SCRIPT));
     assert!(!html.contains(SEARCH_SCRIPT));
     assert!(!html.contains(TOC_SCRIPT));
 }
