@@ -18,7 +18,6 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use crate::RunError;
@@ -28,6 +27,7 @@ use maki_core::{Maki, MakiConfigOverrides};
 mod cache_warmer;
 mod error;
 mod live_reload;
+mod request_pool;
 mod routes;
 mod server;
 mod state;
@@ -40,6 +40,7 @@ mod tests;
 pub use state::ProjectReloader;
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
+const REQUEST_WORKER_COUNT: usize = 2;
 const META_PATH: &str = "/@/";
 const META_PATH_NO_SLASH: &str = "/@";
 const RECENTS_PATH: &str = "/@/recents";
@@ -139,8 +140,11 @@ where
         live_reload,
         metrics.clone(),
     ));
+    let request_pool = request_pool::RequestPool::new("http", REQUEST_WORKER_COUNT)
+        .map_err(|source| RunError::IoError { source })?;
     if let (Some(listener), Some(endpoint)) = (metrics_listener, metrics_endpoint) {
-        server::spawn_metrics_listener(listener, metrics, endpoint);
+        server::spawn_metrics_listener(listener, metrics, endpoint)
+            .map_err(|source| RunError::IoError { source })?;
     }
     if live_reload {
         watch::spawn_file_watcher(Arc::clone(&state));
@@ -160,7 +164,7 @@ where
         };
 
         let state = Arc::clone(&state);
-        thread::spawn(move || {
+        request_pool.execute(move || {
             if let Err(error) = server::handle_connection(&state, &mut stream) {
                 eprintln!("Failed to handle connection: {}", error);
             }
