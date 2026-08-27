@@ -548,10 +548,8 @@ fn slice_span(source: &str, slice: &str) -> Option<SourceSpan> {
     let slice_start = slice.as_ptr() as usize;
     let slice_end = slice_start + slice.len();
 
-    (source_start <= slice_start && slice_end <= source_end).then_some(SourceSpan::new(
-        slice_start - source_start,
-        slice_end - source_start,
-    ))
+    (source_start <= slice_start && slice_end <= source_end)
+        .then(|| SourceSpan::new(slice_start - source_start, slice_end - source_start))
 }
 
 fn whole_line_span(source_map: &SourceMap<'_>, span: SourceSpan) -> SourceSpan {
@@ -750,6 +748,23 @@ fn diagnostic_for_resolution(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slice_span_rejects_an_unrelated_empty_slice_without_panicking() {
+        let source = String::from("source");
+
+        assert_eq!(slice_span(&source, ""), None);
+    }
+
+    #[test]
+    fn document_analysis_handles_a_container_without_a_kind() {
+        let source = "---\nplain\n---";
+
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.blocks.len(), 1);
+        assert_eq!(analysis.blocks[0].kind, AnalysisBlockKind::Container);
+    }
 
     #[test]
     fn document_analysis_locates_headings_properties_links_and_dates() {
