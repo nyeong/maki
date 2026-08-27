@@ -525,6 +525,8 @@ Inline은 line body 안의 source span을 해석한 구조 단위이다.
 1. Strong (`*strong*`)
 1. Superscript (`^{sup}`)
 1. Subscript (`_{sub}`)
+1. Insertion (`+{inserted}`)
+1. Deletion (`-{deleted}`)
 1. Highlight (`::highlight::`)
 1. Text (`text`)
 
@@ -661,6 +663,25 @@ Body는 Inline으로 다시 파싱하지 않는다.
 
 --v lang: maki
 : x^{2} + y_{n}
+
+== Insertion and Deletion
+
+: +{<text>}
+: -{<text>}
+
+- parsing: raw
+
+Insertion은 `+{`로 시작하며 추가된 내용을 나타낸다.
+Deletion은 `-{`로 시작하며 삭제된 내용을 나타낸다.
+Opening delimiter 뒤의 첫 `}`가 body를 닫는다.
+Body는 비어 있을 수 없고 `{`, `}` 또는 newline을 포함할 수 없다.
+Closing delimiter가 없거나 body가 조건에 맞지 않으면 해당 source span은 Text로 남는다.
+Body는 Inline으로 다시 파싱하지 않는다.
+
+예:
+
+--v lang: maki
+: +{새 문장} -{이전 문장}
 
 == Highlight
 

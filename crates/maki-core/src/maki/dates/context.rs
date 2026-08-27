@@ -169,10 +169,20 @@ fn push_inline_date_context(context: &mut String, inlines: &[Inline<'_>]) {
                 context.push_str(text);
                 context.push('}');
             }
+            Inline::Insertion(text) => {
+                context.push_str("+{");
+                context.push_str(text);
+                context.push('}');
+            }
+            Inline::Deletion(text) => {
+                context.push_str("-{");
+                context.push_str(text);
+                context.push('}');
+            }
             Inline::Highlight(body) => {
-                context.push('=');
+                context.push_str("::");
                 push_inline_date_context(context, body);
-                context.push('=');
+                context.push_str("::");
             }
         }
     }

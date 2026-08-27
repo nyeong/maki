@@ -157,7 +157,7 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
 #[test]
 fn render_stable_inline_and_footnote_syntax() {
     let parsed = parser::parse(
-        r#"Use /italic/, *strong*, ^{sup}, _{sub}, and ::highlight:: with <https://example.com>.[^note]
+        r#"Use /italic/, *strong*, ^{sup}, _{sub}, +{inserted}, -{deleted}, and ::highlight:: with <https://example.com>.[^note]
 
 [^note]: Footnote *body*."#,
     );
@@ -168,6 +168,8 @@ fn render_stable_inline_and_footnote_syntax() {
     assert!(html.contains("<strong>strong</strong>"));
     assert!(html.contains("<sup>sup</sup>"));
     assert!(html.contains("<sub>sub</sub>"));
+    assert!(html.contains("<ins>inserted</ins>"));
+    assert!(html.contains("<del>deleted</del>"));
     assert!(html.contains("<mark>highlight</mark>"));
     assert!(html.contains(
         "<a class=\"external-link\" href=\"https://example.com\">https://example.com</a>"

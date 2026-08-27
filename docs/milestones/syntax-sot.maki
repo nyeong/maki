@@ -60,7 +60,7 @@
 == Inline Model
 
 - [x] Inline priority
-  문서 우선순위는 `Code -> Note Link -> Date Range -> Date Marker -> Footnote -> Link -> Hyper Link -> Italic -> Strong -> Superscript -> Subscript -> Highlight -> Text`이다.
+  문서 우선순위는 `Code -> Note Link -> Date Range -> Date Marker -> Footnote -> Link -> Hyper Link -> Italic -> Strong -> Superscript -> Subscript -> Insertion -> Deletion -> Highlight -> Text`이다.
   현재 구현은 `Code -> Strong -> Note Link -> Markdown-style Link -> Date Range -> Date Marker -> Plain URL`이다.
 - [x] Reference-style Link
   문서는 `[title]` inline과 `[title]: target` definition을 사용한다.
@@ -75,6 +75,8 @@
   문서 우선순위에는 `/italic/`이 있지만 AST/parser/renderer가 없다.
 - [x] Superscript / Subscript
   문서에는 `^{sup}`, `_{sub}`가 있지만 AST/parser/renderer가 없다.
+- [x] Insertion / Deletion
+  문서에는 `+{inserted}`, `-{deleted}`가 있고 AST/parser/renderer가 이를 지원한다.
 - [x] Highlight
   문서 우선순위에는 `::highlight::`가 있지만 AST/parser/renderer가 없다.
 
@@ -109,7 +111,7 @@
 - [x] Footnote render
   `[^label]`과 footnote definition body를 HTML에서 손실 없이 표현한다.
 - [x] New inline render
-  Italic, Superscript, Subscript, Highlight를 HTML로 렌더링한다.
+  Italic, Superscript, Subscript, Insertion, Deletion, Highlight를 HTML로 렌더링한다.
 - [x] Reference Definition block render
   Reference Definition block 자체는 직접 표시하지 않는다.
   다만 footnote rendering에 필요한 경우 footnote area로 표현한다.
@@ -147,6 +149,7 @@
 
 - [x] Italic 문법 상세 규칙을 추가한다.
 - [x] Superscript/Subscript 문법 상세 규칙을 추가한다.
+- [x] Insertion/Deletion 문법 상세 규칙을 추가한다.
 - [x] Highlight 문법 상세 규칙을 추가한다.
 - [x] Footnote render/index 정책을 더 구체화한다.
 - [x] Reference Definition title/label/body edge case를 명시한다.
@@ -176,6 +179,7 @@ inline parser를 새 우선순위와 새 AST에 맞춘다.
 - [x] bare HTTP/HTTPS auto-link를 제거한다.
 - [x] `/italic/`을 파싱한다.
 - [x] `^{sup}`와 `_{sub}`를 파싱한다.
+- [x] `+{inserted}`와 `-{deleted}`를 파싱한다.
 - [x] `::highlight::`를 파싱한다.
 - [x] inline priority를 [[maki-syntax]] 순서로 고정한다.
 
@@ -198,7 +202,7 @@ parser 결과를 Project index와 diagnostics에 연결한다.
 - [x] reference Link를 target 종류에 따라 `<a>` 또는 unresolved text로 렌더링한다.
 - [x] Footnote inline과 definition body를 렌더링한다.
 - [x] Hyper Link를 external `<a>`로 렌더링한다.
-- [x] Italic, Superscript, Subscript, Highlight를 렌더링한다.
+- [x] Italic, Superscript, Subscript, Insertion, Deletion, Highlight를 렌더링한다.
 - [x] Reference Definition block의 기본 본문 출력을 숨긴다.
 
 --v status: done

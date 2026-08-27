@@ -212,6 +212,29 @@ Plan *<2026-08-21> and [2026-08-22]--[2026-08-23]*."#,
 }
 
 #[test]
+fn date_context_preserves_braced_changes_and_highlight_syntax() {
+    let project = temp_project("braced-change-date-context");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "Plan +{new} -{old} ::now:: [2026-08-24].",
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let date = Date::parse("2026-08-24").unwrap();
+    let backlinks = maki.date_index().backlinks_for(&date).unwrap();
+    let occurrence = maki
+        .date_index()
+        .occurrence(backlinks[0].occurrence_id())
+        .unwrap();
+
+    assert_eq!(
+        occurrence.context(),
+        "Plan +{new} -{old} ::now:: [2026-08-24]."
+    );
+}
+
+#[test]
 fn date_index_collects_dates_from_footnote_definitions() {
     let project = temp_project("footnote-date-index");
     write_note_with_content(

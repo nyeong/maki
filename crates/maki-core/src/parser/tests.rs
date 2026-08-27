@@ -227,7 +227,7 @@ fn parse_inline_supports_hyper_links_but_not_bare_urls() {
 #[test]
 fn parse_inline_supports_stable_formatting_syntax() {
     assert_eq!(
-        parse_inline("/italic `code`/ *strong* ^{sup} _{sub} ::highlight::"),
+        parse_inline("/italic `code`/ *strong* ^{sup} _{sub} +{inserted} -{deleted} ::highlight::"),
         vec![
             Inline::Italic(vec![Inline::Text("italic "), Inline::Code("code")]),
             Inline::Text(" "),
@@ -237,6 +237,10 @@ fn parse_inline_supports_stable_formatting_syntax() {
             Inline::Text(" "),
             Inline::Subscript("sub"),
             Inline::Text(" "),
+            Inline::Insertion("inserted"),
+            Inline::Text(" "),
+            Inline::Deletion("deleted"),
+            Inline::Text(" "),
             Inline::Highlight(vec![Inline::Text("highlight")]),
         ]
     );
@@ -244,6 +248,26 @@ fn parse_inline_supports_stable_formatting_syntax() {
     assert_eq!(
         parse_inline("=highlight="),
         vec![Inline::Text("=highlight=")]
+    );
+}
+
+#[test]
+fn parse_inline_braced_modifiers_require_a_nonempty_raw_body() {
+    assert_eq!(
+        parse_inline("+{insert * raw} -{delete / raw}"),
+        vec![
+            Inline::Insertion("insert * raw"),
+            Inline::Text(" "),
+            Inline::Deletion("delete / raw"),
+        ]
+    );
+
+    for source in ["+{}", "-{}", "+{open", "-{a{b}"] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+    assert_eq!(
+        parse_inline("+{a}b}"),
+        vec![Inline::Insertion("a"), Inline::Text("b}")]
     );
 }
 

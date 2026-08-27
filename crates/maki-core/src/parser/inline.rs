@@ -492,6 +492,8 @@ pub(super) fn parse_inline_with_references<'a>(
             .or_else(|| parse_inline_hyper_link(&mut cursor))
             .or_else(|| parse_braced_inline(&mut cursor, "^{", Inline::Superscript))
             .or_else(|| parse_braced_inline(&mut cursor, "_{", Inline::Subscript))
+            .or_else(|| parse_braced_inline(&mut cursor, "+{", Inline::Insertion))
+            .or_else(|| parse_braced_inline(&mut cursor, "-{", Inline::Deletion))
         {
             if text_start < start {
                 inlines.push(Inline::Text(&source[text_start..start]));
