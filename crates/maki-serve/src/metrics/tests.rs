@@ -20,3 +20,16 @@ fn disabled_metrics_are_noop() {
 
     assert_eq!(metrics.to_prometheus_text(), "");
 }
+
+#[test]
+fn live_reload_disconnects_have_separate_counter_and_duration() {
+    let metrics = Metrics::enabled();
+    metrics.record_live_reload_disconnect("client", Duration::from_secs(42));
+
+    let text = metrics.to_prometheus_text();
+
+    assert!(text.contains("maki_live_reload_disconnects_total{reason=\"client\"} 1"));
+    assert!(text.contains("maki_live_reload_connection_duration_seconds_bucket{le=\"60\"} 1"));
+    assert!(text.contains("maki_live_reload_connection_duration_seconds_sum 42"));
+    assert!(text.contains("maki_live_reload_connection_duration_seconds_count 1"));
+}

@@ -16,9 +16,9 @@ mod tests;
 
 use histogram::Histogram;
 use labels::{
-    HttpRequestLabels, HttpResponseBytesLabels, KindLabels, MetricsRequestLabels, PhaseLabels,
-    ProjectReloadLabels, ResponseCacheLabels, ResponseCacheWarmupLabels, ResultLabels,
-    SourceLabels,
+    HttpRequestLabels, HttpResponseBytesLabels, KindLabels, LiveReloadDisconnectLabels,
+    MetricsRequestLabels, PhaseLabels, ProjectReloadLabels, ResponseCacheLabels,
+    ResponseCacheWarmupLabels, ResultLabels, SourceLabels,
 };
 
 const HTTP_DURATION_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
@@ -36,6 +36,8 @@ const RENDER_DURATION_BUCKETS: &[f64] = &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 
 const RELOAD_DURATION_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
 const PROJECT_LOAD_BUCKETS: &[f64] = &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5];
 const WARMUP_DURATION_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
+const LIVE_RELOAD_CONNECTION_DURATION_BUCKETS: &[f64] =
+    &[1.0, 5.0, 15.0, 30.0, 60.0, 300.0, 900.0, 3600.0];
 #[derive(Clone, Default)]
 pub struct Metrics {
     inner: Option<Arc<MetricsInner>>,
@@ -48,6 +50,8 @@ struct MetricsInner {
     git_last_success_timestamp_seconds: AtomicU64,
     live_reload_clients: AtomicU64,
     live_reload_events_total: AtomicU64,
+    live_reload_disconnects: Mutex<BTreeMap<LiveReloadDisconnectLabels, u64>>,
+    live_reload_connection_duration: Mutex<Histogram>,
     http_requests: Mutex<BTreeMap<HttpRequestLabels, u64>>,
     http_request_duration: Mutex<BTreeMap<HttpRequestLabels, Histogram>>,
     http_response_bytes: Mutex<BTreeMap<HttpResponseBytesLabels, Histogram>>,
@@ -74,6 +78,10 @@ impl Default for MetricsInner {
             git_last_success_timestamp_seconds: AtomicU64::new(0),
             live_reload_clients: AtomicU64::new(0),
             live_reload_events_total: AtomicU64::new(0),
+            live_reload_disconnects: Mutex::new(BTreeMap::new()),
+            live_reload_connection_duration: Mutex::new(Histogram::new(
+                LIVE_RELOAD_CONNECTION_DURATION_BUCKETS.len(),
+            )),
             http_requests: Mutex::new(BTreeMap::new()),
             http_request_duration: Mutex::new(BTreeMap::new()),
             http_response_bytes: Mutex::new(BTreeMap::new()),
@@ -302,6 +310,22 @@ impl Metrics {
             inner
                 .live_reload_events_total
                 .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_live_reload_disconnect(&self, reason: &'static str, duration: Duration) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        increment_counter(
+            &inner.live_reload_disconnects,
+            LiveReloadDisconnectLabels { reason },
+        );
+        if let Ok(mut histogram) = inner.live_reload_connection_duration.lock() {
+            histogram.observe(
+                LIVE_RELOAD_CONNECTION_DURATION_BUCKETS,
+                duration_to_seconds(duration),
+            );
         }
     }
 

@@ -3,11 +3,12 @@ use super::cache_warmer::{response_cache_warmup_keys, warm_response_cache};
 use super::error::Error;
 use super::live_reload::{LiveReload, LiveReloadError, LiveReloadEvent};
 use super::routes::{handle_request, response_for_request};
-use super::server::read_request_head;
+use super::server::{handle_connection, read_request_head};
 use super::state::AppState;
 use super::watch::collect_watched_file_snapshot;
 use crate::http;
 use std::fs;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -859,6 +860,46 @@ fn test_live_reload_broadcasts_reload() {
         receiver.recv_timeout(Duration::from_millis(100)).unwrap(),
         LiveReloadEvent::Reload { version: 1 }
     );
+}
+
+struct DisconnectingStream {
+    request: Cursor<Vec<u8>>,
+}
+
+impl Read for DisconnectingStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.request.read(buffer)
+    }
+}
+
+impl Write for DisconnectingStream {
+    fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "client disconnected",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn test_live_reload_broken_pipe_is_a_normal_separate_disconnect() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let metrics = Metrics::enabled();
+    let state = AppState::new_with_metrics(maki, metrics.clone());
+    let mut stream = DisconnectingStream {
+        request: Cursor::new(b"GET /.maki/events HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()),
+    };
+
+    assert!(handle_connection(&state, &mut stream).is_ok());
+
+    let text = metrics.to_prometheus_text();
+    assert!(text.contains("maki_live_reload_disconnects_total{reason=\"client\"} 1"));
+    assert!(!text.contains("route=\"events\""));
+    assert!(text.contains("maki_live_reload_clients 0"));
 }
 
 #[test]

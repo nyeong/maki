@@ -1,8 +1,8 @@
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, mpsc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::RunError;
 use crate::http::{self, Response};
@@ -161,15 +161,45 @@ fn write_sse_event(
     stream: &mut impl Write,
     event: &str,
     data: impl std::fmt::Display,
-) -> Result<(), RunError> {
+) -> std::io::Result<()> {
     write!(stream, "event: {event}\ndata: {data}\n\n")
-        .map_err(|source| RunError::IoError { source })
 }
 
-fn write_sse_keepalive(stream: &mut impl Write) -> Result<(), RunError> {
-    stream
-        .write_all(b": keepalive\n\n")
-        .map_err(|source| RunError::IoError { source })
+fn write_sse_keepalive(stream: &mut impl Write) -> std::io::Result<()> {
+    stream.write_all(b": keepalive\n\n")
+}
+
+fn is_client_disconnect(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+            | ErrorKind::UnexpectedEof
+    )
+}
+
+fn handle_sse_write(
+    state: &AppState,
+    started: Instant,
+    result: std::io::Result<()>,
+) -> Result<bool, RunError> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(source) if is_client_disconnect(&source) => {
+            state
+                .metrics()
+                .record_live_reload_disconnect("client", started.elapsed());
+            Ok(false)
+        }
+        Err(source) => {
+            state
+                .metrics()
+                .record_live_reload_disconnect("error", started.elapsed());
+            Err(RunError::IoError { source })
+        }
+    }
 }
 pub(super) fn handle_live_reload_connection<S>(
     state: &AppState,
@@ -206,23 +236,43 @@ where
         id: client_id,
         metrics: state.metrics().clone(),
     };
+    let started = Instant::now();
 
-    stream
-        .write_all(
+    if !handle_sse_write(
+        state,
+        started,
+        stream.write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
-        )
-        .map_err(|source| RunError::IoError { source })?;
-    write_sse_event(stream, "hello", token)?;
+        ),
+    )? {
+        return Ok(http::StatusCode::Ok);
+    }
+    if !handle_sse_write(state, started, write_sse_event(stream, "hello", token))? {
+        return Ok(http::StatusCode::Ok);
+    }
 
     loop {
         match receiver.recv_timeout(SSE_KEEPALIVE_INTERVAL) {
             Ok(LiveReloadEvent::Reload { version }) => {
-                write_sse_event(stream, "reload", live_reload.token_for(version))?;
+                if !handle_sse_write(
+                    state,
+                    started,
+                    write_sse_event(stream, "reload", live_reload.token_for(version)),
+                )? {
+                    return Ok(http::StatusCode::Ok);
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                write_sse_keepalive(stream)?;
+                if !handle_sse_write(state, started, write_sse_keepalive(stream))? {
+                    return Ok(http::StatusCode::Ok);
+                }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(http::StatusCode::Ok),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                state
+                    .metrics()
+                    .record_live_reload_disconnect("server", started.elapsed());
+                return Ok(http::StatusCode::Ok);
+            }
         }
     }
 }

@@ -54,3 +54,8 @@ pub(super) struct SourceLabels {
 pub(super) struct ResultLabels {
     pub(super) result: &'static str,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct LiveReloadDisconnectLabels {
+    pub(super) reason: &'static str,
+}

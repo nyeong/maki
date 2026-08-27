@@ -3,8 +3,9 @@ use std::sync::atomic::Ordering;
 
 use super::histogram::Histogram;
 use super::{
-    HTTP_DURATION_BUCKETS, MetricsInner, PROJECT_LOAD_BUCKETS, RELOAD_DURATION_BUCKETS,
-    RENDER_DURATION_BUCKETS, RESPONSE_BYTES_BUCKETS, WARMUP_DURATION_BUCKETS,
+    HTTP_DURATION_BUCKETS, LIVE_RELOAD_CONNECTION_DURATION_BUCKETS, MetricsInner,
+    PROJECT_LOAD_BUCKETS, RELOAD_DURATION_BUCKETS, RENDER_DURATION_BUCKETS, RESPONSE_BYTES_BUCKETS,
+    WARMUP_DURATION_BUCKETS,
 };
 
 pub(super) fn to_prometheus_text(inner: &MetricsInner) -> String {
@@ -334,6 +335,37 @@ pub(super) fn to_prometheus_text(inner: &MetricsInner) -> String {
         &[],
         inner.live_reload_events_total.load(Ordering::Relaxed),
     );
+
+    write_counter_family(
+        &mut output,
+        "maki_live_reload_disconnects_total",
+        "Live reload SSE connections closed by reason.",
+    );
+    if let Ok(values) = inner.live_reload_disconnects.lock() {
+        for (labels, value) in values.iter() {
+            write_counter(
+                &mut output,
+                "maki_live_reload_disconnects_total",
+                &[("reason", labels.reason)],
+                *value,
+            );
+        }
+    }
+
+    write_histogram_family(
+        &mut output,
+        "maki_live_reload_connection_duration_seconds",
+        "Completed live reload SSE connection duration in seconds.",
+    );
+    if let Ok(histogram) = inner.live_reload_connection_duration.lock() {
+        write_histogram(
+            &mut output,
+            "maki_live_reload_connection_duration_seconds",
+            &[],
+            LIVE_RELOAD_CONNECTION_DURATION_BUCKETS,
+            &histogram,
+        );
+    }
 
     output
 }
