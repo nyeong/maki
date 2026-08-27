@@ -33,11 +33,13 @@ pub fn render_search_page(
     total_entries: usize,
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     let mut renderer = Renderer::new_with_context(
         RenderContext::default()
             .with_asset_mode(asset_mode)
-            .with_site_title(site_title),
+            .with_site_title(site_title)
+            .with_site_header(site_header),
     );
     renderer.begin_project_page("Search");
     renderer.push_raw("<main class=\"maki-search-page\">");
@@ -74,41 +76,48 @@ pub fn render_search_page(
     renderer.into_html()
 }
 
-pub fn render_meta_index_page(asset_mode: AssetMode, site_title: Option<&str>) -> String {
-    render_project_maki_source(META_TEMPLATE, asset_mode, site_title)
+pub fn render_meta_index_page(
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+    site_header: bool,
+) -> String {
+    render_project_maki_source(META_TEMPLATE, asset_mode, site_title, site_header)
 }
 
 pub fn render_sitemap_page(
     entries: &[SitemapEntry],
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     let body = sitemap_page_body_source(entries);
     let source = render_maki_template(SITEMAP_TEMPLATE, &[("{{body}}", &body)]);
 
-    render_project_maki_source(&source, asset_mode, site_title)
+    render_project_maki_source(&source, asset_mode, site_title, site_header)
 }
 
 pub fn render_recents_page(
     entries: &[RecentEntry],
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     let body = recents_page_body_source(entries);
     let source = render_maki_template(RECENTS_TEMPLATE, &[("{{body}}", &body)]);
 
-    render_project_maki_source(&source, asset_mode, site_title)
+    render_project_maki_source(&source, asset_mode, site_title, site_header)
 }
 
 pub fn render_date_index_page(
     date_index: &DateIndex,
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     let body = date_index_page_body_source(date_index);
     let source = render_maki_template(DATES_INDEX_TEMPLATE, &[("{{body}}", &body)]);
 
-    render_project_maki_source(&source, asset_mode, site_title)
+    render_project_maki_source(&source, asset_mode, site_title, site_header)
 }
 
 pub fn render_date_period_page(
@@ -116,12 +125,14 @@ pub fn render_date_period_page(
     date_index: &DateIndex,
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     let title = date_period_title(period);
     let mut renderer = Renderer::new_with_context(
         RenderContext::default()
             .with_asset_mode(asset_mode)
-            .with_site_title(site_title),
+            .with_site_title(site_title)
+            .with_site_header(site_header),
     );
 
     renderer.begin_project_page(&title);
@@ -233,13 +244,15 @@ fn render_project_maki_source(
     source: &str,
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     render_maki_source_with_context(
         source,
         RenderContext::default()
             .with_asset_mode(asset_mode)
             .with_project_navigation()
-            .with_site_title(site_title),
+            .with_site_title(site_title)
+            .with_site_header(site_header),
     )
 }
 
@@ -895,10 +908,11 @@ pub fn render_diagnostics_page(
     total_notes: usize,
     asset_mode: AssetMode,
     site_title: Option<&str>,
+    site_header: bool,
 ) -> String {
     let source = diagnostics_page_source(diagnostics, total_notes);
 
-    render_project_maki_source(&source, asset_mode, site_title)
+    render_project_maki_source(&source, asset_mode, site_title, site_header)
 }
 
 fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {

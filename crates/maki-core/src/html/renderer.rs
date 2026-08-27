@@ -7,7 +7,7 @@ use crate::{
 };
 
 use super::{
-    assets::{push_project_navigation, push_stylesheet},
+    assets::{push_project_navigation, push_project_scripts, push_stylesheet},
     context::RenderContext,
     date_markup::{DATE_RANGE_SEPARATOR_HTML, date_stamp_class, date_stamp_delimiters},
 };
@@ -31,7 +31,24 @@ impl<'a> Renderer<'a> {
             return;
         }
 
-        push_project_navigation(&mut self.html, self.context.asset_mode);
+        self.render_project_navigation();
+    }
+
+    fn render_project_navigation(&mut self) {
+        if !self.context.site_header {
+            push_project_navigation(&mut self.html, self.context.asset_mode);
+            return;
+        }
+
+        let site_title = self.context.site_title.unwrap_or("Maki").to_string();
+        self.html.push_str(
+            "<header class=\"maki-site-header maki-site-header-search\"><a class=\"maki-site-mark\" href=\"/\" aria-label=\"Home\"><img src=\"/favicon.ico\" alt=\"\" width=\"48\" height=\"48\"></a><div class=\"maki-site-header-main\"><div class=\"maki-site-header-row\"><strong class=\"maki-site-title\"><a href=\"/\">",
+        );
+        self.escape_html_into(&site_title);
+        self.html.push_str(
+            "</a></strong><nav class=\"maki-site-links\" aria-label=\"Project indexes\"><a href=\"/@/recents\">Recents</a><a href=\"/@/sitemap\">Sitemap</a><a href=\"/@/dates\">Dates</a></nav></div><form class=\"maki-search\" action=\"/.maki/search\" method=\"get\" role=\"search\" data-maki-search><input class=\"maki-search-input\" type=\"search\" name=\"q\" placeholder=\"Search\" aria-label=\"Search project entries\" autocomplete=\"off\" spellcheck=\"false\" data-maki-search-input><div class=\"maki-search-results\" role=\"listbox\" hidden data-maki-search-results></div></form></div></header>",
+        );
+        push_project_scripts(&mut self.html, self.context.asset_mode);
     }
 
     fn begin_html(&mut self, title: Option<&str>) {
@@ -57,7 +74,7 @@ impl<'a> Renderer<'a> {
 
     pub(in crate::html) fn begin_project_page(&mut self, title: &str) {
         self.begin_html(Some(title));
-        push_project_navigation(&mut self.html, self.context.asset_mode);
+        self.render_project_navigation();
         self.render_heading(1, title);
     }
 

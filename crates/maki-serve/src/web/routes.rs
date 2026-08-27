@@ -484,16 +484,21 @@ fn render_cacheable_response(
     let kind = key.kind();
     let started = Instant::now();
     let site_title = maki.config().project_title();
+    let site_header = maki.config().favicon().is_some();
     let result = match key {
         ResponseCacheKey::MetaIndex => {
-            let html = html::render_meta_index_page(AssetMode::External, site_title);
+            let html = html::render_meta_index_page(AssetMode::External, site_title, site_header);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(with_served_html_chrome(state, maki, html)))
         }
         ResponseCacheKey::Recents => {
-            let html =
-                html::render_recents_page(maki.recent_entries(), AssetMode::External, site_title);
+            let html = html::render_recents_page(
+                maki.recent_entries(),
+                AssetMode::External,
+                site_title,
+                site_header,
+            );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(with_served_html_chrome(state, maki, html)))
@@ -503,6 +508,7 @@ fn render_cacheable_response(
                 maki.published_sitemap_entries(),
                 AssetMode::External,
                 site_title,
+                site_header,
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
@@ -518,14 +524,19 @@ fn render_cacheable_response(
                 maki.notes_len(),
                 AssetMode::External,
                 site_title,
+                site_header,
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(with_served_html_chrome(state, maki, html)))
         }
         ResponseCacheKey::DatesIndex => {
-            let html =
-                html::render_date_index_page(maki.date_index(), AssetMode::External, site_title);
+            let html = html::render_date_index_page(
+                maki.date_index(),
+                AssetMode::External,
+                site_title,
+                site_header,
+            );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(with_served_html_chrome(state, maki, html)))
@@ -536,6 +547,7 @@ fn render_cacheable_response(
                 maki.date_index(),
                 AssetMode::External,
                 site_title,
+                site_header,
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
@@ -634,6 +646,7 @@ pub(super) fn handle_request(
                     maki.published_search_entries().len(),
                     AssetMode::External,
                     maki.config().project_title(),
+                    maki.config().favicon().is_some(),
                 );
                 state
                     .metrics()
