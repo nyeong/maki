@@ -483,7 +483,9 @@ fn collect_inline_source_spans(source: &str, inlines: &[Inline<'_>], spans: &mut
             | Inline::Text(target)
             | Inline::Code(target)
             | Inline::Superscript(target)
-            | Inline::Subscript(target) => Some(*target),
+            | Inline::Subscript(target)
+            | Inline::Insertion(target)
+            | Inline::Deletion(target) => Some(*target),
             Inline::Link { title, .. } => Some(*title),
             Inline::Footnote { label } => Some(*label),
             Inline::DateStamp(stamp) => Some(stamp.body()),

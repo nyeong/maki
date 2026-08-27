@@ -277,6 +277,16 @@ impl<'a> Renderer<'a> {
                 self.escape_html_into(text);
                 self.html.push_str("</sub>");
             }
+            Inline::Insertion(text) => {
+                self.html.push_str("<ins>");
+                self.escape_html_into(text);
+                self.html.push_str("</ins>");
+            }
+            Inline::Deletion(text) => {
+                self.html.push_str("<del>");
+                self.escape_html_into(text);
+                self.html.push_str("</del>");
+            }
             Inline::Highlight(body) => {
                 self.html.push_str("<mark>");
                 self.render_inlines(body);

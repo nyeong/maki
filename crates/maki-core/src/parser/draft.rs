@@ -613,7 +613,23 @@ fn table_line_body<'a>(line: &LineToken<'a>) -> Option<&'a str> {
 }
 
 fn parse_table_row_cells<'a>(line: &LineToken<'a>) -> Option<Vec<&'a str>> {
-    Some(table_line_body(line)?.split('|').map(str::trim).collect())
+    let body = table_line_body(line)?;
+    let mut cells = vec![];
+    let mut start = 0;
+    let mut escaped = false;
+
+    for (index, ch) in body.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '|' {
+            cells.push(body[start..index].trim());
+            start = index + ch.len_utf8();
+        }
+    }
+    cells.push(body[start..].trim());
+    Some(cells)
 }
 
 fn is_table_separator_part(part: &str) -> bool {

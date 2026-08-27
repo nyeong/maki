@@ -176,6 +176,21 @@ fn parse_missing_references_and_legacy_links_as_text() {
 }
 
 #[test]
+fn parse_inline_handles_long_unclosed_delimiter_runs_as_text() {
+    let cases = [
+        "[".repeat(16_384),
+        "<".repeat(16_384),
+        "^{body ".repeat(2_048),
+        "*body ".repeat(2_048),
+        "::body ".repeat(2_048),
+    ];
+
+    for source in &cases {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+}
+
+#[test]
 fn parse_inline_supports_star_delimited_strong_text() {
     assert_eq!(
         parse_inline("Use *bold `code`* now."),
@@ -212,7 +227,7 @@ fn parse_inline_supports_hyper_links_but_not_bare_urls() {
 #[test]
 fn parse_inline_supports_stable_formatting_syntax() {
     assert_eq!(
-        parse_inline("/italic `code`/ *strong* ^{sup} _{sub} =highlight="),
+        parse_inline("/italic `code`/ *strong* ^{sup} _{sub} +{inserted} -{deleted} ::highlight::"),
         vec![
             Inline::Italic(vec![Inline::Text("italic "), Inline::Code("code")]),
             Inline::Text(" "),
@@ -222,10 +237,137 @@ fn parse_inline_supports_stable_formatting_syntax() {
             Inline::Text(" "),
             Inline::Subscript("sub"),
             Inline::Text(" "),
+            Inline::Insertion("inserted"),
+            Inline::Text(" "),
+            Inline::Deletion("deleted"),
+            Inline::Text(" "),
             Inline::Highlight(vec![Inline::Text("highlight")]),
         ]
     );
     assert_eq!(parse_inline("//italic//"), vec![Inline::Text("//italic//")]);
+    assert_eq!(
+        parse_inline("=highlight="),
+        vec![Inline::Text("=highlight=")]
+    );
+}
+
+#[test]
+fn parse_inline_braced_modifiers_require_a_nonempty_raw_body() {
+    assert_eq!(
+        parse_inline("+{insert * raw} -{delete / raw}"),
+        vec![
+            Inline::Insertion("insert * raw"),
+            Inline::Text(" "),
+            Inline::Deletion("delete / raw"),
+        ]
+    );
+
+    for source in ["+{}", "-{}", "+{open", "-{a{b}"] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+    assert_eq!(
+        parse_inline("+{a}b}"),
+        vec![Inline::Insertion("a"), Inline::Text("b}")]
+    );
+}
+
+#[test]
+fn parse_inline_uses_nearest_opener_and_first_closer() {
+    assert_eq!(
+        parse_inline("*not strong *strong*"),
+        vec![
+            Inline::Text("*not strong "),
+            Inline::Strong(vec![Inline::Text("strong")]),
+        ]
+    );
+    assert_eq!(
+        parse_inline("*first*second*"),
+        vec![
+            Inline::Strong(vec![Inline::Text("first")]),
+            Inline::Text("second*"),
+        ]
+    );
+}
+
+#[test]
+fn parse_inline_invalidates_overlapping_openers_but_preserves_nesting() {
+    assert_eq!(
+        parse_inline("/outer *inner/ tail*"),
+        vec![
+            Inline::Italic(vec![Inline::Text("outer *inner")]),
+            Inline::Text(" tail*"),
+        ]
+    );
+    assert_eq!(
+        parse_inline("*outer /inner* tail/"),
+        vec![
+            Inline::Strong(vec![Inline::Text("outer /inner")]),
+            Inline::Text(" tail/"),
+        ]
+    );
+    assert_eq!(
+        parse_inline("/outer *inner* tail/"),
+        vec![Inline::Italic(vec![
+            Inline::Text("outer "),
+            Inline::Strong(vec![Inline::Text("inner")]),
+            Inline::Text(" tail"),
+        ])]
+    );
+    assert_eq!(
+        parse_inline("::outer *inner* tail::"),
+        vec![Inline::Highlight(vec![
+            Inline::Text("outer "),
+            Inline::Strong(vec![Inline::Text("inner")]),
+            Inline::Text(" tail"),
+        ])]
+    );
+    assert_eq!(
+        parse_inline(r"*outer \* literal*"),
+        vec![Inline::Strong(vec![
+            Inline::Text("outer "),
+            Inline::Text("* literal"),
+        ])]
+    );
+}
+
+#[test]
+fn parse_inline_backslash_escapes_ascii_punctuation() {
+    let punctuation = (b'!'..=b'/')
+        .chain(b':'..=b'@')
+        .chain(b'['..=b'`')
+        .chain(b'{'..=b'~');
+
+    for byte in punctuation {
+        let source = format!("\\{}", char::from(byte));
+        assert_eq!(parse_inline(&source), vec![Inline::Text(&source[1..])]);
+    }
+
+    assert_eq!(parse_inline(r"\a \한"), vec![Inline::Text(r"\a \한")]);
+}
+
+#[test]
+fn parse_inline_escape_keeps_reference_syntax_literal() {
+    let parsed = parse(
+        r#"Escaped \[known], normal [known].
+
+[known]: /target"#,
+    );
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
+
+    assert_eq!(
+        body,
+        &vec![
+            Inline::Text("Escaped "),
+            Inline::Text("[known], normal "),
+            Inline::Link {
+                title: "known",
+                target: "/target",
+            },
+            Inline::Text("."),
+        ]
+    );
 }
 
 #[test]
@@ -522,6 +664,25 @@ fn parse_table_with_inline_cells_and_numeric_alignment() {
             target: DateStampTarget::Date(Date::new(2026, 8, 15).unwrap()),
             body: "2026-08-15",
         })]
+    );
+}
+
+#[test]
+fn parse_table_keeps_escaped_pipe_inside_inline_cell() {
+    let parsed = parse(
+        r#"| Text | Mark |
+|---+---|
+| \| literal | ::marked:: |"#,
+    );
+    let BlockKind::Table { rows, .. } = &parsed.document.blocks[0].kind else {
+        panic!("expected a table block");
+    };
+
+    assert_eq!(rows[0].cells.len(), 2);
+    assert_eq!(rows[0].cells[0].body, vec![Inline::Text("| literal")]);
+    assert_eq!(
+        rows[0].cells[1].body,
+        vec![Inline::Highlight(vec![Inline::Text("marked")])]
     );
 }
 

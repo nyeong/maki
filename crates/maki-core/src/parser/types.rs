@@ -12,6 +12,8 @@ pub enum Inline<'a> {
     Strong(Vec<Inline<'a>>),
     Superscript(&'a str),
     Subscript(&'a str),
+    Insertion(&'a str),
+    Deletion(&'a str),
     Highlight(Vec<Inline<'a>>),
     DateStamp(DateStamp<'a>),
     DateRange(DateRange<'a>),

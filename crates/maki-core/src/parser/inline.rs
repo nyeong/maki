@@ -49,14 +49,71 @@ impl<'a> ReferenceLookup<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ClosingDelimiter {
+    Backtick,
+    NoteLink,
+    Bracket,
+    Angle,
+    Brace,
+}
+
+const CLOSING_DELIMITER_COUNT: usize = ClosingDelimiter::Brace as usize + 1;
+
+/// Closing positions shared by all speculative inline parsers at a cursor.
+///
+/// Without this index, every unmatched opener searches the remaining suffix,
+/// making delimiter-heavy malformed input quadratic in the source length.
+struct DelimiterIndex {
+    positions: [Vec<usize>; CLOSING_DELIMITER_COUNT],
+}
+
+impl DelimiterIndex {
+    fn new(source: &str) -> Self {
+        let mut positions: [Vec<usize>; CLOSING_DELIMITER_COUNT] =
+            std::array::from_fn(|_| Vec::new());
+        let bytes = source.as_bytes();
+
+        for (index, ch) in source.char_indices() {
+            let delimiter = match ch {
+                '`' => Some(ClosingDelimiter::Backtick),
+                ']' => Some(ClosingDelimiter::Bracket),
+                '>' => Some(ClosingDelimiter::Angle),
+                '}' => Some(ClosingDelimiter::Brace),
+                _ => None,
+            };
+
+            if let Some(delimiter) = delimiter {
+                positions[delimiter as usize].push(index);
+            }
+            if ch == ']' && bytes.get(index + 1) == Some(&b']') {
+                positions[ClosingDelimiter::NoteLink as usize].push(index);
+            }
+        }
+
+        Self { positions }
+    }
+
+    fn find_at_or_after(&self, delimiter: ClosingDelimiter, start: usize) -> Option<usize> {
+        let positions = &self.positions[delimiter as usize];
+        let index = positions.partition_point(|position| *position < start);
+        positions.get(index).copied()
+    }
+}
+
 struct InlineCursor<'a> {
     source: &'a str,
     pos: usize,
+    delimiters: DelimiterIndex,
 }
 
 impl<'a> InlineCursor<'a> {
     fn new(source: &'a str) -> Self {
-        Self { source, pos: 0 }
+        Self {
+            source,
+            pos: 0,
+            delimiters: DelimiterIndex::new(source),
+        }
     }
 
     fn pos(&self) -> usize {
@@ -73,6 +130,13 @@ impl<'a> InlineCursor<'a> {
 
     fn previous_char(&self) -> Option<char> {
         self.source[..self.pos].chars().next_back()
+    }
+
+    fn find_closing(&self, delimiter: ClosingDelimiter, offset: usize) -> Option<usize> {
+        let start = self.pos.checked_add(offset)?;
+        self.delimiters
+            .find_at_or_after(delimiter, start)
+            .map(|position| position - self.pos)
     }
 
     fn bump(&mut self, n: usize) {
@@ -94,7 +158,8 @@ const INLINE_DATE_RANGE_SEPARATOR: &str = "--";
 fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let rest = cursor.rest();
     let body = rest.strip_prefix(INLINE_CODE_DELIMITER)?;
-    let end = body.find(INLINE_CODE_DELIMITER)?;
+    let end = cursor.find_closing(ClosingDelimiter::Backtick, INLINE_CODE_DELIMITER.len_utf8())?
+        - INLINE_CODE_DELIMITER.len_utf8();
     let contents = &body[..end];
 
     cursor
@@ -106,7 +171,8 @@ fn parse_inline_code<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
 fn parse_inline_note_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let rest = cursor.rest();
     let body = rest.strip_prefix(INLINE_NOTE_LINK_BEGIN)?;
-    let end = body.find(INLINE_NOTE_LINK_END)?;
+    let end = cursor.find_closing(ClosingDelimiter::NoteLink, INLINE_NOTE_LINK_BEGIN.len())?
+        - INLINE_NOTE_LINK_BEGIN.len();
     let target = &body[..end];
 
     cursor.bump(INLINE_NOTE_LINK_BEGIN.len() + target.len() + INLINE_NOTE_LINK_END.len());
@@ -114,15 +180,19 @@ fn parse_inline_note_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a
     Some(Inline::NoteLink { target })
 }
 
-fn parse_date_stamp_at(source: &str) -> Option<(DateStamp<'_>, usize)> {
-    let (kind, open, close) = match source.chars().next()? {
-        '[' => (DateStampKind::Date, '[', ']'),
-        '<' => (DateStampKind::Event, '<', '>'),
+fn parse_date_stamp_at<'a>(
+    cursor: &InlineCursor<'a>,
+    offset: usize,
+) -> Option<(DateStamp<'a>, usize)> {
+    let source = &cursor.rest()[offset..];
+    let (kind, open, close, delimiter) = match source.chars().next()? {
+        '[' => (DateStampKind::Date, '[', ']', ClosingDelimiter::Bracket),
+        '<' => (DateStampKind::Event, '<', '>', ClosingDelimiter::Angle),
         _ => return None,
     };
     let body_start = open.len_utf8();
     let body_source = &source[body_start..];
-    let body_end = body_source.find(close)?;
+    let body_end = cursor.find_closing(delimiter, offset + body_start)? - offset - body_start;
     let body = &body_source[..body_end];
     let (target, target_len) = DateStampTarget::parse_prefix(body)?;
     let rest = &body[target_len..];
@@ -139,10 +209,11 @@ fn parse_date_stamp_at(source: &str) -> Option<(DateStamp<'_>, usize)> {
 
 fn parse_inline_date_range<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let rest = cursor.rest();
-    let (start, start_len) = parse_date_stamp_at(rest)?;
+    let (start, start_len) = parse_date_stamp_at(cursor, 0)?;
     let rest_after_start = &rest[start_len..];
-    let rest_after_separator = rest_after_start.strip_prefix(INLINE_DATE_RANGE_SEPARATOR)?;
-    let (end, end_len) = parse_date_stamp_at(rest_after_separator)?;
+    rest_after_start.strip_prefix(INLINE_DATE_RANGE_SEPARATOR)?;
+    let end_offset = start_len + INLINE_DATE_RANGE_SEPARATOR.len();
+    let (end, end_len) = parse_date_stamp_at(cursor, end_offset)?;
 
     let (Some(start_date), Some(end_date)) = (start.date(), end.date()) else {
         return None;
@@ -158,7 +229,7 @@ fn parse_inline_date_range<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'
 }
 
 fn parse_inline_date_stamp<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
-    let (stamp, len) = parse_date_stamp_at(cursor.rest())?;
+    let (stamp, len) = parse_date_stamp_at(cursor, 0)?;
     cursor.bump(len);
     Some(Inline::DateStamp(stamp))
 }
@@ -168,7 +239,7 @@ fn parse_inline_footnote<'a>(
     references: &ReferenceLookup<'a>,
 ) -> Option<Inline<'a>> {
     let body = cursor.rest().strip_prefix("[^")?;
-    let end = body.find(']')?;
+    let end = cursor.find_closing(ClosingDelimiter::Bracket, "[^".len())? - "[^".len();
     let label = &body[..end];
 
     if label.is_empty()
@@ -188,7 +259,7 @@ fn parse_inline_link<'a>(
     references: &ReferenceLookup<'a>,
 ) -> Option<Inline<'a>> {
     let body = cursor.rest().strip_prefix('[')?;
-    let end = body.find(']')?;
+    let end = cursor.find_closing(ClosingDelimiter::Bracket, '['.len_utf8())? - '['.len_utf8();
     let title = &body[..end];
 
     if title.is_empty() || title.starts_with('^') || title.contains(['[', ']']) {
@@ -203,7 +274,7 @@ fn parse_inline_link<'a>(
 
 fn parse_inline_hyper_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let body = cursor.rest().strip_prefix('<')?;
-    let end = body.find('>')?;
+    let end = cursor.find_closing(ClosingDelimiter::Angle, '<'.len_utf8())? - '<'.len_utf8();
     let target = &body[..end];
     let target_body = target
         .strip_prefix("https://")
@@ -215,75 +286,6 @@ fn parse_inline_hyper_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'
 
     cursor.bump('<'.len_utf8() + target.len() + '>'.len_utf8());
     Some(Inline::HyperLink { target })
-}
-
-fn parse_symmetric_inline<'a>(
-    cursor: &mut InlineCursor<'a>,
-    delimiter: char,
-    references: &ReferenceLookup<'a>,
-    wrap: fn(Vec<Inline<'a>>) -> Inline<'a>,
-) -> Option<Inline<'a>> {
-    if cursor.previous_char() == Some(delimiter) {
-        return None;
-    }
-
-    let rest = cursor.rest();
-    let body = rest.strip_prefix(delimiter)?;
-    let first = body.chars().next()?;
-    if first.is_whitespace() || first == delimiter {
-        return None;
-    }
-
-    let end = body.char_indices().find_map(|(index, ch)| {
-        if ch != delimiter {
-            return None;
-        }
-
-        let contents = &body[..index];
-        let before = contents.chars().next_back()?;
-        let after = body[index + ch.len_utf8()..].chars().next();
-
-        (!before.is_whitespace() && before != delimiter && after != Some(delimiter))
-            .then_some(index)
-    })?;
-    let contents = &body[..end];
-
-    cursor.bump(delimiter.len_utf8() + contents.len() + delimiter.len_utf8());
-    Some(wrap(parse_inline_with_references(contents, references)))
-}
-
-fn parse_inline_italic<'a>(
-    cursor: &mut InlineCursor<'a>,
-    references: &ReferenceLookup<'a>,
-) -> Option<Inline<'a>> {
-    if !is_italic_open_boundary(cursor.previous_char()) {
-        return None;
-    }
-
-    let body = cursor.rest().strip_prefix('/')?;
-    let first = body.chars().next()?;
-    if first.is_whitespace() || first == '/' {
-        return None;
-    }
-
-    let end = body.char_indices().find_map(|(index, ch)| {
-        if ch != '/' {
-            return None;
-        }
-
-        let contents = &body[..index];
-        let before = contents.chars().next_back()?;
-        let after = body[index + ch.len_utf8()..].chars().next();
-
-        (!before.is_whitespace() && before != '/' && is_italic_close_boundary(after))
-            .then_some(index)
-    })?;
-    let contents = &body[..end];
-
-    cursor.bump('/'.len_utf8() + contents.len() + '/'.len_utf8());
-    Some(Inline::Italic(parse_inline_with_references(
-        contents, references,
-    )))
 }
 
 fn is_italic_open_boundary(previous: Option<char>) -> bool {
@@ -300,13 +302,148 @@ fn is_italic_close_boundary(after: Option<char>) -> bool {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormattingKind {
+    Italic,
+    Strong,
+    Highlight,
+}
+
+impl FormattingKind {
+    const COUNT: usize = Self::Highlight as usize + 1;
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+struct FormattingDelimiter<'a> {
+    kind: FormattingKind,
+    marker: &'a str,
+    can_open: bool,
+    can_close: bool,
+}
+
+struct FormattingFrame<'a> {
+    kind: FormattingKind,
+    marker: &'a str,
+    opener_index: usize,
+}
+
+fn formatting_delimiter<'a>(cursor: &InlineCursor<'a>) -> Option<FormattingDelimiter<'a>> {
+    let previous = cursor.previous_char();
+    let rest = cursor.rest();
+
+    if let Some(after) = rest.strip_prefix("::") {
+        let next = after.chars().next();
+        return Some(FormattingDelimiter {
+            kind: FormattingKind::Highlight,
+            marker: &rest[.."::".len()],
+            can_open: previous != Some(':')
+                && next.is_some_and(|ch| !ch.is_whitespace() && ch != ':'),
+            can_close: previous.is_some_and(|ch| !ch.is_whitespace() && ch != ':')
+                && next != Some(':'),
+        });
+    }
+
+    let marker = &rest[..rest.chars().next()?.len_utf8()];
+    let next = rest[marker.len()..].chars().next();
+    match marker {
+        "*" => Some(FormattingDelimiter {
+            kind: FormattingKind::Strong,
+            marker,
+            can_open: previous != Some('*')
+                && next.is_some_and(|ch| !ch.is_whitespace() && ch != '*'),
+            can_close: previous.is_some_and(|ch| !ch.is_whitespace() && ch != '*')
+                && next != Some('*'),
+        }),
+        "/" => Some(FormattingDelimiter {
+            kind: FormattingKind::Italic,
+            marker,
+            can_open: is_italic_open_boundary(previous)
+                && next.is_some_and(|ch| !ch.is_whitespace() && ch != '/'),
+            can_close: previous.is_some_and(|ch| !ch.is_whitespace() && ch != '/')
+                && is_italic_close_boundary(next),
+        }),
+        _ => None,
+    }
+}
+
+fn close_formatting<'a>(
+    inlines: &mut Vec<Inline<'a>>,
+    frames: &mut Vec<FormattingFrame<'a>>,
+    opener_counts: &mut [usize; FormattingKind::COUNT],
+    kind: FormattingKind,
+) -> bool {
+    let Some(matching) = frames.iter().rposition(|frame| frame.kind == kind) else {
+        return false;
+    };
+
+    let opener_index = frames[matching].opener_index;
+    let marker = frames[matching].marker;
+    while frames.len() > matching {
+        let frame = frames.pop().expect("formatting frame must exist");
+        opener_counts[frame.kind.index()] -= 1;
+    }
+
+    let body = inlines.split_off(opener_index + 1);
+    debug_assert_eq!(inlines.pop(), Some(Inline::Text(marker)));
+    let inline = match kind {
+        FormattingKind::Italic => Inline::Italic(body),
+        FormattingKind::Strong => Inline::Strong(body),
+        FormattingKind::Highlight => Inline::Highlight(body),
+    };
+    inlines.push(inline);
+    true
+}
+
+fn merge_contiguous_text<'a>(source: &'a str, left: &'a str, right: &'a str) -> Option<&'a str> {
+    let source_start = source.as_ptr() as usize;
+    let source_end = source_start.checked_add(source.len())?;
+    let left_start = left.as_ptr() as usize;
+    let left_end = left_start.checked_add(left.len())?;
+    let right_start = right.as_ptr() as usize;
+    let right_end = right_start.checked_add(right.len())?;
+
+    if left_start < source_start || left_end != right_start || right_end > source_end {
+        return None;
+    }
+
+    Some(&source[left_start - source_start..right_end - source_start])
+}
+
+fn normalize_inlines<'a>(source: &'a str, inlines: Vec<Inline<'a>>) -> Vec<Inline<'a>> {
+    let mut normalized = Vec::with_capacity(inlines.len());
+
+    for inline in inlines {
+        let inline = match inline {
+            Inline::Italic(body) => Inline::Italic(normalize_inlines(source, body)),
+            Inline::Strong(body) => Inline::Strong(normalize_inlines(source, body)),
+            Inline::Highlight(body) => Inline::Highlight(normalize_inlines(source, body)),
+            inline => inline,
+        };
+
+        if let Inline::Text(right) = inline
+            && let Some(Inline::Text(left)) = normalized.last_mut()
+            && let Some(merged) = merge_contiguous_text(source, left, right)
+        {
+            *left = merged;
+            continue;
+        }
+
+        normalized.push(inline);
+    }
+
+    normalized
+}
+
 fn parse_braced_inline<'a>(
     cursor: &mut InlineCursor<'a>,
     prefix: &str,
     wrap: fn(&'a str) -> Inline<'a>,
 ) -> Option<Inline<'a>> {
     let body = cursor.rest().strip_prefix(prefix)?;
-    let end = body.find('}')?;
+    let end = cursor.find_closing(ClosingDelimiter::Brace, prefix.len())? - prefix.len();
     let contents = &body[..end];
 
     if contents.is_empty() || contents.contains(['{', '}']) {
@@ -339,6 +476,8 @@ pub(super) fn parse_inline_with_references<'a>(
 ) -> Vec<Inline<'a>> {
     let mut cursor = InlineCursor::new(source);
     let mut inlines = vec![];
+    let mut formatting_frames: Vec<FormattingFrame<'a>> = vec![];
+    let mut formatting_opener_counts = [0; FormattingKind::COUNT];
     let mut text_start = 0;
 
     while !cursor.is_eol() {
@@ -351,17 +490,62 @@ pub(super) fn parse_inline_with_references<'a>(
             .or_else(|| parse_inline_footnote(&mut cursor, references))
             .or_else(|| parse_inline_link(&mut cursor, references))
             .or_else(|| parse_inline_hyper_link(&mut cursor))
-            .or_else(|| parse_inline_italic(&mut cursor, references))
-            .or_else(|| parse_symmetric_inline(&mut cursor, '*', references, Inline::Strong))
             .or_else(|| parse_braced_inline(&mut cursor, "^{", Inline::Superscript))
             .or_else(|| parse_braced_inline(&mut cursor, "_{", Inline::Subscript))
-            .or_else(|| parse_symmetric_inline(&mut cursor, '=', references, Inline::Highlight))
+            .or_else(|| parse_braced_inline(&mut cursor, "+{", Inline::Insertion))
+            .or_else(|| parse_braced_inline(&mut cursor, "-{", Inline::Deletion))
         {
             if text_start < start {
                 inlines.push(Inline::Text(&source[text_start..start]));
             }
 
             inlines.push(inline);
+            text_start = cursor.pos();
+        } else if let Some(escaped) = cursor
+            .rest()
+            .strip_prefix('\\')
+            .and_then(|rest| rest.chars().next())
+            .filter(|ch| ch.is_ascii_punctuation())
+        {
+            if text_start < start {
+                inlines.push(Inline::Text(&source[text_start..start]));
+            }
+
+            let escaped_start = start + '\\'.len_utf8();
+            let escaped_end = escaped_start + escaped.len_utf8();
+            inlines.push(Inline::Text(&source[escaped_start..escaped_end]));
+            cursor.bump('\\'.len_utf8() + escaped.len_utf8());
+            text_start = cursor.pos();
+        } else if let Some(delimiter) = formatting_delimiter(&cursor) {
+            let matching_opener =
+                delimiter.can_close && formatting_opener_counts[delimiter.kind.index()] > 0;
+            if !delimiter.can_open && !matching_opener {
+                cursor.bump_char();
+                continue;
+            }
+
+            if text_start < start {
+                inlines.push(Inline::Text(&source[text_start..start]));
+            }
+
+            let closed = matching_opener
+                && close_formatting(
+                    &mut inlines,
+                    &mut formatting_frames,
+                    &mut formatting_opener_counts,
+                    delimiter.kind,
+                );
+            if !closed && delimiter.can_open {
+                let opener_index = inlines.len();
+                inlines.push(Inline::Text(delimiter.marker));
+                formatting_opener_counts[delimiter.kind.index()] += 1;
+                formatting_frames.push(FormattingFrame {
+                    kind: delimiter.kind,
+                    marker: delimiter.marker,
+                    opener_index,
+                });
+            }
+            cursor.bump(delimiter.marker.len());
             text_start = cursor.pos();
         } else {
             cursor.bump_char();
@@ -372,7 +556,7 @@ pub(super) fn parse_inline_with_references<'a>(
         inlines.push(Inline::Text(&source[text_start..]));
     }
 
-    inlines
+    normalize_inlines(source, inlines)
 }
 
 /// Parses inline syntax that does not require a Document reference definition.
