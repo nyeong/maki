@@ -4,10 +4,13 @@ use std::{
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU16, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const BIN: &str = env!("CARGO_BIN_EXE_maki");
+const FIRST_TEST_PORT: u16 = 49152;
+const LAST_TEST_PORT: u16 = 60999;
 const REPOSITORY_GIT_ENV: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -16,6 +19,7 @@ const REPOSITORY_GIT_ENV: &[&str] = &[
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 ];
+static NEXT_TEST_PORT: AtomicU16 = AtomicU16::new(0);
 
 struct TestServer {
     child: Child,
@@ -43,8 +47,35 @@ fn fixture_path(path: &str) -> PathBuf {
 }
 
 fn free_port() -> u16 {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    listener.local_addr().unwrap().port()
+    for _ in FIRST_TEST_PORT..=LAST_TEST_PORT {
+        let port = next_test_port_candidate();
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+
+    panic!("could not find a free local test port");
+}
+
+fn next_test_port_candidate() -> u16 {
+    loop {
+        let current = NEXT_TEST_PORT.load(Ordering::Relaxed);
+        let next = if current == 0 {
+            let span = u32::from(LAST_TEST_PORT - FIRST_TEST_PORT + 1);
+            FIRST_TEST_PORT + (std::process::id() % span) as u16
+        } else if current >= LAST_TEST_PORT {
+            FIRST_TEST_PORT
+        } else {
+            current + 1
+        };
+
+        if NEXT_TEST_PORT
+            .compare_exchange(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return next;
+        }
+    }
 }
 
 fn unique_temp_dir(name: &str) -> PathBuf {
