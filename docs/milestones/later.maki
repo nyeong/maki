@@ -53,10 +53,50 @@ Serve와 SSG가 서로 다른 renderer와 route 목록을 갖지 않도록 한�
 검색은 static search page와 search index를 browser에서 조합할 수 있으므로, server-side query가 꼭 필요한지 별도로 판단한다.
 동적 route는 암묵적인 cache miss가 아니라 명시적인 route kind로 구분한다.
 
+== Incremental compile
+
+Incremental compile 자체에는 복잡한 compiler 알고리즘이 필요하지 않다.
+변경된 문서를 다시 parse하고, 이전 document facts와 새 document facts의 차이로 갱신할 index와 artifact를 고르면 된다.
+
+최소한 아래 index를 유지한다.
+
+- note identity에서 source와 output route로 가는 index
+- title, filename, heading, alias를 담은 search index
+- resolved note에서 그 note를 참조하는 link occurrence로 가는 backlink index
+- 아직 resolve되지 않은 link도 포함해 target key에서 link occurrence로 가는 reverse lookup
+- note에서 outgoing link와 date contribution으로 가는 document facts
+
+파일이 바뀌면 아래 순서로 처리한다.
+
+1. 변경 전 document facts를 보관한다.
+2. 변경된 source만 다시 parse하고 새 document facts를 만든다.
+3. 이전 contribution을 project index에서 제거한다.
+4. 새 contribution을 project index에 추가한다.
+5. old/new facts의 합집합에서 dirty artifact를 계산한다.
+6. dirty artifact만 compile한 뒤 새 artifact snapshot으로 교체한다.
+
+변경별 기본 무효화 규칙은 아래와 같다.
+
+- 본문만 바뀌고 project fact가 같으면 해당 note HTML만 다시 만든다.
+- title이나 filename이 바뀌면 이전 route artifact를 제거하고 새 note HTML, search, sitemap을 갱신한다.
+- note identity가 바뀌면 old/new target key를 참조하는 link occurrence만 다시 resolve하고, 영향받은 backlink와 referrer page를 갱신한다.
+- outgoing link가 바뀌면 이전 edge를 backlink index에서 제거하고 새 edge를 추가한 뒤 old/new target의 backlink artifact를 갱신한다.
+- date가 바뀌면 old/new date contribution에 해당하는 date page만 갱신한다.
+- 문서가 추가되거나 삭제되면 search, sitemap, project index와 그 문서를 참조하는 link occurrence를 갱신한다.
+- template, 공통 asset URL, publish policy처럼 전체 output에 영향을 주는 입력은 안전하게 넓은 범위를 무효화한다.
+
+rename은 watcher에서 delete와 create로 들어와도 같은 old/new facts 비교로 처리할 수 있다.
+Unresolved link occurrence도 target key reverse lookup에 넣어 두면 새 문서나 rename으로 갑자기 resolve되는 link를 전체 문서 scan 없이 찾을 수 있다.
+
+어려운 부분은 알고리즘보다 old relation 제거를 빠뜨리지 않는 bookkeeping이다.
+예를 들어 link가 A에서 B로 바뀌면 B를 추가하는 것뿐 아니라 A가 가리키던 이전 target의 backlink도 제거해야 한다.
+따라서 invalidation은 항상 old facts와 new facts 양쪽을 기준으로 계산한다.
+
 == Rebuild와 correctness
 
-초기 구현은 project 전체를 compile해도 된다.
-성능이 실제 문제가 되면 note link, template, config, asset dependency graph를 기준으로 영향을 받은 artifact만 다시 만든다.
+초기 구현도 위의 per-document facts와 reverse lookup을 기준으로 affected artifact만 compile하는 것을 목표로 한다.
+구현을 나눌 필요가 있으면 project index는 전체 document facts에서 빠르게 다시 만들고, HTML과 JSON artifact 생성부터 incremental하게 시작한다.
+이후 index 재구성 비용도 문제가 될 때 document contribution의 추가와 제거를 incremental하게 바꾼다.
 
 - compile이 성공하기 전에는 새 snapshot을 노출하지 않는다.
 - compile이 실패하면 기존 snapshot을 계속 제공하고 diagnostic을 남긴다.
