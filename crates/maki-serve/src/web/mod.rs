@@ -40,7 +40,7 @@ mod tests;
 pub use state::ProjectReloader;
 
 const MAX_REQUEST_HEAD_SIZE: usize = 16 * 1024;
-const REQUEST_WORKER_COUNT: usize = 2;
+const NON_SSE_WORKER_RESERVE: usize = 2;
 const META_PATH: &str = "/@/";
 const META_PATH_NO_SLASH: &str = "/@";
 const RECENTS_PATH: &str = "/@/recents";
@@ -59,6 +59,9 @@ const SEARCH_INDEX_PATH: &str = "/.maki/search-index.json";
 const SEARCH_PATH: &str = "/.maki/search";
 const SEARCH_PAGE_RESULT_LIMIT: usize = 50;
 const MAX_SSE_CLIENTS: usize = 16;
+// Every live reload connection blocks one worker, so reserve capacity for
+// ordinary requests even when the SSE client limit is reached.
+const REQUEST_WORKER_COUNT: usize = MAX_SSE_CLIENTS + NON_SSE_WORKER_RESERVE;
 const FILE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
