@@ -131,9 +131,8 @@ NixOS module에서는 target의 `indexRedirect`가 같은 override 역할을 한
 --v lang: html
 : <link rel="icon" href="/favicon.ico" type="image/png">
 
-현대 브라우저는 명시적인 `rel="icon"` link와 PNG/SVG/ICO 같은 단일 아이콘 파일을 잘 처리한다.
-따라서 Maki는 크기별 icon metadata나 자동 resize를 생성하지 않고, 설정된 파일을 그대로 서빙한다.
-앱 설치용 manifest나 Apple touch icon이 필요해지는 경우에는 별도 설정을 추가할 수 있다.
+현대 브라우저는 명시적인 `rel="icon"` link와 PNG/SVG/ICO 같은 단일 아이콘 파일을 처리한다.
+Maki는 크기별 icon metadata, 자동 resize, app manifest와 Apple touch icon을 생성하지 않고 설정된 파일을 그대로 서빙한다.
 
 `favicon`은 프로젝트 루트 기준의 lexical relative path여야 한다.
 빈 값, absolute path, `..` component는 거부한다.

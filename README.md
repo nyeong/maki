@@ -106,6 +106,14 @@ Paragraph with a [[note link]], [reference link], and <https://example.com>.
 See [docs/maki-syntax.maki](docs/maki-syntax.maki) for the syntax source of
 truth.
 
+## Documentation
+
+- [Getting started](docs/getting-started.maki)
+- [Project configuration](docs/maki-toml.maki)
+- [Web server and routes](docs/web.maki)
+- [Language server](docs/lsp.maki)
+- [Documentation index](docs/index.maki)
+
 ## Web Routes
 
 - `/`: redirect to the configured home note.
@@ -113,9 +121,12 @@ truth.
 - `/<note>.maki`: raw source text.
 - `/@/`: meta index.
 - `/@/recents`: recently modified notes.
+- `/@/sitemap`: human-readable sitemap.
 - `/@/diagnostics`: project diagnostics.
 - `/@/dates`: date index.
-- `/.maki/search`: title search.
+- `/.maki/search`: note, heading, and file search.
+- `/.maki/project-index.json`: versioned project analysis.
+- `/.maki/search-index.json`: search entries.
 
 ## Deployment
 
@@ -123,19 +134,6 @@ truth.
 updates. Put `maki.toml` at the repository root and set its `source` when notes
 live in a subdirectory. `--metrics HOST:PORT` enables a separate Prometheus
 listener that serves `GET /metrics`.
-
-Before a dogfood deployment, validate that the Maki and dotfiles checkouts are
-clean, on `main`, synchronized with their remotes, and that the deploy host is
-reachable:
-
-```bash
-DOTFILES_DIR=/path/to/dotfiles ./scripts/deploy-dogfood.sh --check
-```
-
-Run the same command without `--check` to update the dotfiles Maki input and
-activate its `MAKI_DEPLOY_TARGET` (default: `nixbox`). The script defaults both
-Git remotes to `origin`; alternate checkout, remote, target, host, and SSH user
-values are configurable through the environment documented by `--help`.
 
 The NixOS module supports multiple named local or Git-backed targets:
 
@@ -146,7 +144,7 @@ The NixOS module supports multiple named local or Git-backed targets:
   outputs =
     { maki, nixpkgs, ... }:
     {
-      nixosConfigurations.nixbox = nixpkgs.lib.nixosSystem {
+      nixosConfigurations.server = nixpkgs.lib.nixosSystem {
         modules = [
           maki.nixosModules.default
           {
@@ -177,12 +175,14 @@ nix develop
 cargo test
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for work tracking, documentation scope,
+cross-repository coordination, and the canonical validation gate.
+
 ## CI
 
 Forgejo Actions runs `.forgejo/workflows/ci.yml` for pull requests targeting
-`main`, pushes to `main`, and manual dispatches. The workflow uses the shared
-local entrypoint and expects a Forgejo self-hosted runner labeled
-`self-hosted` and `nixbox` with Nix flakes enabled:
+`main`, pushes to `main`, and manual dispatches. The workflow and local
+development use the same repository-owned entrypoint:
 
 ```bash
 bash scripts/ci/check-maki.sh

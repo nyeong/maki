@@ -1,0 +1,82 @@
+--^ title: Web Server and Routes
+
+= Local source serve
+
+--v lang: bash
+: maki serve [path]
+
+`path` 기본값은 현재 directory다.
+Maki는 가장 가까운 `maki.toml`을 찾고 [[maki-toml]]의 source root와 home route를 적용한다.
+
+지원 option:
+
+- `--host <host>`: bind address, 기본값 `127.0.0.1`
+- `--port <port>`: HTTP port, 기본값 `4000`
+- `--index-redirect <route>`: `/` redirect target override
+- `--metrics <host:port>`: 별도 Prometheus listener
+
+예:
+
+--v lang: bash
+: maki serve . --host 0.0.0.0 --port 4000 --metrics 127.0.0.1:4041
+
+= Git source serve
+
+--v lang: bash
+: maki serve --git https://example.invalid/notes.git \
+:   --branch main \
+:   --state-dir /var/lib/maki/notes \
+:   --fetch-interval 60s
+
+- `--branch` 기본값은 `main`이다.
+- `--state-dir`는 checkout과 runtime state를 저장한다.
+- `--fetch-interval`은 정수 초 또는 `ms`, `s`, `m`, `h` suffix를 받는다.
+- Git repository root에는 `maki.toml`이 있어야 한다.
+- Repository 안의 symlink는 허용하지 않는다.
+
+Git update를 가져오면 새 project state를 load한 뒤 교체한다.
+Load에 실패하면 기존 state를 계속 제공하고 오류를 기록한다.
+
+= Note route
+
+- `/`: configured home note로 redirect
+- `/<note>`: rendered HTML
+- `/<note>.maki`: raw Maki source
+- `/favicon.ico`: `[serve].favicon`을 설정했을 때의 favicon
+
+Note identity와 route는 configured source root 기준의 extension 없는 relative path다.
+예를 들어 `docs/notes/today.maki`는 `/notes/today`와 `/notes/today.maki`로 제공된다.
+
+= Meta route
+
+- `/@/`: meta index
+- `/@/recents`: source modification time 기준 최근 note
+- `/@/sitemap`: 사람이 읽는 전체 note 목록
+- `/sitemap.xml`: XML sitemap
+- `/@/diagnostics`: parser와 project link diagnostic
+- `/@/dates`: date index
+- `/@/dates/<period>`: year, month, ISO week 또는 day page
+
+Date page는 `[date]` reference와 `<date>` event occurrence의 backlink를 표시한다.
+지원 marker와 range 형식은 [[maki-syntax#Date Marker]]를 따른다.
+
+= Search와 JSON
+
+- `/.maki/search?q=<query>`: HTML 검색 page
+- `/.maki/search-index.json`: note, heading과 file 검색 entry
+- `/.maki/project-index.json`: `schema_version`이 있는 document analysis JSON
+
+Search box와 HTML page는 같은 search index를 사용한다.
+Project index에는 document, block, heading, note link, property, date occurrence와 diagnostic의 source span이 포함된다.
+
+= Runtime asset과 live reload
+
+`/.maki/assets/` 아래에서 renderer CSS와 JavaScript를 제공한다.
+Local serve page는 `/.maki/events` Server-Sent Events endpoint를 사용해 source reload를 감지한다.
+
+= Metrics
+
+`--metrics <host:port>`를 지정하면 main HTTP listener와 분리된 listener의 `/metrics`에서 Prometheus text format을 제공한다.
+Metric은 request, response status, render, project reload, response cache와 Git refresh 상태를 포함한다.
+
+Metrics listener를 외부에 노출할지는 deployment network policy에서 결정한다.

@@ -1,5 +1,4 @@
 --^ title: Core Analysis
---^ status: draft
 --^ updated: [2026-08-27]
 
 = 개요
@@ -50,7 +49,7 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 
 두 함수는 filesystem과 network를 읽지 않는다.
 Project 분석은 note/heading link resolution과 semantic diagnostics를 계산한다.
-초기 구현은 snapshot 전체를 다시 분석하며, API 사용자는 incremental index 여부에 의존하지 않는다.
+현재 snapshot 전체를 다시 분석한다. API 사용자는 내부 index 전략에 의존하지 않는다.
 
 = Diagnostics
 
@@ -60,12 +59,13 @@ Project 분석은 note/heading link resolution과 semantic diagnostics를 계산
 - broken/ambiguous heading link
 
 External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이 sans IO surface에 포함하지 않는다.
-기존 project runtime의 diagnostics가 이 문제를 별도로 수집하며, 필요하면 IO adapter가 두 결과를 표시 단계에서 합성한다.
+기존 project runtime의 diagnostics가 이 문제를 별도로 수집하며, IO adapter가 두 결과를 표시 단계에서 합성할 수 있다.
 
-= 남은 작업
+= 현재 경계
 
-- nested Maki body의 원본 위치를 보존하는 located parse
-- reference definition target occurrence
-- block property owner를 명시하는 relation
-- Date Range를 단일 range occurrence로 보존하는 모델
-- parser AST와 located surface의 중복 축소
+- Nested Maki body는 top-level document와 동일한 located occurrence surface를 제공하지 않는다.
+- Reference Definition occurrence는 title과 resolved target을 제공하지만 target source span은 제공하지 않는다.
+- Property occurrence는 방향과 key/value span을 제공하며 owner block relation은 별도 field로 제공하지 않는다.
+- Date Range의 두 endpoint는 각각의 date occurrence로 노출된다.
+
+이 항목은 API 소비자가 의존해야 할 현재 동작을 설명한다. 변경 제안과 작업 상태는 Forgejo issue에서 관리한다.

@@ -10,8 +10,8 @@ Maki는 workspace 안의 다섯 crate 경계로 나뉜다.
 - `maki-lsp`: stdio LSP message 처리와 editor buffer cache를 맡는 protocol adapter.
 - `maki-serve`: Maki web route handling, live reload, watcher, response cache, git source runtime, Prometheus metrics.
 
-crate 경계는 "대체 가능성"을 기준으로 둔다.
-`maki-http`는 나중에 `hyper`/`axum` 같은 외부 HTTP stack으로 바뀔 수 있는 얇은 계층이고, `maki-serve`는 Maki route/cache/reload/metrics 정책을 담는다.
+crate 경계는 protocol·IO와 Maki 의미를 분리한다.
+`maki-http`는 Maki domain을 모르는 얇은 HTTP 계층이고, `maki-serve`는 Maki route/cache/reload/metrics 정책을 담는다.
 `maki-lsp`는 filesystem/editor IO를 맡고, 문서 분석과 source position 변환은 `maki-core`를 사용한다.
 
 = 파싱
@@ -31,7 +31,7 @@ crate 경계는 "대체 가능성"을 기준으로 둔다.
 
 주어진 문자열을 줄단위로 Prefix 분석하여 LineToken[]으로 변환함.
 
-: --v milestone: v2
+: --v category: parser
 : === Container Block
 :
 : --- code rust
@@ -42,7 +42,7 @@ crate 경계는 "대체 가능성"을 기준으로 둔다.
 
 위는 아래처럼 파싱되어야
 
-: Line { prefix = "--v", indent = 0, body = "milestone ..." }
+: Line { prefix = "--v", indent = 0, body = "category ..." }
 : Line { prefix = "===", indent = 0, body = "Container ..." }
 : Blank
 : Line { prefix = "---", indent = 0, body = "code rust" }

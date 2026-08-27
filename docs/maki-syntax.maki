@@ -10,8 +10,8 @@ Maki는 line-first lightweight markup language이다.
 이 문서는 Maki 언어의 stable 문법과 문법적 해석 규칙을 정의하는 Source of Truth이다.
 구현과 충돌이 있는 경우 구현을 이 문서에 맞춘다.
 
-이 문서에서 명시적으로 예약하거나 나중으로 둔 항목을 제외한 문법은 stable이다.
-Container macro의 구체적 의미처럼 아직 정의하지 않은 부분은 stable 문법에 포함되지 않는다.
+이 문서에 정의한 문법과 해석 규칙은 stable syntax다.
+문서에 없는 marker나 container kind에는 별도의 의미를 부여하지 않는다.
 
 이 문서는 parser 자료 구조, source range, index API, renderer 표현, LSP protocol을 정의하지 않는다.
 그 구현 계약은 [[core-analysis]], [[lsp]] 등 별도 문서에서 다룬다.
@@ -74,9 +74,7 @@ maki 문법의 지배적인 멘탈 모델에 대해 소개한다.
 
 - 쓰기 편해야한다.
   단, 아무 도구도 없이 키보드로 모두 치는 상황은 고려하지 않는다.
-  아래의 둘을 차등적으로 가정한다. (1)은 항상 가정하고, (2)는 미래를 위해 예약한다.
-  1. Vim, Helix, Emacs 같은 멀티 라인 에디팅 모델
-  2. LSP 같은 문법 보조 도구
+  Vim, Helix, Emacs 같은 multi-line editing과 LSP 문법 보조를 사용할 수 있다.
 - 읽기 편해야한다.
   - 렌더링 결과 뿐 아니라 코드 그 자체도 읽기 편해야한다.
 - 의미를 담기 편해야 한다.
@@ -245,15 +243,12 @@ Quote는 인용문을 나타낸다.
 - parsing: custom
 - clustering: container
 
-Container는 크게 두 가지를 의미한다.
+Container는 긴 body를 prefix 없이 입력하기 위한 block form이다.
 
-1. 내용이 길거나 복사-붙여넣기를 자주 써야하는 Block을 위한 대안 형태
-   - kind가 `quote`, `code`일 경우 이에 해당한다.
-   - 각 kind는 해당 block과 동일하게 취급한다.
-   - property 역시 각 kind의 해당 block과 동일하게 취급하여 해석한다.
-2. Macro 기능을 사용하기 위한 형태
-   - 그 외의 kind가 이에 해당한다.
-   - macro를 위한 예약 형태이며, 구체적인 사항은 아직 정의하지 않는다.
+- `code [lang]`: body를 raw code로 보존한다.
+- `quote`: body를 Maki block으로 해석한다.
+- `text` 또는 `pre`: body를 raw text로 보존한다.
+- 그 밖의 kind: Unknown Container로 보존한다. Maki는 해당 kind에 별도 의미를 부여하거나 외부 command를 실행하지 않는다.
 
 === Code Container
 

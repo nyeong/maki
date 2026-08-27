@@ -1,36 +1,28 @@
---^ title: Maki
+--^ title: Maki Documentation
 
-<https://github.com/nyeong/maki>
+Maki는 line-first lightweight markup language이자 `.maki` 프로젝트를 HTML로 build·serve하는 personal wiki runtime이다.
 
-현재 마일스톤: [[milestones/zed-end-user-release]]
-현재 지원 마일스톤: [[milestones/ci-cd]]
+= 시작하기
 
-- [[about-maki]]
-- core
-  - [[maki-syntax]]
-  - [[core-analysis]]
-  - [[knowledge-graph-mcp]]
-- config
-  - [[maki-toml]]
-- serve
-- tooling
-  - [[lsp]]
-- [[use-cases]]
-- [[issues]]
-- [[architecture]]
-- [[implementation-analysis]]
-- 마일스톤
-  - [[milestones/syntax-sot]]
-  - [[milestones/zed-local]]
-  - [[milestones/zed-dev-loop]]
-  - [[milestones/zed-forgejo-loop]]
-  - [[milestones/ci-cd]]
-  - [[milestones/zed-end-user-release]]
-  - [[milestones/date-pages]]
-  - [[milestones/v0]]
-  - [[milestones/v1]]
-  - [[milestones/v2]]
-  - [[milestones/v3]]
-  - [[milestones/v4]]
-  - [[milestones/v5]]
-  - [[milestones/later]]
+- [[getting-started]]: 프로젝트를 만들고 build·serve하기
+- [[use-cases]]: 현재 기능으로 구성할 수 있는 대표 사용 방식
+
+= 사용자 Reference
+
+- [[maki-syntax]]: Maki stable 문법과 link resolution 규칙
+- [[maki-toml]]: project manifest와 설정값
+- [[web]]: HTTP route, 검색, 날짜, diagnostics, Git source와 metrics
+- [[lsp]]: `maki lsp` 실행과 지원하는 editor 기능
+
+= 개념과 구현
+
+- [[about-maki]]: Maki의 목적과 문서 모델
+- [[architecture]]: workspace crate와 parse/analysis 경계
+- [[core-analysis]]: source span과 sans-I/O analysis 계약
+
+= 프로젝트 관리
+
+버그, 개선 제안과 아직 구현하지 않은 기능은 [Forgejo Issues]에서 관리한다.
+이 문서 모음은 현재 배포된 동작과 사용법만 설명한다.
+
+[Forgejo Issues]: https://git.eska.nyeong.me/nyeong/maki/issues
