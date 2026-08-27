@@ -9,5 +9,5 @@ pub use maki::{
     DatePeriod, DateRelation, Error, HomeMode, Maki, MakiConfig, MakiConfigOverrides, MakiRoute,
     Note, NoteLinkResolution, NoteRef, PROJECT_FILE_NAME, ProjectDiagnostic, ProjectDiagnosticKind,
     ProjectDiagnosticSummary, ProjectLoadMeter, PublishPolicy, RecentEntry, SearchEntry,
-    SearchEntryKind, SitemapEntry,
+    SearchEntryKind, SitemapEntry, is_discoverable_maki_path, list_maki_files,
 };
