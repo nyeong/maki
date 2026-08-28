@@ -805,7 +805,8 @@ Body에는 whitespace 또는 `<`가 들어갈 수 없다.
 Closing delimiter가 없으면 Hyper Link로 파싱하지 않는다.
 
 Inline Code 안의 URL은 link로 파싱하지 않는다.
-Hyper Link의 title과 target은 angle bracket을 제외한 body 문자열이다.
+Hyper Link의 target은 angle bracket을 제외한 body 문자열이다.
+HTML에서 표시하는 title은 target의 `http://` 또는 `https://` protocol을 생략한다.
 
 == Date Marker
 

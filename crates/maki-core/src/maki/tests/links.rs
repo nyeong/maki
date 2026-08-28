@@ -188,7 +188,7 @@ fn angle_wrapped_external_urls_render_as_links_but_bare_urls_do_not() {
     let html = maki.render_html(Path::new("start.maki")).unwrap();
 
     assert!(html.contains(
-        "<a class=\"external-link\" href=\"https://example.com/docs\">https://example.com/docs</a>, not https://example.com/bare."
+        "<a class=\"external-link\" href=\"https://example.com/docs\">example.com/docs</a>, not https://example.com/bare."
     ));
     assert!(!html.contains("href=\"https://example.com/bare\""));
 }

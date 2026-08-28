@@ -157,7 +157,7 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
 #[test]
 fn render_stable_inline_and_footnote_syntax() {
     let parsed = parser::parse(
-        r#"Use /italic/, *strong*, ^{sup}, _{sub}, +{inserted}, -{deleted}, and ::highlight:: with <https://example.com>.[^note]
+        r#"Use /italic/, *strong*, ^{sup}, _{sub}, +{inserted}, -{deleted}, and ::highlight:: with <https://example.com> and <http://example.com/docs>.[^note]
 
 [^note]: Footnote *body*."#,
     );
@@ -171,8 +171,11 @@ fn render_stable_inline_and_footnote_syntax() {
     assert!(html.contains("<ins>inserted</ins>"));
     assert!(html.contains("<del>deleted</del>"));
     assert!(html.contains("<mark>highlight</mark>"));
+    assert!(
+        html.contains("<a class=\"external-link\" href=\"https://example.com\">example.com</a>")
+    );
     assert!(html.contains(
-        "<a class=\"external-link\" href=\"https://example.com\">https://example.com</a>"
+        "<a class=\"external-link\" href=\"http://example.com/docs\">example.com/docs</a>"
     ));
     assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-note\">[note]</a></sup>"));
     assert!(html.contains("<section class=\"footnotes\"><ol><li id=\"fn-note\">Footnote <strong>body</strong>.</li></ol></section>"));

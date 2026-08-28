@@ -158,6 +158,14 @@ impl<'a> Renderer<'a> {
         self.render_anchor(target, title);
     }
 
+    fn render_hyper_link(&mut self, target: &str) {
+        let title = target
+            .strip_prefix("https://")
+            .or_else(|| target.strip_prefix("http://"))
+            .unwrap_or(target);
+        self.render_anchor(target, title);
+    }
+
     fn render_date_stamp_text(&mut self, stamp: DateStamp<'_>) {
         let (open, close) = date_stamp_delimiters(stamp.kind());
         self.html.push(open);
@@ -269,7 +277,7 @@ impl<'a> Renderer<'a> {
             Inline::NoteLink { target } => self.render_note_link(target),
             Inline::Link { title, target } => self.render_link(title, target),
             Inline::Footnote { label } => self.render_footnote_reference(label),
-            Inline::HyperLink { target } => self.render_anchor(target, target),
+            Inline::HyperLink { target } => self.render_hyper_link(target),
             Inline::DateStamp(stamp) => self.render_date_stamp(*stamp),
             Inline::DateRange(range) => self.render_date_range(*range),
             Inline::SoftBreak => self.html.push(' '),
