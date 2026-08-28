@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
@@ -84,6 +84,7 @@ fn workspace_root(params: &InitializeParams) -> LspResult<PathBuf> {
 struct Server {
     source_root: PathBuf,
     documents: BTreeMap<PathBuf, String>,
+    open_documents: BTreeSet<PathBuf>,
     analysis: ProjectAnalysis,
 }
 
@@ -96,6 +97,7 @@ impl Server {
         Ok(Self {
             source_root,
             documents,
+            open_documents: BTreeSet::new(),
             analysis,
         })
     }
@@ -167,14 +169,13 @@ impl Server {
         notification: Notification,
     ) -> LspResult<()> {
         match notification.method.as_str() {
-            "initialized" => {
-                self.publish_diagnostics(connection)?;
-            }
             "textDocument/didOpen" => {
                 let params: DidOpenTextDocumentParams =
                     serde_json::from_value(notification.params)?;
                 if let Some(path) = self.relative_path(&params.text_document.uri) {
-                    self.documents.insert(path, params.text_document.text);
+                    self.documents
+                        .insert(path.clone(), params.text_document.text);
+                    self.open_documents.insert(path);
                     self.reanalyze();
                     self.publish_diagnostics(connection)?;
                 }
@@ -185,7 +186,8 @@ impl Server {
                 if let (Some(path), Some(change)) = (
                     self.relative_path(&params.text_document.uri),
                     params.content_changes.into_iter().last(),
-                ) {
+                ) && self.open_documents.contains(&path)
+                {
                     self.documents.insert(path, change.text);
                     self.reanalyze();
                     self.publish_diagnostics(connection)?;
@@ -198,13 +200,15 @@ impl Server {
                     let absolute = self.source_root.join(&path);
                     match std::fs::read_to_string(absolute) {
                         Ok(source) => {
-                            self.documents.insert(path, source);
+                            self.documents.insert(path.clone(), source);
                         }
                         Err(_) => {
                             self.documents.remove(&path);
                         }
                     }
+                    self.open_documents.remove(&path);
                     self.reanalyze();
+                    self.publish_empty_diagnostics(connection, &path)?;
                     self.publish_diagnostics(connection)?;
                 }
             }
@@ -236,7 +240,10 @@ impl Server {
     }
 
     fn publish_diagnostics(&self, connection: &Connection) -> LspResult<()> {
-        for (path, source) in &self.documents {
+        for path in &self.open_documents {
+            let Some(source) = self.documents.get(path) else {
+                continue;
+            };
             let diagnostics = self
                 .analysis
                 .diagnostics
@@ -255,16 +262,30 @@ impl Server {
                     })
                 })
                 .collect();
-            let uri = Url::from_file_path(self.source_root.join(path))
-                .map_err(|_| "failed to create document URI")?;
-            let params = PublishDiagnosticsParams::new(uri, diagnostics, None);
-            connection
-                .sender
-                .send(Message::Notification(Notification::new(
-                    "textDocument/publishDiagnostics".to_string(),
-                    params,
-                )))?;
+            self.send_diagnostics(connection, path, diagnostics)?;
         }
+        Ok(())
+    }
+
+    fn publish_empty_diagnostics(&self, connection: &Connection, path: &Path) -> LspResult<()> {
+        self.send_diagnostics(connection, path, Vec::new())
+    }
+
+    fn send_diagnostics(
+        &self,
+        connection: &Connection,
+        path: &Path,
+        diagnostics: Vec<Diagnostic>,
+    ) -> LspResult<()> {
+        let uri = Url::from_file_path(self.source_root.join(path))
+            .map_err(|_| "failed to create document URI")?;
+        let params = PublishDiagnosticsParams::new(uri, diagnostics, None);
+        connection
+            .sender
+            .send(Message::Notification(Notification::new(
+                "textDocument/publishDiagnostics".to_string(),
+                params,
+            )))?;
         Ok(())
     }
 
@@ -772,6 +793,7 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::new(),
             documents,
         };
         let params = DocumentLinkParams {
@@ -796,6 +818,42 @@ mod tests {
         assert_eq!(
             links[1].range,
             Range::new(Position::new(1, 4), Position::new(1, 8))
+        );
+    }
+
+    #[test]
+    fn diagnostics_are_published_only_for_open_documents() {
+        let documents = BTreeMap::from([
+            (PathBuf::from("open.maki"), "[[missing-open]]".to_string()),
+            (
+                PathBuf::from("closed.maki"),
+                "[[missing-closed]]".to_string(),
+            ),
+        ]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
+            documents,
+        };
+        let (server_connection, client_connection) = Connection::memory();
+
+        server.publish_diagnostics(&server_connection).unwrap();
+
+        let messages = client_connection.receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(messages.len(), 1);
+        let Message::Notification(notification) = &messages[0] else {
+            panic!("expected a diagnostics notification");
+        };
+        let params: PublishDiagnosticsParams =
+            serde_json::from_value(notification.params.clone()).unwrap();
+        assert_eq!(params.uri.as_str(), "file:///workspace/open.maki");
+        assert_eq!(params.diagnostics.len(), 1);
+        assert_eq!(
+            params.diagnostics[0].code,
+            Some(lsp_types::NumberOrString::String(
+                "broken-note-link".to_string()
+            ))
         );
     }
 
@@ -843,6 +901,7 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::new(),
             documents,
         };
         let params = WorkspaceSymbolParams {
