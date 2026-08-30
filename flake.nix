@@ -221,6 +221,10 @@
           inherit (self.checks.${system}.pre-commit-check) shellHook enabledPackages;
         in
         {
+          stack-ci = pkgs.mkShell {
+            packages = [ pkgs.python3 ];
+          };
+
           default = pkgs.mkShell {
             inherit shellHook;
             buildInputs = enabledPackages;

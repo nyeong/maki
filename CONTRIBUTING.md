@@ -64,9 +64,12 @@ runs the three repository-owned validation gates. The grammar's
 exercised by both canonical and Zed queries.
 
 The entrypoint requires Bash 4 or newer, Git, Python 3.11 or newer, and Nix with
-flakes enabled. It deliberately ignores sibling checkouts, direnv state, and
-ambient Git credentials. Treat every selected revision as trusted code because
-the check evaluates its Nix expressions and runs its repository scripts.
+flakes enabled. The Forgejo workflow only requires Git and a flake-enabled Nix
+installation on the runner; it supplies Python through the lightweight
+`stack-ci` development shell. The script deliberately ignores sibling
+checkouts, direnv state, and ambient Git credentials. Treat every selected
+revision as trusted code because the check evaluates its Nix expressions and
+runs its repository scripts.
 The caller is responsible for choosing publicly reachable, trusted hosts; an
 HTTPS scheme alone does not prove that a host is public.
 

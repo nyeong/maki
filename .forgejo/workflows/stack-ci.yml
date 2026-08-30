@@ -43,6 +43,8 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+    env:
+      NIX_CONFIG: experimental-features = nix-command flakes
     defaults:
       run:
         shell: bash
@@ -56,7 +58,7 @@ jobs:
         run: |
           git --version
           nix --version
-          python3 --version
+          nix develop .#stack-ci --command python3 --version
 
       - name: Verify revision tuple
         env:
@@ -66,9 +68,8 @@ jobs:
           GRAMMAR_REVISION: ${{ inputs.grammar_revision }}
           EXTENSION_URL: ${{ inputs.extension_url }}
           EXTENSION_REVISION: ${{ inputs.extension_revision }}
-          NIX_CONFIG: experimental-features = nix-command flakes
         run: |
-          bash scripts/ci/check-stack.sh \
+          nix develop .#stack-ci --command bash scripts/ci/check-stack.sh \
             --maki-url "$MAKI_URL" \
             --maki-rev "$MAKI_REVISION" \
             --grammar-url "$GRAMMAR_URL" \
