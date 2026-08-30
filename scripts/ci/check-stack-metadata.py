@@ -9,6 +9,9 @@ from typing import Any
 
 
 REVISION = re.compile(r"^[0-9a-f]{40}$")
+FLAKE_URL_REVISION_PATTERN = (
+    r'"[^"\n]*[?&]rev=([0-9a-fA-F]{40})(?=&|")[^"\n]*"'
+)
 
 
 def nested_value(document: dict[str, Any], *path: str) -> Any:
@@ -21,27 +24,24 @@ def nested_value(document: dict[str, Any], *path: str) -> Any:
 
 
 def flake_revision(source: str, input_name: str) -> str | None:
-    if input_name == "maki":
-        match = re.search(
-            r'^\s*maki\.url\s*=\s*"[^"\n]*[?&]rev=([0-9a-fA-F]{40})(?=&|")[^"\n]*";',
-            source,
-            re.MULTILINE,
-        )
-    else:
+    scope = source
+    assignment = re.escape("maki.url")
+    if input_name != "maki":
         block = re.search(
             rf"^\s*{re.escape(input_name)}\s*=\s*\{{(?P<body>.*?)^\s*\}};",
             source,
             re.MULTILINE | re.DOTALL,
         )
-        match = (
-            re.search(
-                r'^\s*url\s*=\s*"[^"\n]*[?&]rev=([0-9a-fA-F]{40})(?=&|")[^"\n]*";',
-                block.group("body"),
-                re.MULTILINE,
-            )
-            if block
-            else None
-        )
+        if block is None:
+            return None
+        scope = block.group("body")
+        assignment = "url"
+
+    match = re.search(
+        rf"^\s*{assignment}\s*=\s*{FLAKE_URL_REVISION_PATTERN};",
+        scope,
+        re.MULTILINE,
+    )
     return match.group(1).lower() if match else None
 
 
@@ -59,6 +59,15 @@ def lock_input_node(lock: dict[str, Any], input_name: str) -> dict[str, Any]:
     return node
 
 
+def lock_input_node_or_empty(
+    lock: dict[str, Any], input_name: str
+) -> dict[str, Any]:
+    try:
+        return lock_input_node(lock, input_name)
+    except KeyError:
+        return {}
+
+
 def metadata_errors(
     extension_dir: Path, expected_maki: str, expected_grammar: str
 ) -> list[str]:
@@ -73,14 +82,8 @@ def metadata_errors(
     except (json.JSONDecodeError, tomllib.TOMLDecodeError):
         return ["maki-zed compatibility metadata is not valid JSON/TOML"]
 
-    try:
-        maki_node = lock_input_node(lock, "maki")
-    except KeyError:
-        maki_node = {}
-    try:
-        grammar_node = lock_input_node(lock, "tree-sitter-maki")
-    except KeyError:
-        grammar_node = {}
+    maki_node = lock_input_node_or_empty(lock, "maki")
+    grammar_node = lock_input_node_or_empty(lock, "tree-sitter-maki")
 
     flake_maki = flake_revision(flake_source, "maki")
     flake_grammar = flake_revision(flake_source, "tree-sitter-maki")

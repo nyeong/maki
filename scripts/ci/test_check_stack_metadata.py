@@ -25,6 +25,11 @@ class StackMetadataTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def metadata_errors(self) -> list[str]:
+        return CHECK_STACK_METADATA.metadata_errors(
+            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
+        )
+
     def write_metadata(
         self,
         *,
@@ -82,9 +87,7 @@ class StackMetadataTests(unittest.TestCase):
     def test_accepts_matching_manifest_and_lock(self) -> None:
         self.write_metadata()
 
-        errors = CHECK_STACK_METADATA.metadata_errors(
-            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
-        )
+        errors = self.metadata_errors()
 
         self.assertEqual(errors, [])
 
@@ -100,13 +103,14 @@ class StackMetadataTests(unittest.TestCase):
             declared_grammar=unexpected,
         )
 
-        errors = CHECK_STACK_METADATA.metadata_errors(
-            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
-        )
+        errors = self.metadata_errors()
 
         self.assertEqual(len(errors), 7)
         self.assertTrue(
-            all("mismatch: expected" in error and unexpected in error for error in errors)
+            all(
+                "mismatch: expected" in error and unexpected in error
+                for error in errors
+            )
         )
 
     def test_follows_root_input_node_names(self) -> None:
@@ -115,9 +119,7 @@ class StackMetadataTests(unittest.TestCase):
             grammar_node_name="tree-sitter-maki-renamed",
         )
 
-        errors = CHECK_STACK_METADATA.metadata_errors(
-            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
-        )
+        errors = self.metadata_errors()
 
         self.assertEqual(errors, [])
 
@@ -125,9 +127,7 @@ class StackMetadataTests(unittest.TestCase):
         unexpected = "3" * 40
         self.write_metadata(flake_maki=unexpected)
 
-        errors = CHECK_STACK_METADATA.metadata_errors(
-            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
-        )
+        errors = self.metadata_errors()
 
         self.assertEqual(
             errors,
@@ -140,9 +140,7 @@ class StackMetadataTests(unittest.TestCase):
     def test_rejects_revision_with_a_suffix(self) -> None:
         self.write_metadata(flake_maki=MAKI_REVISION + "BAD")
 
-        errors = CHECK_STACK_METADATA.metadata_errors(
-            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
-        )
+        errors = self.metadata_errors()
 
         self.assertEqual(errors, ["flake.nix Maki declared revision is missing"])
 
@@ -152,9 +150,7 @@ class StackMetadataTests(unittest.TestCase):
             "[grammars]\n", encoding="utf-8"
         )
 
-        errors = CHECK_STACK_METADATA.metadata_errors(
-            self.extension_dir, MAKI_REVISION, GRAMMAR_REVISION
-        )
+        errors = self.metadata_errors()
 
         self.assertIn("extension.toml grammar revision is missing", errors)
 
