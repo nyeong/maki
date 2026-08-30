@@ -27,6 +27,19 @@ contains it.
 `docs/maki-toml.maki`, `docs/web.maki`, and `docs/lsp.maki` describe the current
 configuration and runtime surfaces.
 
+## Deployment ownership
+
+This repository owns reusable deployment mechanisms, including the NixOS
+module and its checks. The repository that owns a deployment must provide the
+exact Maki revision, project inputs, host and target selection, credentials,
+and activation workflow.
+
+Do not add scripts or checks here that discover a maintainer checkout, default
+to maintainer-specific hosts or users, or locate or hard-code a specific
+deployment-owned flake. Reusable deployment tooling must receive every
+external input explicitly and remain usable by an unrelated contributor on a
+clean machine.
+
 ## Validation
 
 Run the canonical repository gate before submitting a pull request:
