@@ -156,6 +156,17 @@
                 touch $out
               '';
 
+          stack-ci-contract =
+            pkgs.runCommand "maki-stack-ci-contract"
+              {
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                bash ${source}/scripts/ci/test-check-stack.sh
+                PYTHONDONTWRITEBYTECODE=1 python3 ${source}/scripts/ci/test_check_stack_metadata.py
+                touch $out
+              '';
+
           nixos-module-eval = pkgs.runCommand "maki-nixos-module-eval" { } ''
             docs_exec_start=${lib.escapeShellArg docsExecStart}
             case "$docs_exec_start" in
@@ -210,6 +221,10 @@
           inherit (self.checks.${system}.pre-commit-check) shellHook enabledPackages;
         in
         {
+          stack-ci = pkgs.mkShell {
+            packages = [ pkgs.python3 ];
+          };
+
           default = pkgs.mkShell {
             inherit shellHook;
             buildInputs = enabledPackages;

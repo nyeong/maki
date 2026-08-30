@@ -1,0 +1,78 @@
+name: Revision tuple CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      maki_url:
+        description: Credential-free HTTPS Git URL for Maki
+        required: true
+        type: string
+        default: https://git.eska.nyeong.me/nyeong/maki.git
+      maki_revision:
+        description: Full 40-hex Maki commit
+        required: true
+        type: string
+      grammar_url:
+        description: Credential-free HTTPS Git URL for tree-sitter-maki
+        required: true
+        type: string
+        default: https://git.eska.nyeong.me/nyeong/tree-sitter-maki.git
+      grammar_revision:
+        description: Full 40-hex tree-sitter-maki commit
+        required: true
+        type: string
+      extension_url:
+        description: Credential-free HTTPS Git URL for maki-zed
+        required: true
+        type: string
+        default: https://git.eska.nyeong.me/nyeong/maki-zed.git
+      extension_revision:
+        description: Full 40-hex maki-zed commit
+        required: true
+        type: string
+
+concurrency:
+  group: revision-tuple-${{ inputs.maki_revision }}-${{ inputs.grammar_revision }}-${{ inputs.extension_revision }}
+  cancel-in-progress: true
+
+jobs:
+  stack:
+    name: Verify revision tuple
+    runs-on:
+      - self-hosted
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      NIX_CONFIG: experimental-features = nix-command flakes
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout integration entrypoint
+        uses: https://code.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Show tool versions
+        run: |
+          git --version
+          nix --version
+          nix develop .#stack-ci --command python3 --version
+
+      - name: Verify revision tuple
+        env:
+          MAKI_URL: ${{ inputs.maki_url }}
+          MAKI_REVISION: ${{ inputs.maki_revision }}
+          GRAMMAR_URL: ${{ inputs.grammar_url }}
+          GRAMMAR_REVISION: ${{ inputs.grammar_revision }}
+          EXTENSION_URL: ${{ inputs.extension_url }}
+          EXTENSION_REVISION: ${{ inputs.extension_revision }}
+        run: |
+          nix develop .#stack-ci --command bash scripts/ci/check-stack.sh \
+            --maki-url "$MAKI_URL" \
+            --maki-rev "$MAKI_REVISION" \
+            --grammar-url "$GRAMMAR_URL" \
+            --grammar-rev "$GRAMMAR_REVISION" \
+            --extension-url "$EXTENSION_URL" \
+            --extension-rev "$EXTENSION_REVISION"
