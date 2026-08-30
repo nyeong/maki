@@ -77,7 +77,9 @@ Sibling revisions that expose a `#verify` package run their repository-owned
 Cargo and query gates as cacheable Nix derivations. The remaining Maki docs and
 LSP integration gates reuse the selected Maki package's canonical binary.
 Older tuples without that interface continue to use their legacy verification
-scripts. Every major stage logs its elapsed time. Binary-cache endpoints,
+scripts. Tree-sitter parser libraries use the temporary checkout root instead
+of a shared runner cache, so an interrupted parse cannot poison a later run.
+Every major stage logs its elapsed time. Binary-cache endpoints,
 credentials, and trust policy belong to the runner environment and are not
 configured by this public workflow.
 

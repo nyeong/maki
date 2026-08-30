@@ -285,6 +285,7 @@ git_flake_url() {
 maki_dir="${checkout_root}/maki"
 grammar_dir="${checkout_root}/tree-sitter-maki"
 extension_dir="${checkout_root}/maki-zed"
+tree_sitter_cache_home="${checkout_root}/tree-sitter-cache"
 overall_started=$SECONDS
 
 run_stage "checkout Maki" \
@@ -363,7 +364,8 @@ cached_grammar_repository_gate() {
 grammar_maki_docs_gate() (
   cd "$grammar_dir"
   nix develop --no-write-lock-file "${grammar_input}#default" \
-    -c tree-sitter parse --quiet \
+    -c bash "${script_dir}/check-stack-tree-sitter.sh" \
+      "$tree_sitter_cache_home" \
       "${maki_dir}/docs"/*.maki \
       "${maki_dir}/docs"/milestones/*.maki
 )
