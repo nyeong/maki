@@ -84,6 +84,23 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
+run_stage() {
+  local label="$1"
+  local started status
+  shift
+
+  started=$SECONDS
+  printf 'check-stack: START %s\n' "$label"
+  if "$@"; then
+    printf 'check-stack: PASS  %s (%ss)\n' "$label" "$((SECONDS - started))"
+  else
+    status=$?
+    printf 'check-stack: FAIL  %s (%ss, exit %s)\n' \
+      "$label" "$((SECONDS - started))" "$status" >&2
+    return "$status"
+  fi
+}
+
 maki_url=
 maki_rev=
 grammar_url=
@@ -268,10 +285,14 @@ git_flake_url() {
 maki_dir="${checkout_root}/maki"
 grammar_dir="${checkout_root}/tree-sitter-maki"
 extension_dir="${checkout_root}/maki-zed"
+overall_started=$SECONDS
 
-checkout_revision "Maki" "$maki_url" "$maki_rev" "$maki_dir"
-checkout_revision "tree-sitter-maki" "$grammar_url" "$grammar_rev" "$grammar_dir"
-checkout_revision "maki-zed" "$extension_url" "$extension_rev" "$extension_dir"
+run_stage "checkout Maki" \
+  checkout_revision "Maki" "$maki_url" "$maki_rev" "$maki_dir"
+run_stage "checkout tree-sitter-maki" \
+  checkout_revision "tree-sitter-maki" "$grammar_url" "$grammar_rev" "$grammar_dir"
+run_stage "checkout maki-zed" \
+  checkout_revision "maki-zed" "$extension_url" "$extension_rev" "$extension_dir"
 
 assert_file "Maki" "${maki_dir}/scripts/ci/check-maki.sh"
 assert_file "tree-sitter-maki" "${grammar_dir}/scripts/verify.sh"
@@ -279,65 +300,134 @@ assert_file "tree-sitter-maki" "${grammar_dir}/test/fixtures/stable.maki"
 assert_file "maki-zed" "${extension_dir}/scripts/verify.sh"
 assert_file "maki-zed" "${extension_dir}/scripts/update-tree-sitter-queries.py"
 
-PYTHONDONTWRITEBYTECODE=1 python3 \
-  "${script_dir}/check-stack-metadata.py" \
-  "$extension_dir" "$maki_rev" "$grammar_rev"
+run_stage "validate revision metadata" \
+  env PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${script_dir}/check-stack-metadata.py" \
+    "$extension_dir" "$maki_rev" "$grammar_rev"
 
-PYTHONDONTWRITEBYTECODE=1 python3 \
-  "${extension_dir}/scripts/update-tree-sitter-queries.py" \
-  --check \
-  --target-dir "$extension_dir" \
-  --source-dir "$grammar_dir" \
-  --revision "$grammar_rev"
+run_stage "validate generated Zed queries" \
+  env PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${extension_dir}/scripts/update-tree-sitter-queries.py" \
+    --check \
+    --target-dir "$extension_dir" \
+    --source-dir "$grammar_dir" \
+    --revision "$grammar_rev"
 
 maki_input="$(git_flake_url "$maki_dir" "$maki_rev")"
 grammar_input="$(git_flake_url "$grammar_dir" "$grammar_rev")"
+extension_input="$(git_flake_url "$extension_dir" "$extension_rev")"
 shared_fixture="${grammar_dir}/test/fixtures/stable.maki"
 shared_output="${checkout_root}/stable.html"
+maki_package=
+extension_nix_options=(
+  --no-write-lock-file
+  --override-input maki "$maki_input"
+  --override-input tree-sitter-maki "$grammar_input"
+)
+extension_environment=(
+  MAKI_ROOT="$maki_dir"
+  TREE_SITTER_MAKI_DIR="$grammar_dir"
+  TREE_SITTER_MAKI_PINNED_DIR="$grammar_dir"
+  TREE_SITTER_MAKI_PINNED_REV="$grammar_rev"
+)
 
-printf 'Running Maki repository gate\n'
-(
+maki_repository_gate() (
   cd "$maki_dir"
   bash scripts/ci/check-maki.sh
 )
-printf 'Building the shared syntax fixture with Maki\n'
-nix run --no-write-lock-file "${maki_input}#default" -- build "$shared_fixture" >"$shared_output"
-grep -qi '<!doctype html>' "$shared_output" \
-  || die "Maki did not render the shared syntax fixture as HTML"
-assert_clean_checkout "Maki" "$maki_dir"
 
-printf 'Running tree-sitter-maki repository gate\n'
-(
+resolve_maki_package() {
+  maki_package="$(nix build --no-link --print-out-paths "${maki_input}#default")"
+  [[ "$maki_package" != *$'\n'* ]] \
+    || die "Maki default package produced more than one output"
+  [[ -x "${maki_package}/bin/maki" ]] \
+    || die "Maki default package does not contain an executable bin/maki"
+}
+
+build_shared_fixture() {
+  "${maki_package}/bin/maki" build "$shared_fixture" >"$shared_output"
+  grep -qi '<!doctype html>' "$shared_output" \
+    || die "Maki did not render the shared syntax fixture as HTML"
+}
+
+legacy_grammar_repository_gate() (
   cd "$grammar_dir"
   MAKI_DOCS_DIR="${maki_dir}/docs" \
     nix develop --no-write-lock-file -c ./scripts/verify.sh
 )
-assert_clean_checkout "tree-sitter-maki" "$grammar_dir"
 
-printf 'Running maki-zed flake checks against the selected tuple\n'
-(
-  cd "$extension_dir"
-  nix flake check \
-    --no-write-lock-file \
-    --override-input maki "$maki_input" \
-    --override-input tree-sitter-maki "$grammar_input"
+cached_grammar_repository_gate() {
+  nix build --no-link --no-write-lock-file "${grammar_input}#verify"
+}
+
+grammar_maki_docs_gate() (
+  cd "$grammar_dir"
+  nix develop --no-write-lock-file "${grammar_input}#default" \
+    -c tree-sitter parse --quiet \
+      "${maki_dir}/docs"/*.maki \
+      "${maki_dir}/docs"/milestones/*.maki
 )
-printf 'Running maki-zed extension, query, and LSP verification\n'
-(
+
+legacy_extension_flake_checks() (
+  cd "$extension_dir"
+  nix flake check "${extension_nix_options[@]}"
+)
+
+legacy_extension_repository_gate() (
   cd "$extension_dir"
   nix develop \
-    --no-write-lock-file \
-    --override-input maki "$maki_input" \
-    --override-input tree-sitter-maki "$grammar_input" \
+    "${extension_nix_options[@]}" \
     -c env \
-      MAKI_ROOT="$maki_dir" \
-      TREE_SITTER_MAKI_DIR="$grammar_dir" \
-      TREE_SITTER_MAKI_PINNED_DIR="$grammar_dir" \
-      TREE_SITTER_MAKI_PINNED_REV="$grammar_rev" \
+      "${extension_environment[@]}" \
       ./scripts/verify.sh
 )
+
+cached_extension_repository_gate() {
+  nix build \
+    --no-link \
+    "${extension_nix_options[@]}" \
+    "${extension_input}#verify"
+}
+
+extension_stack_gate() (
+  cd "$extension_dir"
+  nix develop \
+    "${extension_nix_options[@]}" \
+    "${extension_input}#stack-ci" \
+    -c env \
+      MAKI_BIN="${maki_package}/bin/maki" \
+      "${extension_environment[@]}" \
+      ./scripts/verify-stack.sh
+)
+
+run_stage "Maki repository gate" maki_repository_gate
+run_stage "resolve canonical Maki package" resolve_maki_package
+run_stage "render shared syntax fixture" build_shared_fixture
+assert_clean_checkout "Maki" "$maki_dir"
+
+if [[ -f "${grammar_dir}/nix/verify.nix" ]]; then
+  run_stage "tree-sitter-maki cached repository gate" \
+    cached_grammar_repository_gate
+  run_stage "tree-sitter-maki Maki docs integration" grammar_maki_docs_gate
+else
+  run_stage "tree-sitter-maki legacy repository gate" \
+    legacy_grammar_repository_gate
+fi
+assert_clean_checkout "tree-sitter-maki" "$grammar_dir"
+
+if [[ -f "${extension_dir}/scripts/verify-stack.sh" ]]; then
+  run_stage "maki-zed cached repository gate" \
+    cached_extension_repository_gate
+  run_stage "maki-zed canonical Maki LSP integration" extension_stack_gate
+else
+  run_stage "maki-zed legacy flake checks" legacy_extension_flake_checks
+  run_stage "maki-zed legacy extension, query, and LSP gate" \
+    legacy_extension_repository_gate
+fi
 assert_clean_checkout "maki-zed" "$extension_dir"
 
+printf 'check-stack: completed all stages in %ss\n' \
+  "$((SECONDS - overall_started))"
 printf 'Verified revision tuple:\n'
 printf '  maki              %s\n' "$maki_rev"
 printf '  tree-sitter-maki  %s\n' "$grammar_rev"

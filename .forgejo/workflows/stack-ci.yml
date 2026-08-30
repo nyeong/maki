@@ -31,6 +31,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: revision-tuple-${{ inputs.maki_revision }}-${{ inputs.grammar_revision }}-${{ inputs.extension_revision }}
+  cancel-in-progress: true
+
 jobs:
   stack:
     name: Verify revision tuple

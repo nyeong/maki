@@ -70,6 +70,14 @@ the check evaluates its Nix expressions and runs its repository scripts.
 The caller is responsible for choosing publicly reachable, trusted hosts; an
 HTTPS scheme alone does not prove that a host is public.
 
+Sibling revisions that expose a `#verify` package run their repository-owned
+Cargo and query gates as cacheable Nix derivations. The remaining Maki docs and
+LSP integration gates reuse the selected Maki package's canonical binary.
+Older tuples without that interface continue to use their legacy verification
+scripts. Every major stage logs its elapsed time. Binary-cache endpoints,
+credentials, and trust policy belong to the runner environment and are not
+configured by this public workflow.
+
 This known-compatible tuple is a complete example:
 
 ```bash
@@ -83,7 +91,8 @@ bash scripts/ci/check-stack.sh \
 ```
 
 The same six values are inputs to the `Revision tuple CI` manual Forgejo
-workflow. A fetch fails unless each commit is reachable from its public
+workflow. A newer dispatch for the same three revisions cancels an in-progress
+duplicate. A fetch fails unless each commit is reachable from its public
 repository. Use `--keep-checkouts` to preserve the temporary directory after a
 failure, or `--validate-only` to check input shape without fetching or executing
 the selected code.
