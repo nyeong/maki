@@ -593,6 +593,8 @@ Task with property date.
     let year_body = String::from_utf8(year.body().to_vec()).unwrap();
     let month = handle_request(&state, &http::Request::get("/@/dates/2026-08")).unwrap();
     let month_body = String::from_utf8(month.body().to_vec()).unwrap();
+    let week = handle_request(&state, &http::Request::get("/@/dates/2026-W34")).unwrap();
+    let week_body = String::from_utf8(week.body().to_vec()).unwrap();
     assert_eq!(index.status(), http::StatusCode::Ok);
     assert!(index_body.contains("<title>Dates</title>"));
     assert!(index_body.contains("<a href=\"/@/dates/2026\">2026</a>"));
@@ -605,7 +607,7 @@ Task with property date.
     assert!(year_body.contains("<a href=\"/@/dates\">↑ Dates</a>"));
     assert!(year_body.contains("<h3 id=\"Months\">Months</h3>"));
     assert!(year_body.contains("<h3 id=\"Weeks\">Weeks</h3>"));
-    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+    assert!(year_body.contains("<a href=\"/@/dates/2026-08\">2026-08</a><span>3</span>"));
 
     assert_eq!(month.status(), http::StatusCode::Ok);
     assert!(month_body.contains("<title>Month 2026-08</title>"));
@@ -615,23 +617,35 @@ Task with property date.
     assert!(month_body.contains("<h3 id=\"Backlinks\">Backlinks</h3>"));
     assert!(month_body.contains("<h3 id=\"Days\">Days</h3>"));
     assert!(month_body.contains("<h3 id=\"Weeks\">Weeks</h3>"));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-08-17\">2026-08-17 Mon</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-15\">2026-08-15 Sat</a>"));
+    assert!(month_body.contains("<a href=\"/@/dates/2026-08-16\">2026-08-16 Sun</a>"));
+    assert!(!month_body.contains("href=\"/@/dates/2026-08-17\""));
     assert!(!month_body.contains("href=\"/@/dates/2026-08-18\""));
-    assert!(month_body.contains("<a href=\"/@/dates/2026-08-19\">2026-08-19 Wed</a>"));
+    assert!(!month_body.contains("href=\"/@/dates/2026-08-19\""));
     assert!(!month_body.contains("<h3 id=\"Pages\">Pages</h3>"));
     assert!(!month_body.contains("href=\"/home#date-inline-home-maki-2\""));
     assert!(!month_body.contains("href=\"/home#date-property-home-maki-2\""));
     assert_text_order(
         &month_body,
         &[
-            "href=\"/@/dates/2026-08-17\"",
-            "href=\"/@/dates/2026-08-19\"",
+            "href=\"/@/dates/2026-08-15\"",
+            "href=\"/@/dates/2026-08-16\"",
             "href=\"/@/dates/2026-08-20\"",
         ],
     );
 
+    assert_eq!(week.status(), http::StatusCode::Ok);
+    assert!(week_body.contains("<a href=\"/@/dates/2026-08-20\">2026-08-20 Thu</a>"));
+    assert!(!week_body.contains("href=\"/@/dates/2026-08-17\""));
+    assert!(!week_body.contains("href=\"/@/dates/2026-08-18\""));
+    assert!(!week_body.contains("href=\"/@/dates/2026-08-19\""));
+
+    let range_start = handle_request(&state, &http::Request::get("/@/dates/2026-08-17")).unwrap();
+    let range_start_body = String::from_utf8(range_start.body().to_vec()).unwrap();
     let detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
     let detail_body = String::from_utf8(detail.body().to_vec()).unwrap();
+    let range_end = handle_request(&state, &http::Request::get("/@/dates/2026-08-19")).unwrap();
+    let range_end_body = String::from_utf8(range_end.body().to_vec()).unwrap();
     let empty_detail = handle_request(&state, &http::Request::get("/@/dates/2026-08-21")).unwrap();
     let empty_detail_body = String::from_utf8(empty_detail.body().to_vec()).unwrap();
     let property_detail =
@@ -640,6 +654,9 @@ Task with property date.
     let note = handle_request(&state, &http::Request::get("/home")).unwrap();
     let note_body = String::from_utf8(note.body().to_vec()).unwrap();
     fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(range_start.status(), http::StatusCode::Ok);
+    assert_range_only_day(&range_start_body, "range start");
 
     assert_eq!(detail.status(), http::StatusCode::Ok);
     assert!(detail_body.contains("<title>Date 2026-08-18 Tue</title>"));
@@ -651,21 +668,94 @@ Task with property date.
     assert!(detail_body.contains("<a href=\"/home#date-inline-home-maki-2\">Home</a>"));
     assert!(detail_body.contains("date, range, inline"));
     assert!(detail_body.contains("Plan &lt;2026-08-16&gt; and [2026-08-17]--[2026-08-19]."));
+    assert_range_only_day(&detail_body, "range");
+
+    assert_eq!(range_end.status(), http::StatusCode::Ok);
+    assert_range_only_day(&range_end_body, "range end");
 
     assert_eq!(empty_detail.status(), http::StatusCode::Ok);
     assert!(empty_detail_body.contains("<title>Date 2026-08-21 Fri</title>"));
     assert!(empty_detail_body.contains("No date markers."));
+    assert!(!empty_detail_body.contains("Containing Ranges"));
 
     assert_eq!(property_detail.status(), http::StatusCode::Ok);
     assert!(property_detail_body.contains("<a href=\"/home#date-property-home-maki-2\">Home</a>"));
     assert!(property_detail_body.contains("event, single, property:scheduled"));
     assert!(property_detail_body.contains("scheduled: &lt;2026-08-20 15:00&gt;"));
     assert!(property_detail_body.contains("Task with property date."));
+    assert!(!property_detail_body.contains("Containing Ranges"));
 
     assert_eq!(note.status(), http::StatusCode::Ok);
     assert!(note_body.contains("id=\"date-inline-home-maki-2\""));
     assert!(note_body.contains("<a class=\"maki-date-location maki-date-stamp maki-date-stamp-reference\" id=\"date-inline-home-maki-2\" href=\"/@/dates/2026-08-17#date-inline-home-maki-2\">[2026-08-17]</a>&ndash;<a class=\"maki-date-stamp maki-date-stamp-reference\" href=\"/@/dates/2026-08-19#date-inline-home-maki-2\">[2026-08-19]</a>"));
     assert!(note_body.contains("id=\"date-property-home-maki-2\""));
+}
+
+#[test]
+fn test_date_pages_separate_overlapping_single_and_ranges() {
+    let root = std::env::temp_dir().join(format!("maki-overlapping-dates-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        r#"--^ title: Home
+
+Exact [2026-08-18].
+
+Span [2026-08-17]--[2026-08-19].
+
+Point [2026-08-18]--[2026-08-18].
+
+Month [2026-08]."#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let day = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
+    let day_body = String::from_utf8(day.body().to_vec()).unwrap();
+    let month = handle_request(&state, &http::Request::get("/@/dates/2026-08")).unwrap();
+    let month_body = String::from_utf8(month.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(day.status(), http::StatusCode::Ok);
+    let backlinks_start = day_body
+        .find("<h3 id=\"Backlinks\">Backlinks</h3>")
+        .unwrap();
+    let periods_start = day_body
+        .find("<h3 id=\"Containing Periods\">Containing Periods</h3>")
+        .unwrap();
+    let ranges_start = day_body
+        .find("<h3 id=\"Containing Ranges\">Containing Ranges</h3>")
+        .unwrap();
+    assert!(backlinks_start < periods_start);
+    assert!(periods_start < ranges_start);
+    let backlinks = &day_body[backlinks_start..periods_start];
+    let periods = &day_body[periods_start..ranges_start];
+    let ranges = &day_body[ranges_start..];
+
+    assert!(backlinks.contains("#date-inline-home-maki-1"));
+    assert!(!backlinks.contains("#date-inline-home-maki-2"));
+    assert!(!backlinks.contains("#date-inline-home-maki-3"));
+    assert_eq!(backlinks.matches("date, single, inline").count(), 1);
+    assert!(!backlinks.contains("date, range, inline"));
+
+    assert!(periods.contains("<a href=\"/@/dates/2026-08\">2026-08</a>"));
+    assert!(!periods.contains("#date-inline-home-maki-1"));
+    assert!(!periods.contains("#date-inline-home-maki-2"));
+    assert!(!periods.contains("#date-inline-home-maki-3"));
+
+    assert!(!ranges.contains("#date-inline-home-maki-1"));
+    assert!(ranges.contains("#date-inline-home-maki-2"));
+    assert!(ranges.contains("#date-inline-home-maki-3"));
+    assert_eq!(ranges.matches("date, range, inline").count(), 2);
+    assert!(ranges.contains("maki-date-backlink-range-middle"));
+    assert!(ranges.contains("maki-date-backlink-range\""));
+
+    assert_eq!(month.status(), http::StatusCode::Ok);
+    assert!(
+        month_body.contains("<a href=\"/@/dates/2026-08-18\">2026-08-18 Tue</a><span>1</span>")
+    );
 }
 
 #[test]
@@ -841,6 +931,19 @@ fn assert_text_order(haystack: &str, needles: &[&str]) {
         }
         previous = Some(position);
     }
+}
+
+fn assert_range_only_day(body: &str, relation: &str) {
+    let relation_label = format!("date, {relation}, inline");
+    assert_text_order(
+        body,
+        &[
+            "<h3 id=\"Backlinks\">Backlinks</h3>",
+            "No date markers.",
+            "<h3 id=\"Containing Ranges\">Containing Ranges</h3>",
+            &relation_label,
+        ],
+    );
 }
 
 #[test]

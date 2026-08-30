@@ -57,7 +57,14 @@ Note identity와 route는 configured source root 기준의 extension 없는 rela
 - `/@/dates`: date index
 - `/@/dates/<period>`: year, month, ISO week 또는 day page
 
-Date page는 `[date]` reference와 `<date>` event occurrence의 backlink를 표시한다.
+일(day) page는 날짜 occurrence의 관계를 구분해서 표시한다.
+
+- `Backlinks`: 해당 날짜를 정확히 지정한 `[date]` reference와 `<date>` event
+- `Containing Periods`: 월·ISO week marker가 해당 날짜를 포함하는 관계
+- `Containing Ranges`: date range가 시작·중간·끝 또는 단일일로 해당 날짜를 포함하는 관계
+
+연 page의 `Months` count와 월·주 page의 `Days` 목록에서 date occurrence를 집계할 때
+range-only 날짜는 직접 언급으로 세지 않는다.
 지원 marker와 range 형식은 [[maki-syntax#Date Marker]]를 따른다.
 
 = Search와 JSON
