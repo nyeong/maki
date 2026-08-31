@@ -646,19 +646,10 @@ a.maki-external-link-has-favicon::after {
   text-decoration: underline;
 }
 
-.maki-reference-use:focus-visible,
-.maki-reference-backlink:focus-visible {
+.maki-reference-use:focus-visible {
   border-radius: 3px;
   outline: 2px solid #c9dafc;
   outline-offset: 2px;
-}
-
-.maki-reference-target-location:focus,
-.maki-reference-target-location:target {
-  border-radius: 3px;
-  outline: 2px solid #c9dafc;
-  outline-offset: 2px;
-  scroll-margin-block-start: 1.5rem;
 }
 
 .maki-reference-note-marker {
@@ -697,35 +688,6 @@ a.maki-external-link-has-favicon::after {
   border-radius: 3px;
   outline: 2px solid #c9dafc;
   outline-offset: 3px;
-}
-
-.maki-reference-backlinks {
-  display: inline-flex;
-  max-width: 100%;
-  flex-wrap: wrap;
-  gap: 0.2rem;
-  margin-inline-start: 0.55em;
-  vertical-align: baseline;
-}
-
-.maki-reference-backlink,
-.maki-reference-backlink:visited {
-  display: inline-flex;
-  min-width: 1.6rem;
-  min-height: 1.6rem;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1;
-  text-decoration: none;
-}
-
-.maki-reference-backlink:hover {
-  border-color: var(--link);
-  color: var(--link);
 }
 
 .broken-link,

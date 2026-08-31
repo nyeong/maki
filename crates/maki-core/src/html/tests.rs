@@ -58,7 +58,7 @@ fn test_render_heading_supports_inline_links() {
     let html = render_document(&parsed.document);
 
     assert!(html.contains(
-        "<h3 id=\"[home.maki][]\"><span class=\"maki-reference-target-location\" id=\"maki-reference-use-1-1\" tabindex=\"-1\"><a href=\"/home\">home.maki</a></span><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#maki-reference-note-1\" role=\"doc-noteref\" aria-label=\"Reference note 1\"><bdi>[1]</bdi></a></sup></h3>"
+        "<h3 id=\"[home.maki][]\"><a href=\"/home\">home.maki</a><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#maki-reference-note-1\" role=\"doc-noteref\" aria-label=\"Reference note 1\"><bdi>[1]</bdi></a></sup></h3>"
     ));
 }
 
@@ -152,7 +152,7 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
     let html = render_document(&parsed.document);
 
     assert!(html.contains(
-            "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><span class=\"maki-reference-target-location\" id=\"maki-reference-use-1-1\" tabindex=\"-1\"><a href=\"/bob\">Bob</a></span><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#maki-reference-note-1\" role=\"doc-noteref\" aria-label=\"Reference note 1\"><bdi>[1]</bdi></a></sup></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
+            "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><a href=\"/bob\">Bob</a><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#maki-reference-note-1\" role=\"doc-noteref\" aria-label=\"Reference note 1\"><bdi>[1]</bdi></a></sup></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
         ));
 }
 
@@ -180,11 +180,13 @@ fn render_stable_inline_and_footnote_syntax() {
         "<a class=\"external-link\" href=\"http://example.com/docs\">example.com/docs</a>"
     ));
     assert!(html.contains(
-        "<sup class=\"maki-reference-marker\"><a class=\"maki-reference-use maki-reference-footnote maki-reference-footnote-named\" id=\"maki-reference-use-1-1\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[note]</bdi></a></sup>"
+        "<sup class=\"maki-reference-marker\"><a class=\"maki-reference-use maki-reference-footnote maki-reference-footnote-named\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[note]</bdi></a></sup>"
     ));
     assert!(html.contains(
-        "<section class=\"maki-reference-notes\" aria-labelledby=\"maki-reference-notes-title\"><h2 class=\"maki-reference-notes-title\" id=\"maki-reference-notes-title\">Notes</h2><ol><li id=\"maki-reference-note-1\" tabindex=\"-1\"><span class=\"maki-reference-note-marker\"><bdi>[1]</bdi></span><span class=\"maki-reference-note-body\">Footnote <strong>body</strong>.</span><span class=\"maki-reference-backlinks\"><a class=\"maki-reference-backlink\" href=\"#maki-reference-use-1-1\" aria-label=\"Back to reference 1, occurrence 1\">&#8617;</a></span></li></ol></section>"
+        "<section class=\"maki-reference-notes\" aria-labelledby=\"maki-reference-notes-title\"><h2 class=\"maki-reference-notes-title\" id=\"maki-reference-notes-title\">Notes</h2><ol><li id=\"maki-reference-note-1\" tabindex=\"-1\"><span class=\"maki-reference-note-marker\"><bdi>[1]</bdi></span><span class=\"maki-reference-note-body\">Footnote <strong>body</strong>.</span></li></ol></section>"
     ));
+    assert!(!html.contains("maki-reference-backlink"));
+    assert!(!html.contains("&#8617;"));
     assert!(!html.contains("[note]:"));
 }
 
@@ -202,11 +204,11 @@ fn reference_value_kind_selects_target_or_term_presentation() {
     let html = render_document(&parsed.document);
 
     assert!(html.contains(
-        "<span class=\"maki-reference-target-location\" id=\"maki-reference-use-1-1\" tabindex=\"-1\"><a class=\"external-link\" href=\"https://example.com/search?q=maki\">site</a></span>"
+        "<a class=\"external-link\" href=\"https://example.com/search?q=maki\">site</a>"
     ));
     assert!(html.contains("href=\"/notes/path\">문서</a>"));
     assert!(html.contains(
-        "<a class=\"maki-reference-use maki-reference-term\" id=\"maki-reference-use-3-1\" href=\"#maki-reference-note-3\">description</a>"
+        "<a class=\"maki-reference-use maki-reference-term\" href=\"#maki-reference-note-3\">description</a>"
     ));
     assert!(
         html.contains("<a class=\"external-link\" href=\"https://direct.example/path\">direct</a>")
@@ -229,20 +231,15 @@ fn prose_term_and_footnote_presentations_share_one_note() {
     let html = render_document(&parsed.document);
 
     assert!(html.contains(
-        "<a class=\"maki-reference-use maki-reference-term\" id=\"maki-reference-use-1-1\" href=\"#maki-reference-note-1\">term</a>"
+        "<a class=\"maki-reference-use maki-reference-term\" href=\"#maki-reference-note-1\">term</a>"
     ));
-    assert!(html.contains(
-        "id=\"maki-reference-use-1-2\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[label]</bdi>"
-    ));
-    assert!(html.contains(
-        "id=\"maki-reference-use-1-3\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[1]</bdi>"
-    ));
-    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 1);
-    assert_eq!(
-        html.matches("aria-label=\"Back to reference 1, occurrence ")
-            .count(),
-        3
+    assert!(
+        html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[label]</bdi>")
     );
+    assert!(html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[1]</bdi>"));
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 1);
+    assert_eq!(html.matches("href=\"#maki-reference-note-1\"").count(), 3);
+    assert!(!html.contains("maki-reference-backlink"));
 }
 
 #[test]
@@ -263,7 +260,7 @@ fn date_targets_link_when_they_have_one_destination() {
         "id=\"date-inline-index-maki-2\" href=\"/@/dates/2026-09-01#date-inline-index-maki-2\">[2026-09-01]</a>&ndash;"
     ));
     assert!(html.contains(
-        "<a class=\"maki-reference-use maki-reference-term\" id=\"maki-reference-use-2-2\" href=\"#maki-reference-note-2\">일정</a>"
+        "<a class=\"maki-reference-use maki-reference-term\" href=\"#maki-reference-note-2\">일정</a>"
     ));
     assert_eq!(html.matches("id=\"date-inline-index-maki-").count(), 2);
     assert!(html.contains("<span class=\"maki-reference-note-body\">[2026-09-01]</span>"));
@@ -294,7 +291,7 @@ fn direct_links_keep_raw_local_hrefs_and_do_not_activate_unsafe_schemes() {
 }
 
 #[test]
-fn named_and_numbered_footnotes_share_definition_ordinal_and_backlinks() {
+fn named_and_numbered_footnotes_share_definition_ordinal_without_backlinks() {
     let parsed = parser::parse(
         r#"[^ source ][] [^ origin ][ source ] [^][ source ]
 
@@ -303,21 +300,17 @@ fn named_and_numbered_footnotes_share_definition_ordinal_and_backlinks() {
 
     let html = render_document(&parsed.document);
 
-    assert!(html.contains(
-        "id=\"maki-reference-use-1-1\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[source]</bdi>"
-    ));
-    assert!(html.contains(
-        "id=\"maki-reference-use-1-2\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[origin]</bdi>"
-    ));
-    assert!(html.contains(
-        "id=\"maki-reference-use-1-3\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[1]</bdi>"
-    ));
-    assert!(html.contains("<span class=\"maki-reference-note-marker\"><bdi>[1]</bdi></span>"));
-    assert_eq!(
-        html.matches("aria-label=\"Back to reference 1, occurrence ")
-            .count(),
-        3
+    assert!(
+        html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[source]</bdi>")
     );
+    assert!(
+        html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[origin]</bdi>")
+    );
+    assert!(html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[1]</bdi>"));
+    assert!(html.contains("<span class=\"maki-reference-note-marker\"><bdi>[1]</bdi></span>"));
+    assert_eq!(html.matches("href=\"#maki-reference-note-1\"").count(), 3);
+    assert!(!html.contains("maki-reference-backlink"));
+    assert!(!html.contains("id=\"maki-reference-use-"));
     assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 1);
 }
 
@@ -334,11 +327,7 @@ fn reference_note_labels_and_values_are_html_escaped() {
     assert!(html.contains("<bdi>[odd &amp; &quot;&lt;key&gt;&quot;]</bdi>"));
     assert!(html.contains("<bdi>[visible &amp; &quot;&lt;title&gt;&quot;]</bdi>"));
     assert!(html.contains("Value with &lt;unsafe&gt; &amp; &quot;quotes&quot;"));
-    assert_eq!(
-        html.matches("aria-label=\"Back to reference 1, occurrence ")
-            .count(),
-        2
-    );
+    assert!(!html.contains("maki-reference-backlink"));
 }
 
 #[test]
@@ -368,12 +357,12 @@ fn nested_reference_notes_use_the_nested_document_definition() {
 }
 
 #[test]
-fn reference_note_bodies_contribute_late_backlinks_before_notes_are_emitted() {
+fn reference_note_bodies_discover_late_notes_without_backlinks() {
     let parsed = parser::parse(
-        r#"[^first][] [^second][]
+        r#"[^first][]
 
-[first]: First note.
-[second]: Second note cites [first][]."#,
+[first]: First note cites [second][].
+[second]: Second note."#,
     );
 
     let html = render_document(&parsed.document);
@@ -381,21 +370,13 @@ fn reference_note_bodies_contribute_late_backlinks_before_notes_are_emitted() {
     let second_note_start = html.find("<li id=\"maki-reference-note-2\"").unwrap();
     let first_note = &html[first_note_start..second_note_start];
 
+    assert!(first_note.contains("First note cites"), "{first_note}");
     assert!(
-        first_note.contains("href=\"#maki-reference-use-1-1\""),
+        first_note.contains("href=\"#maki-reference-note-2\""),
         "{first_note}"
     );
-    assert!(
-        first_note.contains("href=\"#maki-reference-use-1-2\""),
-        "{first_note}"
-    );
-    assert_eq!(
-        first_note
-            .matches("aria-label=\"Back to reference 1, occurrence ")
-            .count(),
-        2,
-        "{first_note}"
-    );
+    assert!(!html.contains("maki-reference-backlink"));
+    assert!(!html.contains("id=\"maki-reference-use-"));
 }
 
 #[test]
@@ -412,21 +393,14 @@ fn reference_note_body_discovery_handles_cycles_once_per_definition() {
     assert_eq!(html.matches("tabindex=\"-1\"").count(), 2);
     assert!(html.contains("First cites"));
     assert!(html.contains("Second cites"));
-    assert!(html.contains("id=\"maki-reference-use-1-2\""));
-    assert_eq!(
-        html.matches("aria-label=\"Back to reference 1, occurrence ")
-            .count(),
-        2
-    );
-    assert_eq!(
-        html.matches("aria-label=\"Back to reference 2, occurrence ")
-            .count(),
-        1
-    );
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 2);
+    assert_eq!(html.matches("href=\"#maki-reference-note-1\"").count(), 2);
+    assert_eq!(html.matches("href=\"#maki-reference-note-2\"").count(), 1);
+    assert!(!html.contains("maki-reference-backlink"));
 }
 
 #[test]
-fn generated_reference_ids_avoid_all_authored_document_ids() {
+fn generated_note_ids_avoid_all_authored_document_ids() {
     let parsed = parser::parse(
         r#"--^ title: maki-reference-notes-title
 
@@ -449,10 +423,10 @@ Anchored block
     assert!(html.contains("<h2 id=\"maki-reference-use-1-1\""));
     assert!(html.contains("<h2 id=\"maki-reference-use-1-2\""));
     assert!(html.contains("id=\"maki-reference-note-1-2\""));
-    assert!(html.contains("id=\"maki-reference-use-1-1-2\""));
-    assert!(html.contains("id=\"maki-reference-use-1-2-2\""));
     assert!(html.contains("aria-labelledby=\"maki-reference-notes-title-2\""));
     assert!(html.contains("id=\"maki-reference-notes-title-2\""));
+    assert!(!html.contains("id=\"maki-reference-use-1-1-2\""));
+    assert!(!html.contains("id=\"maki-reference-use-1-2-2\""));
 
     let ids: Vec<_> = html
         .split(" id=\"")
@@ -480,18 +454,12 @@ fn external_link_favicon_css_uses_the_script_state_class() {
 }
 
 #[test]
-fn reference_css_keeps_fragment_focus_and_mobile_backlinks_usable() {
-    assert!(DEFAULT_CSS.contains(".maki-reference-target-location:target"));
+fn reference_css_keeps_notes_fragment_focus_without_backlink_styles() {
     assert!(DEFAULT_CSS.contains(".maki-reference-notes > ol > li:target"));
     assert!(DEFAULT_CSS.contains("list-style: none"));
-
-    let backlinks = DEFAULT_CSS
-        .split(".maki-reference-backlinks {")
-        .nth(1)
-        .and_then(|css| css.split('}').next())
-        .unwrap();
-    assert!(backlinks.contains("flex-wrap: wrap"));
-    assert!(backlinks.contains("max-width: 100%"));
+    assert!(DEFAULT_CSS.contains(".maki-reference-use:focus-visible"));
+    assert!(!DEFAULT_CSS.contains(".maki-reference-backlink"));
+    assert!(!DEFAULT_CSS.contains(".maki-reference-target-location"));
 }
 
 #[test]

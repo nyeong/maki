@@ -34,7 +34,6 @@ struct ReferenceNoteScope {
 struct ReferenceNote {
     key: String,
     id: String,
-    backlinks: Vec<String>,
     body_html: String,
 }
 
@@ -249,7 +248,7 @@ impl<'a> Renderer<'a> {
         self.reserve_document_ids(&parsed.document, false, false);
     }
 
-    fn register_reference_use(&mut self, key: &str) -> (usize, String, String) {
+    fn register_reference_use(&mut self, key: &str) -> (usize, String) {
         let note_index = if let Some(index) = self.reference_note_scope.indexes.get(key) {
             *index
         } else {
@@ -259,7 +258,6 @@ impl<'a> Renderer<'a> {
             self.reference_note_scope.notes.push(ReferenceNote {
                 key: key.to_string(),
                 id: note_id,
-                backlinks: Vec::new(),
                 body_html: String::new(),
             });
             self.reference_note_scope
@@ -268,25 +266,16 @@ impl<'a> Renderer<'a> {
             index
         };
         let note_number = note_index + 1;
-        let occurrence_number = self.reference_note_scope.notes[note_index].backlinks.len() + 1;
-        let use_id = self.allocate_rendered_id(&format!(
-            "maki-reference-use-{note_number}-{occurrence_number}"
-        ));
-        self.reference_note_scope.notes[note_index]
-            .backlinks
-            .push(use_id.clone());
         let note_id = self.reference_note_scope.notes[note_index].id.clone();
 
-        (note_number, note_id, use_id)
+        (note_number, note_id)
     }
 
     fn render_reference_term(&mut self, key: &str, title: &str) {
-        let (_, note_id, use_id) = self.register_reference_use(key);
+        let (_, note_id) = self.register_reference_use(key);
 
         self.html
-            .push_str("<a class=\"maki-reference-use maki-reference-term\" id=\"");
-        self.html.push_str(&use_id);
-        self.html.push_str("\" href=\"#");
+            .push_str("<a class=\"maki-reference-use maki-reference-term\" href=\"#");
         self.html.push_str(&note_id);
         self.html.push_str("\">");
         self.escape_html_into(title);
@@ -294,7 +283,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_footnote_reference(&mut self, key: &str, title: Option<&str>) {
-        let (note_number, note_id, use_id) = self.register_reference_use(key);
+        let (note_number, note_id) = self.register_reference_use(key);
         let (class_name, marker) = match title {
             Some(title) => ("maki-reference-footnote-named", title.to_string()),
             None => ("maki-reference-footnote-numbered", note_number.to_string()),
@@ -302,8 +291,6 @@ impl<'a> Renderer<'a> {
 
         self.html.push_str("<sup class=\"maki-reference-marker\"><a class=\"maki-reference-use maki-reference-footnote ");
         self.html.push_str(class_name);
-        self.html.push_str("\" id=\"");
-        self.html.push_str(&use_id);
         self.html.push_str("\" href=\"#");
         self.html.push_str(&note_id);
         self.html.push_str("\" role=\"doc-noteref\"><bdi>[");
@@ -316,14 +303,10 @@ impl<'a> Renderer<'a> {
         key: &str,
         render_target: impl FnOnce(&mut Self),
     ) {
-        let (note_number, note_id, use_id) = self.register_reference_use(key);
+        let (note_number, note_id) = self.register_reference_use(key);
         let marker = note_number.to_string();
-        self.html
-            .push_str("<span class=\"maki-reference-target-location\" id=\"");
-        self.html.push_str(&use_id);
-        self.html.push_str("\" tabindex=\"-1\">");
         render_target(self);
-        self.html.push_str("</span><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#");
+        self.html.push_str("<sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#");
         self.html.push_str(&note_id);
         self.html
             .push_str("\" role=\"doc-noteref\" aria-label=\"Reference note ");
@@ -991,7 +974,6 @@ impl<'a> Renderer<'a> {
             let note = &self.reference_note_scope.notes[note_index];
             let note_id = note.id.clone();
             let body_html = note.body_html.clone();
-            let backlinks = note.backlinks.clone();
             let note_number = note_index + 1;
 
             self.html.push_str("<li id=\"");
@@ -1002,20 +984,6 @@ impl<'a> Renderer<'a> {
             self.html
                 .push_str("]</bdi></span><span class=\"maki-reference-note-body\">");
             self.html.push_str(&body_html);
-            self.html
-                .push_str("</span><span class=\"maki-reference-backlinks\">");
-            for (occurrence_index, backlink) in backlinks.iter().enumerate() {
-                let accessible_label = format!(
-                    "Back to reference {note_number}, occurrence {}",
-                    occurrence_index + 1
-                );
-                self.html
-                    .push_str("<a class=\"maki-reference-backlink\" href=\"#");
-                self.html.push_str(backlink);
-                self.html.push_str("\" aria-label=\"");
-                self.escape_html_attr_into(&accessible_label);
-                self.html.push_str("\">&#8617;</a>");
-            }
             self.html.push_str("</span></li>");
         }
         self.html.push_str("</ol></section>");
