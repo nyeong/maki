@@ -45,8 +45,9 @@ impl<'a> Renderer<'a> {
         }
 
         if !navigation.ancestors().is_empty() {
-            self.html
-                .push_str("<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\"><ol>");
+            self.html.push_str(
+                "<nav class=\"maki-document-breadcrumb\" aria-label=\"Parent documents\"><span class=\"maki-document-navigation-label\">Parent documents</span><ol>",
+            );
             for (index, ancestor) in navigation.ancestors().iter().enumerate() {
                 self.html.push_str("<li>");
                 self.render_anchor(ancestor.path(), ancestor.title());
@@ -59,17 +60,13 @@ impl<'a> Renderer<'a> {
             }
             self.html.push_str("</ol></nav>");
         }
-        if !navigation.children().is_empty() {
+        if let Some(path) = navigation.subdocuments_path() {
             self.html
                 .push_str("<nav class=\"maki-document-navigation\" aria-label=\"Subdocuments\">");
             self.html
-                .push_str("<span class=\"maki-document-navigation-label\">Subdocuments</span><ul>");
-            for child in navigation.children() {
-                self.html.push_str("<li>");
-                self.render_anchor(child.path(), child.title());
-                self.html.push_str("</li>");
-            }
-            self.html.push_str("</ul></nav>");
+                .push_str("<a class=\"maki-document-navigation-label\" href=\"");
+            self.escape_html_attr_into(path);
+            self.html.push_str("\">Subdocuments</a></nav>");
         }
     }
 
@@ -117,7 +114,7 @@ impl<'a> Renderer<'a> {
         self.render_heading(1, title);
     }
 
-    fn render_anchor(&mut self, href: &str, title: &str) {
+    pub(in crate::html) fn render_anchor(&mut self, href: &str, title: &str) {
         self.html.push_str("<a");
         if maki::is_external_href(href) {
             self.html.push_str(" class=\"external-link\"");

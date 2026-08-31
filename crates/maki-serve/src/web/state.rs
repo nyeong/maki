@@ -71,6 +71,7 @@ pub(super) enum ResponseCacheKey {
     ProjectIndex,
     SearchIndex,
     NotePage(PathBuf),
+    SubdocumentsPage(PathBuf),
 }
 
 impl ResponseCacheKey {
@@ -86,6 +87,7 @@ impl ResponseCacheKey {
             Self::ProjectIndex => "project_index",
             Self::SearchIndex => "search_index",
             Self::NotePage(_) => "note",
+            Self::SubdocumentsPage(_) => "subdocuments",
         }
     }
 }

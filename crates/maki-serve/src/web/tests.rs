@@ -2,7 +2,9 @@ use super::MAX_REQUEST_HEAD_SIZE;
 use super::cache_warmer::{response_cache_warmup_keys, warm_response_cache};
 use super::error::Error;
 use super::live_reload::{LiveReload, LiveReloadError, LiveReloadEvent};
-use super::routes::{handle_request, inject_page_timing_footer, response_for_request};
+use super::routes::{
+    handle_request, inject_page_timing_footer, response_for_request, route_label_for_request,
+};
 use super::server::{handle_connection, read_request_head};
 use super::state::{AppState, ResponseCacheKey};
 use super::watch::{collect_watched_file_snapshot, collect_watched_project_snapshot};
@@ -466,6 +468,157 @@ fn test_response_cache_hit_miss_metrics_follow_requests() {
 }
 
 #[test]
+fn test_subdocuments_pages_are_distinct_cacheable_routes() {
+    let root =
+        std::env::temp_dir().join(format!("maki-subdocuments-routes-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("note")).unwrap();
+    fs::write(root.join("note.maki"), "--^ title: Parent\n\nParent body").unwrap();
+    fs::write(
+        root.join("note/child.maki"),
+        "--^ title: Child\n\nChild body",
+    )
+    .unwrap();
+    fs::write(root.join("leaf.maki"), "--^ title: Leaf\n\nLeaf body").unwrap();
+
+    let metrics = Metrics::enabled();
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new_with_metrics(maki, metrics.clone());
+
+    let note = handle_request(&state, &http::Request::get("/note")).unwrap();
+    let note_body = String::from_utf8(note.body().to_vec()).unwrap();
+    assert_eq!(note.status(), http::StatusCode::Ok);
+    assert!(note_body.contains("Parent body"));
+
+    let subdocuments = handle_request(&state, &http::Request::get("/note/")).unwrap();
+    let subdocuments_body = String::from_utf8(subdocuments.body().to_vec()).unwrap();
+    assert_eq!(subdocuments.status(), http::StatusCode::Ok);
+    assert!(subdocuments_body.contains("<a href=\"/note/child\">Child</a>"));
+    assert!(!subdocuments_body.contains("Parent body"));
+
+    let cached_subdocuments = handle_request(&state, &http::Request::get("/note/")).unwrap();
+    assert_eq!(cached_subdocuments.status(), http::StatusCode::Ok);
+
+    let leaf = handle_request(&state, &http::Request::get("/leaf/")).unwrap();
+    let leaf_body = String::from_utf8(leaf.body().to_vec()).unwrap();
+    assert_eq!(leaf.status(), http::StatusCode::Ok);
+    assert!(leaf_body.contains("No subdocuments."));
+
+    let head =
+        response_for_request(&state, &http::Request::new(http::Method::Head, "/note/")).unwrap();
+    assert_eq!(head.status(), http::StatusCode::Ok);
+    assert_eq!(
+        head.get_header("Content-Type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert!(
+        head.get_header("Content-Length")
+            .is_some_and(|length| length.parse::<usize>().unwrap() > 0)
+    );
+    assert!(head.body().is_empty());
+
+    for target in ["/missing/", "/note.maki/", "/note//"] {
+        let response = handle_request(&state, &http::Request::get(target)).unwrap();
+        assert_eq!(
+            response.status(),
+            http::StatusCode::NotFound,
+            "expected {target} to be rejected"
+        );
+    }
+
+    assert_eq!(
+        route_label_for_request(&state, &http::Request::get("/note/")),
+        "subdocuments"
+    );
+    assert_eq!(state.cached_response_count(), 3);
+    {
+        let project = state.project.read().unwrap();
+        assert!(
+            project
+                .cached_response(&ResponseCacheKey::NotePage(PathBuf::from("note.maki")))
+                .is_some()
+        );
+        assert!(
+            project
+                .cached_response(&ResponseCacheKey::SubdocumentsPage(PathBuf::from(
+                    "note.maki"
+                )))
+                .is_some()
+        );
+    }
+
+    let text = metrics.to_prometheus_text();
+    fs::remove_dir_all(root).unwrap();
+    assert!(
+        text.contains("maki_response_cache_requests_total{kind=\"subdocuments\",cache=\"hit\"} 2")
+    );
+    assert!(
+        text.contains("maki_response_cache_requests_total{kind=\"subdocuments\",cache=\"miss\"} 2")
+    );
+}
+
+#[test]
+fn test_percent_encoded_utf8_subdocuments_path() {
+    let root =
+        std::env::temp_dir().join(format!("maki-encoded-subdocuments-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("코딩 테스트")).unwrap();
+    fs::write(
+        root.join("코딩 테스트.maki"),
+        "--^ title: 코딩 테스트\n\nParent body",
+    )
+    .unwrap();
+    fs::write(
+        root.join("코딩 테스트/메모리.maki"),
+        "--^ title: 메모리\n\nChild body",
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let encoded_path = "/%EC%BD%94%EB%94%A9%20%ED%85%8C%EC%8A%A4%ED%8A%B8";
+
+    let note = handle_request(&state, &http::Request::get(encoded_path)).unwrap();
+    let note_body = String::from_utf8(note.body().to_vec()).unwrap();
+    assert_eq!(note.status(), http::StatusCode::Ok);
+    assert!(note_body.contains("Parent body"));
+
+    let encoded_subdocuments_path = format!("{encoded_path}/");
+    let subdocuments = handle_request(
+        &state,
+        &http::Request::get(encoded_subdocuments_path.clone()),
+    )
+    .unwrap();
+    let subdocuments_body = String::from_utf8(subdocuments.body().to_vec()).unwrap();
+    assert_eq!(subdocuments.status(), http::StatusCode::Ok);
+    assert!(subdocuments_body.contains("<a href=\"/코딩 테스트/메모리\">메모리</a>"));
+    assert_eq!(
+        route_label_for_request(&state, &http::Request::get(encoded_subdocuments_path)),
+        "subdocuments"
+    );
+
+    {
+        let project = state.project.read().unwrap();
+        assert!(
+            project
+                .cached_response(&ResponseCacheKey::NotePage(PathBuf::from(
+                    "코딩 테스트.maki"
+                )))
+                .is_some()
+        );
+        assert!(
+            project
+                .cached_response(&ResponseCacheKey::SubdocumentsPage(PathBuf::from(
+                    "코딩 테스트.maki"
+                )))
+                .is_some()
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn test_reload_updates_project_and_cache_gauges() {
     let root = std::env::temp_dir().join(format!("maki-metrics-reload-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -492,9 +645,15 @@ fn test_reload_updates_project_and_cache_gauges() {
 }
 
 #[test]
-fn test_warm_response_cache_populates_cacheable_project_routes() {
+fn test_warm_response_cache_populates_eager_routes_and_lazily_caches_subdocuments() {
     let maki = Maki::load(repo_path("docs")).unwrap();
-    let expected_entries = response_cache_warmup_keys(&maki).len();
+    let warmup_keys = response_cache_warmup_keys(&maki);
+    assert!(
+        !warmup_keys
+            .iter()
+            .any(|key| matches!(key, ResponseCacheKey::SubdocumentsPage(_)))
+    );
+    let expected_entries = warmup_keys.len();
     let state = AppState::new(maki);
 
     assert_eq!(state.cached_response_count(), 0);
@@ -520,6 +679,10 @@ fn test_warm_response_cache_populates_cacheable_project_routes() {
     assert!(!body.contains("__MAKI_PAGE_RENDER_DURATION_MS__"));
     let _ = timing_millis(&body, "Snapshot");
     let _ = timing_millis(&body, "Page");
+
+    let subdocuments = handle_request(&state, &http::Request::get("/index/")).unwrap();
+    assert_eq!(subdocuments.status(), http::StatusCode::Ok);
+    assert_eq!(state.cached_response_count(), expected_entries + 1);
 }
 
 #[test]
