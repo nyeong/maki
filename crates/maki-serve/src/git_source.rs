@@ -256,13 +256,14 @@ impl GitSource {
         config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(checkout.root());
         let mut maki = Maki::load_with_config_metered(&source_root, config, metrics)?;
+        let snapshot_finalize_started = Instant::now();
         let source_paths = maki
             .notes()
             .map(|note| note.source_path().to_path_buf())
             .collect::<Vec<_>>();
         let modified_times =
             self.git_modified_times_for_checkout(checkout, &source_root, &source_paths)?;
-        maki.apply_recent_modified_times(&modified_times);
+        finalize_git_snapshot(&mut maki, &modified_times, snapshot_finalize_started);
         Ok(maki)
     }
 
@@ -428,6 +429,15 @@ impl GitSource {
 
         Ok(modified_times)
     }
+}
+
+fn finalize_git_snapshot(
+    maki: &mut Maki,
+    modified_times: &BTreeMap<PathBuf, SystemTime>,
+    started: Instant,
+) {
+    maki.apply_recent_modified_times(modified_times);
+    maki.extend_snapshot_compile_duration(started.elapsed());
 }
 
 fn source_path_from_git_path<'a>(git_path: &'a Path, source_prefix: &Path) -> Option<&'a Path> {
@@ -726,5 +736,23 @@ mod tests {
         assert!(id.starts_with("blog-"));
         assert!(!id.contains("token"));
         assert!(!id.contains("example.com"));
+    }
+
+    #[test]
+    fn git_snapshot_finalization_extends_compile_duration() {
+        let root =
+            std::env::temp_dir().join(format!("maki-git-snapshot-duration-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let mut maki = Maki::load(&root).unwrap();
+        let core_duration = maki.snapshot_compile_duration();
+        let started = Instant::now()
+            .checked_sub(Duration::from_millis(7))
+            .unwrap();
+        finalize_git_snapshot(&mut maki, &BTreeMap::new(), started);
+
+        fs::remove_dir_all(root).unwrap();
+        assert!(maki.snapshot_compile_duration() >= core_duration + Duration::from_millis(7));
     }
 }

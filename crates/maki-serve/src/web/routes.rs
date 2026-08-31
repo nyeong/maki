@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::http;
 use maki_core::html::{self, AssetMode};
@@ -24,6 +24,31 @@ use super::{
     RECENTS_PATH_WITH_SLASH, SEARCH_INDEX_PATH, SEARCH_PAGE_RESULT_LIMIT, SEARCH_PATH,
     SITEMAP_PATH, SITEMAP_PATH_WITH_SLASH, SITEMAP_XML_PATH,
 };
+
+const PAGE_TIMING_STYLE: &str = r#"<style>
+.maki-timing-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-top: 4rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.maki-timing-footer strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+@media (max-width: 640px) {
+  .maki-timing-footer {
+    margin-top: 3rem;
+  }
+}
+</style>"#;
+const PAGE_RENDER_DURATION_PLACEHOLDER: &str = "__MAKI_PAGE_RENDER_DURATION_MS__";
 
 fn push_json_string(output: &mut String, input: &str) {
     output.push('"');
@@ -344,15 +369,90 @@ fn favicon_response(state: &AppState, maki: &Maki) -> Result<Option<http::Respon
     ))
 }
 
-fn with_served_html_chrome(state: &AppState, maki: &Maki, html: String) -> String {
+fn with_served_html_chrome(
+    state: &AppState,
+    maki: &Maki,
+    html: String,
+    snapshot_compile_duration: Duration,
+) -> String {
     let html = match maki.config().favicon_content_type() {
         Some(content_type) if maki.config().favicon().is_some() => {
             inject_favicon_link(html, content_type)
         }
         _ => html,
     };
+    let html = inject_page_timing_footer_with_value(
+        html,
+        snapshot_compile_duration,
+        PAGE_RENDER_DURATION_PLACEHOLDER,
+    );
 
     state.with_live_reload(html)
+}
+
+fn with_page_timing_footer(
+    state: &AppState,
+    maki: &Maki,
+    response: http::Response,
+    snapshot_compile_duration: Duration,
+    page_render_started: Instant,
+) -> http::Response {
+    if response.get_header("Content-Type") != Some("text/html; charset=utf-8") {
+        return response;
+    }
+
+    let Ok(html) = String::from_utf8(response.body().to_vec()) else {
+        return response;
+    };
+
+    let mut html = with_served_html_chrome(state, maki, html, snapshot_compile_duration);
+    let page_render_duration = page_render_started.elapsed().as_millis().to_string();
+    if let Some(start) = html.rfind(PAGE_RENDER_DURATION_PLACEHOLDER) {
+        let end = start + PAGE_RENDER_DURATION_PLACEHOLDER.len();
+        html.replace_range(start..end, &page_render_duration);
+    }
+
+    response.set_body(html)
+}
+
+#[cfg(test)]
+pub(super) fn inject_page_timing_footer(
+    html: String,
+    snapshot_compile_duration: Duration,
+    page_render_duration: Duration,
+) -> String {
+    inject_page_timing_footer_with_value(
+        html,
+        snapshot_compile_duration,
+        &page_render_duration.as_millis().to_string(),
+    )
+}
+
+fn inject_page_timing_footer_with_value(
+    html: String,
+    snapshot_compile_duration: Duration,
+    page_render_duration_ms: &str,
+) -> String {
+    let Some(body_end) = html.rfind("</body>") else {
+        return html;
+    };
+
+    let footer = format!(
+        "<footer class=\"maki-timing-footer\" aria-label=\"Performance timing\"><span><strong>Snapshot:</strong> {}ms</span><span><strong>Page:</strong> {page_render_duration_ms}ms</span></footer>",
+        snapshot_compile_duration.as_millis(),
+    );
+    let head_end = html[..body_end].rfind("</head>");
+    let mut output = String::with_capacity(html.len() + PAGE_TIMING_STYLE.len() + footer.len());
+    if let Some(head_end) = head_end {
+        output.push_str(&html[..head_end]);
+        output.push_str(PAGE_TIMING_STYLE);
+        output.push_str(&html[head_end..body_end]);
+    } else {
+        output.push_str(&html[..body_end]);
+    }
+    output.push_str(&footer);
+    output.push_str(&html[body_end..]);
+    output
 }
 
 fn inject_favicon_link(html: String, content_type: &str) -> String {
@@ -490,7 +590,7 @@ fn render_cacheable_response(
             let html = html::render_meta_index_page(AssetMode::External, site_title, site_header);
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         ResponseCacheKey::Recents => {
             let html = html::render_recents_page(
@@ -501,7 +601,7 @@ fn render_cacheable_response(
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         ResponseCacheKey::Sitemap => {
             let html = html::render_sitemap_page(
@@ -512,7 +612,7 @@ fn render_cacheable_response(
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         ResponseCacheKey::SitemapXml => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "application/xml; charset=utf-8")
@@ -528,7 +628,7 @@ fn render_cacheable_response(
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         ResponseCacheKey::DatesIndex => {
             let html = html::render_date_index_page(
@@ -539,7 +639,7 @@ fn render_cacheable_response(
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         ResponseCacheKey::DatePeriodPage(period) => {
             let html = html::render_date_period_page(
@@ -551,7 +651,7 @@ fn render_cacheable_response(
             );
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         ResponseCacheKey::SearchIndex => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "application/json; charset=utf-8")
@@ -568,7 +668,7 @@ fn render_cacheable_response(
             )?;
             Ok(http::Response::new(http::StatusCode::Ok)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
     };
 
@@ -600,12 +700,32 @@ pub(super) fn handle_request(
     let project = state.project.read().map_err(|_| Error::Maki {
         source: MakiError::ReadDirectoryFailed(PathBuf::from(".")),
     })?;
+    let page_render_started = Instant::now();
+    let response =
+        handle_project_request(state, &project, &target.path, target.query, static_route)?;
+
+    Ok(with_page_timing_footer(
+        state,
+        &project.maki,
+        response,
+        project.maki.snapshot_compile_duration(),
+        page_render_started,
+    ))
+}
+
+fn handle_project_request(
+    state: &AppState,
+    project: &ProjectState,
+    path: &str,
+    query: Option<&str>,
+    static_route: Option<StaticRoute>,
+) -> Result<http::Response, Error> {
     let maki = &project.maki;
 
     if let Some(route) = static_route {
         match route {
             StaticRoute::MetaIndex => {
-                return cacheable_response(state, &project, ResponseCacheKey::MetaIndex, true);
+                return cacheable_response(state, project, ResponseCacheKey::MetaIndex, true);
             }
             StaticRoute::Favicon => {
                 return favicon_response(state, maki)?.ok_or_else(|| Error::Maki {
@@ -613,36 +733,36 @@ pub(super) fn handle_request(
                 });
             }
             StaticRoute::Recents => {
-                return cacheable_response(state, &project, ResponseCacheKey::Recents, true);
+                return cacheable_response(state, project, ResponseCacheKey::Recents, true);
             }
             StaticRoute::Sitemap => {
-                return cacheable_response(state, &project, ResponseCacheKey::Sitemap, true);
+                return cacheable_response(state, project, ResponseCacheKey::Sitemap, true);
             }
             StaticRoute::SitemapXml => {
-                return cacheable_response(state, &project, ResponseCacheKey::SitemapXml, true);
+                return cacheable_response(state, project, ResponseCacheKey::SitemapXml, true);
             }
             StaticRoute::Diagnostics => {
-                return cacheable_response(state, &project, ResponseCacheKey::Diagnostics, true);
+                return cacheable_response(state, project, ResponseCacheKey::Diagnostics, true);
             }
             StaticRoute::DatesIndex => {
-                return cacheable_response(state, &project, ResponseCacheKey::DatesIndex, true);
+                return cacheable_response(state, project, ResponseCacheKey::DatesIndex, true);
             }
             StaticRoute::DatePeriod(period) => {
                 return cacheable_response(
                     state,
-                    &project,
+                    project,
                     ResponseCacheKey::DatePeriodPage(period),
                     true,
                 );
             }
             StaticRoute::SearchIndex => {
-                return cacheable_response(state, &project, ResponseCacheKey::SearchIndex, true);
+                return cacheable_response(state, project, ResponseCacheKey::SearchIndex, true);
             }
             StaticRoute::ProjectIndex => {
-                return cacheable_response(state, &project, ResponseCacheKey::ProjectIndex, true);
+                return cacheable_response(state, project, ResponseCacheKey::ProjectIndex, true);
             }
             StaticRoute::Search => {
-                let query = query_param(target.query, "q")?.unwrap_or_default();
+                let query = query_param(query, "q")?.unwrap_or_default();
                 let results = maki.search_titles(&query, SEARCH_PAGE_RESULT_LIMIT);
                 let started = Instant::now();
                 let html = html::render_search_page(
@@ -658,15 +778,15 @@ pub(super) fn handle_request(
                     .record_render_duration("search_page", started.elapsed());
                 return Ok(http::Response::new(http::StatusCode::Ok)
                     .set_header("Content-Type", "text/html; charset=utf-8")
-                    .set_body(with_served_html_chrome(state, maki, html)));
+                    .set_body(html));
             }
             StaticRoute::LiveReload | StaticRoute::RuntimeAsset(_) => {}
         }
     }
 
-    match maki.resolve_route(&target.path) {
+    match maki.resolve_route(path) {
         Ok(MakiRoute::NotePage(path)) => {
-            cacheable_response(state, &project, ResponseCacheKey::NotePage(path), true)
+            cacheable_response(state, project, ResponseCacheKey::NotePage(path), true)
         }
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
@@ -679,14 +799,14 @@ pub(super) fn handle_request(
         },
         Err(MakiError::NoteNotFound(_path)) => {
             let html = html::render_not_found_page_with_site_header(
-                &target.path,
+                path,
                 AssetMode::External,
                 maki.config().project_title(),
                 maki.config().favicon().is_some(),
             );
             Ok(http::Response::new(http::StatusCode::NotFound)
                 .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(with_served_html_chrome(state, maki, html)))
+                .set_body(html))
         }
         Err(e) => Err(e.into()),
     }

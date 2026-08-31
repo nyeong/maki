@@ -2,9 +2,9 @@ use super::MAX_REQUEST_HEAD_SIZE;
 use super::cache_warmer::{response_cache_warmup_keys, warm_response_cache};
 use super::error::Error;
 use super::live_reload::{LiveReload, LiveReloadError, LiveReloadEvent};
-use super::routes::{handle_request, response_for_request};
+use super::routes::{handle_request, inject_page_timing_footer, response_for_request};
 use super::server::{handle_connection, read_request_head};
-use super::state::AppState;
+use super::state::{AppState, ResponseCacheKey};
 use super::watch::{collect_watched_file_snapshot, collect_watched_project_snapshot};
 use crate::http;
 use std::fs;
@@ -19,6 +19,31 @@ fn repo_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(path)
+}
+
+fn timing_millis(body: &str, label: &str) -> u128 {
+    let prefix = format!("<span><strong>{label}:</strong> ");
+    let value = body
+        .split_once(&prefix)
+        .and_then(|(_, rest)| rest.split_once("ms</span>"))
+        .map(|(value, _)| value)
+        .unwrap_or_else(|| panic!("missing {label} timing"));
+    value
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid {label} timing: {value:?}"))
+}
+
+#[test]
+fn test_page_timing_footer_uses_millisecond_durations() {
+    let html = "<!doctype html><html><body><main>Page</main></body></html>".to_string();
+
+    let rendered =
+        inject_page_timing_footer(html, Duration::from_millis(124), Duration::from_millis(7));
+
+    assert_eq!(
+        rendered,
+        "<!doctype html><html><body><main>Page</main><footer class=\"maki-timing-footer\" aria-label=\"Performance timing\"><span><strong>Snapshot:</strong> 124ms</span><span><strong>Page:</strong> 7ms</span></footer></body></html>"
+    );
 }
 
 #[test]
@@ -80,8 +105,90 @@ fn test_rendered_note_includes_live_reload_script() {
     assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
     assert!(body.contains("new EventSource(\"/.maki/events\")"));
+    assert!(body.contains("<span><strong>Snapshot:</strong> "));
+    assert!(body.contains("<span><strong>Page:</strong> "));
+    assert!(body.contains("<style>\n.maki-timing-footer {"));
+    assert!(
+        body.find("<footer class=\"maki-timing-footer\"").unwrap()
+            < body.find("new EventSource(\"/.maki/events\")").unwrap()
+    );
     assert!(body.contains("</script></body>"));
     assert!(!body.contains("<style>:root"));
+}
+
+#[test]
+fn test_all_served_html_pages_include_one_timing_footer() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+
+    for target in [
+        "/index",
+        "/@/",
+        "/@/recents",
+        "/@/sitemap",
+        "/@/diagnostics",
+        "/@/dates",
+        "/@/dates/2026",
+        "/.maki/search?q=maki",
+        "/missing",
+    ] {
+        let response = handle_request(&state, &http::Request::get(target)).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+
+        assert_eq!(
+            body.matches("<footer class=\"maki-timing-footer\"").count(),
+            1,
+            "expected one timing footer for {target}"
+        );
+        assert!(body.contains("<style>\n.maki-timing-footer {"));
+    }
+
+    let cached = handle_request(&state, &http::Request::get("/index")).unwrap();
+    let cached_body = String::from_utf8(cached.body().to_vec()).unwrap();
+    assert_eq!(
+        cached_body
+            .matches("<footer class=\"maki-timing-footer\"")
+            .count(),
+        1
+    );
+    assert!(!cached_body.contains("__MAKI_PAGE_RENDER_DURATION_MS__"));
+
+    let raw_cached_body = {
+        let project = state.project.read().unwrap();
+        let response = project
+            .cached_response(&ResponseCacheKey::NotePage(PathBuf::from("index.maki")))
+            .unwrap();
+        String::from_utf8(response.body().to_vec()).unwrap()
+    };
+    assert!(!raw_cached_body.contains("maki-timing-footer"));
+    assert!(!raw_cached_body.contains("new EventSource"));
+    assert!(!raw_cached_body.contains("<style>\n.maki-timing-footer {"));
+}
+
+#[test]
+fn test_non_html_and_head_responses_omit_timing_footer() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+
+    for target in [
+        "/",
+        "/index.maki",
+        "/sitemap.xml",
+        "/.maki/search-index.json",
+        "/.maki/project-index.json",
+        "/.maki/assets/maki.css",
+    ] {
+        let response = handle_request(&state, &http::Request::get(target)).unwrap();
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+        assert!(
+            !body.contains("maki-timing-footer"),
+            "did not expect a timing footer for {target}"
+        );
+    }
+
+    let head =
+        response_for_request(&state, &http::Request::new(http::Method::Head, "/index")).unwrap();
+    assert!(head.body().is_empty());
 }
 
 #[test]
@@ -94,6 +201,7 @@ fn test_source_note_does_not_include_live_reload_script() {
     let body = String::from_utf8(response.body().to_vec()).unwrap();
 
     assert!(!body.contains("new EventSource(\"/.maki/events\")"));
+    assert!(!body.contains("maki-timing-footer"));
 }
 
 #[test]
@@ -286,7 +394,18 @@ fn test_note_page_response_cache_is_replaced_with_project() {
 
     let first = handle_request(&state, &request).unwrap();
     let first_body = String::from_utf8(first.body().to_vec()).unwrap();
+    let first_snapshot_millis = state
+        .project
+        .read()
+        .unwrap()
+        .maki
+        .snapshot_compile_duration()
+        .as_millis();
     assert!(first_body.contains("Cache marker: first generation"));
+    assert_eq!(
+        timing_millis(&first_body, "Snapshot"),
+        first_snapshot_millis
+    );
     assert_eq!(state.cached_response_count(), 1);
 
     fs::write(root.join("home.maki"), "Cache marker: second generation").unwrap();
@@ -298,10 +417,21 @@ fn test_note_page_response_cache_is_replaced_with_project() {
 
     state.reload().unwrap();
     assert_eq!(state.cached_response_count(), 0);
+    let reloaded_snapshot_millis = state
+        .project
+        .read()
+        .unwrap()
+        .maki
+        .snapshot_compile_duration()
+        .as_millis();
 
     let reloaded = handle_request(&state, &request).unwrap();
     let reloaded_body = String::from_utf8(reloaded.body().to_vec()).unwrap();
     assert!(reloaded_body.contains("Cache marker: second generation"));
+    assert_eq!(
+        timing_millis(&reloaded_body, "Snapshot"),
+        reloaded_snapshot_millis
+    );
     assert_eq!(state.cached_response_count(), 1);
 
     fs::remove_dir_all(root).unwrap();
@@ -362,6 +492,24 @@ fn test_warm_response_cache_populates_cacheable_project_routes() {
     warm_response_cache(&state).unwrap();
 
     assert_eq!(state.cached_response_count(), expected_entries);
+
+    let raw_cached_body = {
+        let project = state.project.read().unwrap();
+        let response = project
+            .cached_response(&ResponseCacheKey::NotePage(PathBuf::from("index.maki")))
+            .unwrap();
+        String::from_utf8(response.body().to_vec()).unwrap()
+    };
+    assert!(!raw_cached_body.contains("maki-timing-footer"));
+    assert!(!raw_cached_body.contains("new EventSource"));
+
+    let response = handle_request(&state, &http::Request::get("/index")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    assert!(body.contains("maki-timing-footer"));
+    assert!(body.contains("new EventSource"));
+    assert!(!body.contains("__MAKI_PAGE_RENDER_DURATION_MS__"));
+    let _ = timing_millis(&body, "Snapshot");
+    let _ = timing_millis(&body, "Page");
 }
 
 #[test]

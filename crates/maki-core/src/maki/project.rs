@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::{
     analysis::{self, ProjectAnalysis, SourceSnapshot},
@@ -36,6 +36,7 @@ pub struct Maki {
     pub(super) recent_entries: Vec<RecentEntry>,
     pub(super) sitemap_entries: Vec<SitemapEntry>,
     pub(super) config: MakiConfig,
+    snapshot_compile_duration: Duration,
 }
 
 pub(super) struct ProjectSnapshot {
@@ -222,6 +223,15 @@ impl Maki {
         &self.config
     }
 
+    pub fn snapshot_compile_duration(&self) -> Duration {
+        self.snapshot_compile_duration
+    }
+
+    /// Includes source-adapter finalization work in the recorded snapshot compile time.
+    pub fn extend_snapshot_compile_duration(&mut self, duration: Duration) {
+        self.snapshot_compile_duration = self.snapshot_compile_duration.saturating_add(duration);
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -336,6 +346,8 @@ impl Maki {
         config: MakiConfig,
         metrics: &impl ProjectLoadMeter,
     ) -> Result<Self, Error> {
+        let snapshot_compile_started = Instant::now();
+
         if !root.exists() {
             return Err(Error::RootNotFound(root.to_path_buf()));
         }
@@ -395,6 +407,8 @@ impl Maki {
         let recent_entries = collect_recent_entries(note_metadata_entries);
         metrics.record_project_load_phase("metadata", started.elapsed());
 
+        let snapshot_compile_duration = snapshot_compile_started.elapsed();
+
         Ok(Self {
             root,
             notes,
@@ -406,6 +420,7 @@ impl Maki {
             recent_entries,
             sitemap_entries,
             config,
+            snapshot_compile_duration,
         })
     }
 
