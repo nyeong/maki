@@ -391,20 +391,24 @@ fn collect_document_link_diagnostics(
     document: &parser::Document<'_>,
 ) {
     for definition in document.reference_definitions().iter() {
-        match definition {
-            parser::ReferenceDefinition::Link { target, .. } => {
-                if let Some(note_target) = note_link_target_for_href(target) {
-                    push_link_diagnostic(
-                        diagnostics,
-                        source_path,
-                        maki.resolve_note_link(current, &note_target),
-                        &note_target,
-                    );
-                }
-            }
-            parser::ReferenceDefinition::Footnote { body, .. } => {
-                collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
-            }
+        if parser::reference_value_is_link_shaped(definition.raw_value)
+            && let Some(note_target) = note_link_target_for_href(definition.raw_value)
+        {
+            push_link_diagnostic(
+                diagnostics,
+                source_path,
+                maki.resolve_note_link(current, &note_target),
+                &note_target,
+            );
+        }
+        if !parser::reference_value_is_link_shaped(definition.raw_value) {
+            collect_inline_link_diagnostics(
+                diagnostics,
+                maki,
+                current,
+                source_path,
+                &definition.value,
+            );
         }
     }
 

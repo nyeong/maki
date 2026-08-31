@@ -438,19 +438,16 @@ fn collect_document_external_links(
     document: &parser::Document<'_>,
 ) {
     for definition in document.reference_definitions().iter() {
-        match definition {
-            parser::ReferenceDefinition::Link { target, .. }
-                if is_checkable_external_href(target) =>
-            {
-                external_links.insert(ExternalLinkRef {
-                    source_path: source_path.to_path_buf(),
-                    target: target.trim().to_string(),
-                });
-            }
-            parser::ReferenceDefinition::Footnote { body, .. } => {
-                collect_inline_external_links(external_links, source_path, body)
-            }
-            parser::ReferenceDefinition::Link { .. } => {}
+        if parser::reference_value_is_link_shaped(definition.raw_value)
+            && is_checkable_external_href(definition.raw_value)
+        {
+            external_links.insert(ExternalLinkRef {
+                source_path: source_path.to_path_buf(),
+                target: definition.raw_value.trim().to_string(),
+            });
+        }
+        if !parser::reference_value_is_link_shaped(definition.raw_value) {
+            collect_inline_external_links(external_links, source_path, &definition.value);
         }
     }
 

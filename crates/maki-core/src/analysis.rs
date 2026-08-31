@@ -21,6 +21,7 @@ pub struct DocumentAnalysis {
     pub block_ids: Vec<BlockIdOccurrence>,
     pub headings: Vec<HeadingOccurrence>,
     pub note_links: Vec<NoteLinkOccurrence>,
+    pub reference_graph: DocumentReferenceGraph,
     pub reference_links: Vec<ReferenceLinkOccurrence>,
     pub properties: Vec<PropertyOccurrence>,
     pub dates: Vec<DateOccurrence>,
@@ -87,12 +88,168 @@ pub struct ReferenceLinkOccurrence {
     pub title_span: SourceSpan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReferenceDefinitionId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferencePresentation {
+    Link,
+    Footnote,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceDefinitionState {
+    Active,
+    Duplicate { winner: ReferenceDefinitionId },
+}
+
+impl ReferenceDefinitionState {
+    pub fn winner(self, definition: ReferenceDefinitionId) -> ReferenceDefinitionId {
+        match self {
+            Self::Active => definition,
+            Self::Duplicate { winner } => winner,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceDefinitionOccurrence {
+    pub id: ReferenceDefinitionId,
+    pub key: String,
+    pub value: String,
+    pub spelling: parser::ReferenceDefinitionSpelling,
+    pub definition_span: SourceSpan,
+    pub key_span: SourceSpan,
+    pub value_span: SourceSpan,
+    pub state: ReferenceDefinitionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceUseOccurrence {
+    pub key: String,
+    pub presentation: ReferencePresentation,
+    pub span: SourceSpan,
+    pub marker_span: SourceSpan,
+    pub key_span: SourceSpan,
+    pub definition_id: ReferenceDefinitionId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DocumentReferenceGraph {
+    pub definitions: Vec<ReferenceDefinitionOccurrence>,
+    pub uses: Vec<ReferenceUseOccurrence>,
+    winners: BTreeMap<String, ReferenceDefinitionId>,
+    uses_by_definition: BTreeMap<ReferenceDefinitionId, Vec<usize>>,
+}
+
+impl DocumentReferenceGraph {
+    pub fn definition(&self, id: ReferenceDefinitionId) -> Option<&ReferenceDefinitionOccurrence> {
+        self.definitions.get(id.0)
+    }
+
+    pub fn winner_id(&self, key: &str) -> Option<ReferenceDefinitionId> {
+        self.winners.get(key).copied()
+    }
+
+    pub fn winner(&self, key: &str) -> Option<&ReferenceDefinitionOccurrence> {
+        self.winner_id(key).and_then(|id| self.definition(id))
+    }
+
+    pub fn uses_for(
+        &self,
+        definition: ReferenceDefinitionId,
+    ) -> impl Iterator<Item = &ReferenceUseOccurrence> {
+        self.uses_by_definition
+            .get(&definition)
+            .into_iter()
+            .flatten()
+            .filter_map(|index| self.uses.get(*index))
+    }
+}
+
+#[derive(Default)]
+struct ReferenceGraphBuilder {
+    definitions: Vec<ReferenceDefinitionOccurrence>,
+    uses: Vec<ReferenceUseOccurrence>,
+    winners: BTreeMap<String, ReferenceDefinitionId>,
+}
+
+impl ReferenceGraphBuilder {
+    fn push_definition(
+        &mut self,
+        key: &str,
+        value: &str,
+        spelling: parser::ReferenceDefinitionSpelling,
+        definition_span: SourceSpan,
+        key_span: SourceSpan,
+        value_span: SourceSpan,
+    ) {
+        let id = ReferenceDefinitionId(self.definitions.len());
+        let state = match self.winners.get(key).copied() {
+            Some(winner) => ReferenceDefinitionState::Duplicate { winner },
+            None => {
+                self.winners.insert(key.to_string(), id);
+                ReferenceDefinitionState::Active
+            }
+        };
+        self.definitions.push(ReferenceDefinitionOccurrence {
+            id,
+            key: key.to_string(),
+            value: value.to_string(),
+            spelling,
+            definition_span,
+            key_span,
+            value_span,
+            state,
+        });
+    }
+
+    fn push_use(
+        &mut self,
+        key: &str,
+        presentation: ReferencePresentation,
+        span: SourceSpan,
+        marker_span: SourceSpan,
+        key_span: SourceSpan,
+    ) {
+        let Some(definition_id) = self.winners.get(key).copied() else {
+            return;
+        };
+        self.uses.push(ReferenceUseOccurrence {
+            key: key.to_string(),
+            presentation,
+            span,
+            marker_span,
+            key_span,
+            definition_id,
+        });
+    }
+
+    fn finish(mut self) -> DocumentReferenceGraph {
+        self.uses.sort_by_key(|usage| usage.span);
+        let mut uses_by_definition: BTreeMap<ReferenceDefinitionId, Vec<usize>> = BTreeMap::new();
+        for (index, usage) in self.uses.iter().enumerate() {
+            uses_by_definition
+                .entry(usage.definition_id)
+                .or_default()
+                .push(index);
+        }
+        DocumentReferenceGraph {
+            definitions: self.definitions,
+            uses: self.uses,
+            winners: self.winners,
+            uses_by_definition,
+        }
+    }
+}
+
 #[derive(Default)]
 struct DocumentOccurrences {
     blocks: Vec<BlockOccurrence>,
     block_ids: Vec<BlockIdOccurrence>,
     headings: Vec<HeadingOccurrence>,
     note_links: Vec<NoteLinkOccurrence>,
+    references: ReferenceGraphBuilder,
     reference_links: Vec<ReferenceLinkOccurrence>,
     dates: Vec<DateOccurrence>,
 }
@@ -189,12 +346,23 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         .unwrap_or_else(|| file_stem(path));
     let mut occurrences = DocumentOccurrences::default();
 
+    collect_reference_definitions(
+        source,
+        &source_map,
+        &parsed.document.blocks,
+        &mut occurrences.references,
+    );
     for block in &parsed.document.blocks {
         collect_block(source, &source_map, block, &mut occurrences);
     }
     for definition in parsed.document.reference_definitions().iter() {
-        if let parser::ReferenceDefinition::Footnote { body, .. } = definition {
-            collect_inlines(source, body, DateOrigin::VisibleInline, &mut occurrences);
+        if !parser::reference_value_is_link_shaped(definition.raw_value) {
+            collect_inlines(
+                source,
+                &definition.value,
+                DateOrigin::VisibleInline,
+                &mut occurrences,
+            );
         }
     }
     for property in &properties {
@@ -213,6 +381,10 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
     occurrences
         .block_ids
         .sort_by_key(|block_id| block_id.value_span);
+    occurrences
+        .reference_links
+        .sort_by_key(|reference| reference.span);
+    let reference_graph = std::mem::take(&mut occurrences.references).finish();
 
     let mut diagnostics = parsed
         .diagnostics
@@ -240,6 +412,7 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         block_ids: occurrences.block_ids,
         headings: occurrences.headings,
         note_links: occurrences.note_links,
+        reference_graph,
         reference_links: occurrences.reference_links,
         properties,
         dates: occurrences.dates,
@@ -337,6 +510,35 @@ pub fn property_description(key: &str) -> Option<&'static str> {
     }
 }
 
+fn collect_reference_definitions(
+    source: &str,
+    source_map: &SourceMap<'_>,
+    blocks: &[Block<'_>],
+    graph: &mut ReferenceGraphBuilder,
+) {
+    for block in blocks {
+        let BlockKind::ReferenceDefinition { definitions } = &block.kind else {
+            continue;
+        };
+        for definition in definitions {
+            let Some(key_span) = slice_span(source, definition.key) else {
+                continue;
+            };
+            let definition_span = whole_line_span(source_map, key_span);
+            let value_span = slice_span(source, definition.raw_value)
+                .unwrap_or_else(|| SourceSpan::new(definition_span.end, definition_span.end));
+            graph.push_definition(
+                definition.key,
+                definition.raw_value,
+                definition.spelling,
+                definition_span,
+                key_span,
+                value_span,
+            );
+        }
+    }
+}
+
 fn collect_block(
     source: &str,
     source_map: &SourceMap<'_>,
@@ -410,21 +612,8 @@ fn collect_block(
         }
         BlockKind::ReferenceDefinition { definitions } => {
             for definition in definitions {
-                match definition {
-                    parser::ReferenceDefinition::Link { title, target } => {
-                        body_spans.extend(slice_span(source, title));
-                        body_spans.extend(slice_span(source, target));
-                    }
-                    parser::ReferenceDefinition::Footnote {
-                        label,
-                        body,
-                        raw_body,
-                    } => {
-                        body_spans.extend(slice_span(source, label));
-                        body_spans.extend(slice_span(source, raw_body));
-                        collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
-                    }
-                }
+                body_spans.extend(slice_span(source, definition.key));
+                body_spans.extend(slice_span(source, definition.raw_value));
             }
             AnalysisBlockKind::ReferenceDefinition
         }
@@ -477,15 +666,40 @@ fn collect_inlines(
             }
             Inline::Link { title, target } => {
                 if let Some(title_span) = slice_span(source, title) {
-                    occurrences.reference_links.push(ReferenceLinkOccurrence {
-                        title: (*title).to_string(),
-                        target: target.trim().to_string(),
-                        span: SourceSpan::new(
-                            title_span.start.saturating_sub(1),
-                            (title_span.end + 1).min(source.len()),
-                        ),
+                    let span = SourceSpan::new(
+                        title_span.start.saturating_sub(1),
+                        (title_span.end + 1).min(source.len()),
+                    );
+                    occurrences.references.push_use(
+                        title,
+                        ReferencePresentation::Link,
+                        span,
+                        span,
                         title_span,
-                    });
+                    );
+                    if parser::reference_value_is_link_shaped(target) {
+                        occurrences.reference_links.push(ReferenceLinkOccurrence {
+                            title: (*title).to_string(),
+                            target: target.trim().to_string(),
+                            span,
+                            title_span,
+                        });
+                    }
+                }
+            }
+            Inline::Footnote { label } => {
+                if let Some(key_span) = slice_span(source, label) {
+                    let span = SourceSpan::new(
+                        key_span.start.saturating_sub(2),
+                        (key_span.end + 1).min(source.len()),
+                    );
+                    occurrences.references.push_use(
+                        label,
+                        ReferencePresentation::Footnote,
+                        span,
+                        span,
+                        key_span,
+                    );
                 }
             }
             Inline::DateStamp(stamp) => {
@@ -1008,6 +1222,173 @@ mod tests {
             &source[reference.title_span.start..reference.title_span.end],
             "김치"
         );
+    }
+
+    #[test]
+    fn document_reference_graph_unifies_definitions_and_collects_each_use_once() {
+        let source = r#"[shared] *[^shared]*
+- [alias]
+| usage |
+|---|
+| [^shared] |
+
+[shared]: See [alias] [^alias].
+[^shared]: ignored [alias]
+[^alias]: Alias body."#;
+        let analysis = analyze_document(Path::new("index.maki"), source);
+        let graph = &analysis.reference_graph;
+
+        assert!(
+            analysis
+                .blocks
+                .iter()
+                .any(|block| block.kind == AnalysisBlockKind::List)
+        );
+        assert!(
+            analysis
+                .blocks
+                .iter()
+                .any(|block| block.kind == AnalysisBlockKind::Table)
+        );
+
+        assert_eq!(graph.definitions.len(), 3);
+        assert_eq!(graph.definitions[0].id, ReferenceDefinitionId(0));
+        assert_eq!(graph.definitions[0].key, "shared");
+        assert_eq!(graph.definitions[0].value, "See [alias] [^alias].");
+        assert_eq!(
+            graph.definitions[0].spelling,
+            parser::ReferenceDefinitionSpelling::Canonical
+        );
+        assert_eq!(graph.definitions[0].state, ReferenceDefinitionState::Active);
+        assert_eq!(
+            graph.definitions[1].state,
+            ReferenceDefinitionState::Duplicate {
+                winner: ReferenceDefinitionId(0)
+            }
+        );
+        assert_eq!(graph.definitions[2].key, "alias");
+        assert_eq!(
+            graph.definitions[2].spelling,
+            parser::ReferenceDefinitionSpelling::FootnoteAlias
+        );
+        assert_eq!(
+            &source[graph.definitions[1].key_span.start..graph.definitions[1].key_span.end],
+            "shared"
+        );
+        assert_eq!(
+            &source[graph.definitions[1].value_span.start..graph.definitions[1].value_span.end],
+            "ignored [alias]"
+        );
+
+        assert_eq!(graph.uses.len(), 6);
+        assert_eq!(
+            graph
+                .uses
+                .iter()
+                .map(|usage| (usage.key.as_str(), usage.presentation, usage.definition_id))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "shared",
+                    ReferencePresentation::Link,
+                    ReferenceDefinitionId(0)
+                ),
+                (
+                    "shared",
+                    ReferencePresentation::Footnote,
+                    ReferenceDefinitionId(0)
+                ),
+                (
+                    "alias",
+                    ReferencePresentation::Link,
+                    ReferenceDefinitionId(2)
+                ),
+                (
+                    "shared",
+                    ReferencePresentation::Footnote,
+                    ReferenceDefinitionId(0)
+                ),
+                (
+                    "alias",
+                    ReferencePresentation::Link,
+                    ReferenceDefinitionId(2)
+                ),
+                (
+                    "alias",
+                    ReferencePresentation::Footnote,
+                    ReferenceDefinitionId(2)
+                ),
+            ]
+        );
+        for usage in &graph.uses {
+            let marker = &source[usage.marker_span.start..usage.marker_span.end];
+            assert_eq!(marker, &source[usage.span.start..usage.span.end]);
+            assert!(marker.starts_with('[') && marker.ends_with(']'));
+            assert_eq!(&source[usage.key_span.start..usage.key_span.end], usage.key);
+        }
+        assert_eq!(graph.uses_for(ReferenceDefinitionId(0)).count(), 3);
+        assert_eq!(graph.uses_for(ReferenceDefinitionId(2)).count(), 3);
+        assert!(analysis.reference_links.is_empty());
+    }
+
+    #[test]
+    fn document_reference_graph_keeps_keys_case_sensitive_and_document_local() {
+        let first = analyze_document(
+            Path::new("first.maki"),
+            "[Key] [key] [^Key]\n\n[Key]: upper\n[^key]: lower",
+        );
+        let second = analyze_document(Path::new("second.maki"), "[Key]\n\n[Key]: other");
+
+        assert_eq!(
+            first
+                .reference_graph
+                .winner("Key")
+                .map(|item| item.value.as_str()),
+            Some("upper")
+        );
+        assert_eq!(
+            first
+                .reference_graph
+                .winner("key")
+                .map(|item| item.value.as_str()),
+            Some("lower")
+        );
+        assert_eq!(first.reference_graph.uses.len(), 3);
+        assert_eq!(
+            second.reference_graph.definitions[0].id,
+            ReferenceDefinitionId(0)
+        );
+        assert_eq!(second.reference_graph.definitions[0].value, "other");
+        assert_eq!(second.reference_graph.uses.len(), 1);
+    }
+
+    #[test]
+    fn document_reference_graph_ignores_non_root_definition_blocks() {
+        let source = r#"- parent
+  [nested]: https://nested.example/
+  [nested]
+
+[root]
+[root]: https://root.example/"#;
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.reference_graph.definitions.len(), 1);
+        assert_eq!(analysis.reference_graph.definitions[0].key, "root");
+        assert_eq!(analysis.reference_graph.uses.len(), 1);
+        assert_eq!(analysis.reference_graph.uses[0].key, "root");
+        assert!(analysis.reference_graph.winner("nested").is_none());
+        assert_eq!(analysis.reference_links.len(), 1);
+    }
+
+    #[test]
+    fn link_shaped_reference_values_are_not_reparsed_as_inline_semantics() {
+        let analysis = analyze_document(Path::new("index.maki"), "[raw]\n\n[raw]: [[missing]]");
+
+        assert_eq!(analysis.reference_graph.uses.len(), 1);
+        assert_eq!(analysis.reference_links.len(), 1);
+        assert_eq!(analysis.reference_links[0].target, "[[missing]]");
+        assert!(analysis.note_links.is_empty());
+        assert!(analysis.dates.is_empty());
     }
 
     #[test]

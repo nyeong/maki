@@ -1,6 +1,5 @@
 use super::draft::{
-    BlockDraft, ListItemDraft, PropertyKind, ReferenceDefinitionDraft,
-    ReferenceDefinitionDraftKind, TableRowDraft,
+    BlockDraft, ListItemDraft, PropertyKind, ReferenceDefinitionDraft, TableRowDraft,
 };
 use super::inline::{ReferenceLookup, parse_inline_with_references, parse_inlines_with_references};
 use super::types::{
@@ -30,16 +29,7 @@ where
         };
 
         for definition in block_definitions {
-            let is_first = match definition.kind {
-                ReferenceDefinitionDraftKind::Link { title, target } => {
-                    lookup.insert_link(title, target)
-                }
-                ReferenceDefinitionDraftKind::Footnote { label, .. } => {
-                    lookup.insert_footnote(label)
-                }
-            };
-
-            if is_first {
+            if lookup.insert(definition.key, definition.raw_value) {
                 unique_definitions.push(definition);
             }
         }
@@ -56,15 +46,11 @@ fn build_reference_definition<'a>(
     draft: &ReferenceDefinitionDraft<'a>,
     references: &ReferenceLookup<'a>,
 ) -> ReferenceDefinition<'a> {
-    match draft.kind {
-        ReferenceDefinitionDraftKind::Link { title, target } => {
-            ReferenceDefinition::Link { title, target }
-        }
-        ReferenceDefinitionDraftKind::Footnote { label, body } => ReferenceDefinition::Footnote {
-            label,
-            body: parse_inline_with_references(body, references),
-            raw_body: body,
-        },
+    ReferenceDefinition {
+        key: draft.key,
+        raw_value: draft.raw_value,
+        value: parse_inline_with_references(draft.raw_value, references),
+        spelling: draft.spelling,
     }
 }
 

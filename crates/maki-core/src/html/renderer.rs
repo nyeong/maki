@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::{
     link_target::{DocumentSelector, InnerSelector, NoteLinkTarget},
     maki::{self, NoteLinkResolution},
@@ -19,6 +21,36 @@ pub(in crate::html) struct Renderer<'a> {
     inline_date_occurrence_index: usize,
     property_date_occurrence_index: usize,
     block_id_anchors: bool,
+    reference_note_scope: ReferenceNoteScope,
+    rendered_ids: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct ReferenceNoteScope {
+    indexes: BTreeMap<String, usize>,
+    notes: Vec<ReferenceNote>,
+}
+
+struct ReferenceNote {
+    key: String,
+    id: String,
+    backlinks: Vec<String>,
+    body_html: String,
+}
+
+#[derive(Clone, Copy)]
+enum ReferenceUsePresentation {
+    Annotation,
+    Footnote,
+}
+
+impl ReferenceUsePresentation {
+    fn class_name(self) -> &'static str {
+        match self {
+            Self::Annotation => "maki-reference-annotation",
+            Self::Footnote => "maki-reference-footnote",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -143,13 +175,144 @@ impl<'a> Renderer<'a> {
         self.html.push_str("</span>");
     }
 
+    fn reserve_rendered_id(&mut self, id: &str) {
+        self.rendered_ids.insert(id.to_string());
+    }
+
+    fn allocate_rendered_id(&mut self, base: &str) -> String {
+        if self.rendered_ids.insert(base.to_string()) {
+            return base.to_string();
+        }
+
+        for suffix in 2.. {
+            let candidate = format!("{base}-{suffix}");
+            if self.rendered_ids.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+
+        unreachable!("a free HTML id suffix always exists")
+    }
+
+    fn reserve_document_ids(
+        &mut self,
+        document: &Document<'_>,
+        render_title: bool,
+        block_id_anchors: bool,
+    ) {
+        if render_title && let Some(title) = document.title() {
+            self.reserve_rendered_id(title);
+        }
+        self.reserve_block_ids(
+            &document.blocks,
+            block_id_anchors,
+            document.reference_definitions(),
+        );
+    }
+
+    fn reserve_block_ids(
+        &mut self,
+        blocks: &[parser::Block<'_>],
+        block_id_anchors: bool,
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
+        for block in blocks {
+            match &block.kind {
+                BlockKind::Heading { raw_body, .. } => {
+                    let id = if block_id_anchors {
+                        block.property("id").filter(|id| !id.is_empty())
+                    } else {
+                        None
+                    }
+                    .unwrap_or(raw_body);
+                    self.reserve_rendered_id(id);
+                }
+                BlockKind::ReferenceDefinition { .. } => {}
+                _ if block_id_anchors => {
+                    if let Some(id) = block.property("id").filter(|id| !id.is_empty()) {
+                        self.reserve_rendered_id(id);
+                    }
+                }
+                _ => {}
+            }
+
+            match &block.kind {
+                BlockKind::List { items } => {
+                    for item in items {
+                        self.reserve_block_ids(&item.children, block_id_anchors, references);
+                    }
+                }
+                BlockKind::Quote { lines }
+                    if !matches!(block.property("mode"), Some("pre" | "text")) =>
+                {
+                    self.reserve_quote_ids(lines, references);
+                }
+                BlockKind::Container { kind, lines, .. }
+                    if *kind == "quote"
+                        && !matches!(block.property("mode"), Some("pre" | "text")) =>
+                {
+                    self.reserve_quote_ids(lines, references);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn reserve_quote_ids(&mut self, lines: &[&str], references: &parser::ReferenceDefinitions<'_>) {
+        let source = lines.join("\n");
+        let parsed = parser::parse_with_references(&source, references);
+        self.reserve_document_ids(&parsed.document, false, false);
+    }
+
+    fn register_reference_use(&mut self, key: &str) -> (usize, String, String) {
+        let note_index = if let Some(index) = self.reference_note_scope.indexes.get(key) {
+            *index
+        } else {
+            let index = self.reference_note_scope.notes.len();
+            let note_number = index + 1;
+            let note_id = self.allocate_rendered_id(&format!("maki-reference-note-{note_number}"));
+            self.reference_note_scope.notes.push(ReferenceNote {
+                key: key.to_string(),
+                id: note_id,
+                backlinks: Vec::new(),
+                body_html: String::new(),
+            });
+            self.reference_note_scope
+                .indexes
+                .insert(key.to_string(), index);
+            index
+        };
+        let note_number = note_index + 1;
+        let occurrence_number = self.reference_note_scope.notes[note_index].backlinks.len() + 1;
+        let use_id = self.allocate_rendered_id(&format!(
+            "maki-reference-use-{note_number}-{occurrence_number}"
+        ));
+        self.reference_note_scope.notes[note_index]
+            .backlinks
+            .push(use_id.clone());
+        let note_id = self.reference_note_scope.notes[note_index].id.clone();
+
+        (note_number, note_id, use_id)
+    }
+
+    fn render_reference_use(&mut self, key: &str, presentation: ReferenceUsePresentation) {
+        let (note_number, note_id, use_id) = self.register_reference_use(key);
+
+        self.html.push_str("<a class=\"maki-reference-use ");
+        self.html.push_str(presentation.class_name());
+        self.html.push_str("\" id=\"");
+        self.html.push_str(&use_id);
+        self.html.push_str("\" href=\"#");
+        self.html.push_str(&note_id);
+        self.html.push_str("\" role=\"doc-noteref\">");
+        self.escape_html_into(key);
+        self.html.push_str("<sup class=\"maki-reference-number\">");
+        self.html.push_str(&note_number.to_string());
+        self.html.push_str("</sup></a>");
+    }
+
     fn render_footnote_reference(&mut self, label: &str) {
-        self.html
-            .push_str("<sup class=\"footnote-ref\"><a href=\"#fn-");
-        self.escape_html_attr_into(label);
-        self.html.push_str("\">[");
-        self.escape_html_into(label);
-        self.html.push_str("]</a></sup>");
+        self.render_reference_use(label, ReferenceUsePresentation::Footnote);
     }
 
     fn render_note_link_with_title(&mut self, target: &str, title: Option<&str>) {
@@ -326,7 +489,13 @@ impl<'a> Renderer<'a> {
     fn render_inline(&mut self, inline: &Inline<'_>) {
         match inline {
             Inline::NoteLink { target } => self.render_note_link(target),
-            Inline::Link { title, target } => self.render_link(title, target),
+            Inline::Link { title, target } => {
+                if parser::reference_value_is_link_shaped(target) {
+                    self.render_link(title, target.trim());
+                } else {
+                    self.render_reference_use(title, ReferenceUsePresentation::Annotation);
+                }
+            }
             Inline::Footnote { label } => self.render_footnote_reference(label),
             Inline::HyperLink { target } => self.render_hyper_link(target),
             Inline::DateStamp(stamp) => self.render_date_stamp(*stamp),
@@ -437,6 +606,8 @@ impl<'a> Renderer<'a> {
 
         let source = lines.join("\n");
         let parsed = parser::parse_with_references(&source, references);
+        self.reserve_document_ids(&parsed.document, false, false);
+        let outer_reference_note_scope = std::mem::take(&mut self.reference_note_scope);
 
         self.html.push_str("<blockquote>");
         self.render_document_date_locations(&parsed.document);
@@ -447,8 +618,9 @@ impl<'a> Renderer<'a> {
             parsed.document.reference_definitions(),
         );
         self.block_id_anchors = block_id_anchors;
-        self.render_footnotes(&parsed.document);
+        self.render_reference_notes(&parsed.document);
         self.html.push_str("</blockquote>");
+        self.reference_note_scope = outer_reference_note_scope;
     }
 
     fn render_unknown_container(&mut self, kind: &str, args: &[&str], lines: &[&str]) {
@@ -506,6 +678,7 @@ impl<'a> Renderer<'a> {
             )
             && let Some(id) = block.property("id").filter(|id| !id.is_empty())
         {
+            self.reserve_rendered_id(id);
             self.html
                 .push_str("<span class=\"maki-block-anchor\" id=\"");
             self.escape_html_attr_into(id);
@@ -702,27 +875,73 @@ impl<'a> Renderer<'a> {
         self.end_heading(tag);
     }
 
-    fn render_footnotes(&mut self, document: &Document<'_>) {
-        let mut footnotes = document.reference_definitions().footnotes().peekable();
-        if footnotes.peek().is_none() {
+    fn render_reference_notes(&mut self, document: &Document<'_>) {
+        if self.reference_note_scope.notes.is_empty() {
             return;
         }
 
-        self.html.push_str("<section class=\"footnotes\"><ol>");
-        for definition in footnotes {
-            let parser::ReferenceDefinition::Footnote { label, body, .. } = definition else {
-                continue;
-            };
-            self.html.push_str("<li id=\"fn-");
-            self.escape_html_attr_into(label);
-            self.html.push_str("\">");
-            self.render_inlines(body);
-            self.html.push_str("</li>");
+        self.prepare_reference_notes(document);
+        let title_id = self.allocate_rendered_id("maki-reference-notes-title");
+        self.html
+            .push_str("<section class=\"maki-reference-notes\" aria-labelledby=\"");
+        self.html.push_str(&title_id);
+        self.html
+            .push_str("\"><h2 class=\"maki-reference-notes-title\" id=\"");
+        self.html.push_str(&title_id);
+        self.html.push_str("\">Notes</h2><ol>");
+
+        for note_index in 0..self.reference_note_scope.notes.len() {
+            let note = &self.reference_note_scope.notes[note_index];
+            let key = note.key.clone();
+            let note_id = note.id.clone();
+            let body_html = note.body_html.clone();
+            let backlinks = note.backlinks.clone();
+
+            self.html.push_str("<li id=\"");
+            self.html.push_str(&note_id);
+            self.html.push_str("\" tabindex=\"-1\">");
+            self.html.push_str(&body_html);
+            self.html
+                .push_str("<span class=\"maki-reference-backlinks\">");
+            for (occurrence_index, backlink) in backlinks.iter().enumerate() {
+                let accessible_label = format!("Back to {key} reference {}", occurrence_index + 1);
+                self.html
+                    .push_str("<a class=\"maki-reference-backlink\" href=\"#");
+                self.html.push_str(backlink);
+                self.html.push_str("\" aria-label=\"");
+                self.escape_html_attr_into(&accessible_label);
+                self.html.push_str("\">&#8617;</a>");
+            }
+            self.html.push_str("</span></li>");
         }
         self.html.push_str("</ol></section>");
     }
 
+    fn prepare_reference_notes(&mut self, document: &Document<'_>) {
+        let mut note_index = 0;
+        while note_index < self.reference_note_scope.notes.len() {
+            let key = self.reference_note_scope.notes[note_index].key.clone();
+            let outer_html = std::mem::take(&mut self.html);
+
+            if let Some(definition) = document.reference(&key) {
+                let raw_value = definition.raw_value.trim();
+                if parser::reference_value_is_link_shaped(raw_value) {
+                    self.render_link(raw_value, raw_value);
+                } else {
+                    self.render_inlines(&definition.value);
+                }
+            } else {
+                self.escape_html_into(&key);
+            }
+
+            let body_html = std::mem::replace(&mut self.html, outer_html);
+            self.reference_note_scope.notes[note_index].body_html = body_html;
+            note_index += 1;
+        }
+    }
+
     fn begin_heading(&mut self, level: usize, body: &str) -> HeadingTag {
+        self.reserve_rendered_id(body);
         if (1..=6).contains(&level) {
             self.html.push_str("<h");
             self.html.push_str(&level.to_string());
@@ -756,6 +975,7 @@ impl<'a> Renderer<'a> {
 
     pub(in crate::html) fn render(&mut self, document: &Document<'a>) -> String {
         let title = document.title();
+        self.reserve_document_ids(document, true, true);
         self.begin_html(title);
         self.render_navigation();
 
@@ -765,7 +985,7 @@ impl<'a> Renderer<'a> {
         }
         self.render_document_navigation();
         self.render_blocks(&document.blocks, document.reference_definitions());
-        self.render_footnotes(document);
+        self.render_reference_notes(document);
 
         self.html.push_str("</body></html>");
         self.html.clone()
@@ -792,6 +1012,8 @@ impl<'a> Renderer<'a> {
             inline_date_occurrence_index: 0,
             property_date_occurrence_index: 0,
             block_id_anchors: true,
+            reference_note_scope: ReferenceNoteScope::default(),
+            rendered_ids: BTreeSet::new(),
         }
     }
 

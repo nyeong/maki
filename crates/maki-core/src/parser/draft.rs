@@ -1,6 +1,6 @@
 use super::diagnostic::{ParseDiagnostic, ParseDiagnosticKind};
 use super::line::{LinePrefix, LineToken, scan_line, scan_line_at};
-use super::types::{ListKind, TableRowKind, TodoState};
+use super::types::{ListKind, ReferenceDefinitionSpelling, TableRowKind, TodoState};
 use crate::source::SourceSpan;
 use std::collections::BTreeSet;
 
@@ -17,17 +17,13 @@ pub(super) struct PropertyItemDraft<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum ReferenceDefinitionDraftKind<'a> {
-    Link { title: &'a str, target: &'a str },
-    Footnote { label: &'a str, body: &'a str },
-}
-
-#[derive(Debug, PartialEq)]
 pub(super) struct ReferenceDefinitionDraft<'a> {
     pub(super) line: usize,
     pub(super) span: SourceSpan,
     pub(super) raw_line: &'a str,
-    pub(super) kind: ReferenceDefinitionDraftKind<'a>,
+    pub(super) key: &'a str,
+    pub(super) raw_value: &'a str,
+    pub(super) spelling: ReferenceDefinitionSpelling,
 }
 
 impl<'a> PropertyItemDraft<'a> {
@@ -381,11 +377,11 @@ fn parse_reference_definition_line<'a>(
     let value = after_open[close + 1..].strip_prefix(':')?;
     let value = value.trim_start();
 
-    let kind = if let Some(label) = identifier.strip_prefix('^') {
+    let (key, raw_value, spelling) = if let Some(label) = identifier.strip_prefix('^') {
         if !valid_reference_identifier(label) || label.chars().any(char::is_whitespace) {
             return None;
         }
-        ReferenceDefinitionDraftKind::Footnote { label, body: value }
+        (label, value, ReferenceDefinitionSpelling::FootnoteAlias)
     } else {
         if !valid_reference_identifier(identifier) || identifier.starts_with('^') {
             return None;
@@ -394,17 +390,16 @@ fn parse_reference_definition_line<'a>(
         if target.is_empty() {
             return None;
         }
-        ReferenceDefinitionDraftKind::Link {
-            title: identifier,
-            target,
-        }
+        (identifier, target, ReferenceDefinitionSpelling::Canonical)
     };
 
     Some(ReferenceDefinitionDraft {
         line,
         span: token.span(),
         raw_line,
-        kind,
+        key,
+        raw_value,
+        spelling,
     })
 }
 
@@ -800,8 +795,7 @@ fn collect_duplicate_reference_diagnostics<'a>(
     drafts: &[BlockDraft<'a>],
     diagnostics: &mut Vec<ParseDiagnostic<'a>>,
 ) {
-    let mut links = BTreeSet::new();
-    let mut footnotes = BTreeSet::new();
+    let mut keys = BTreeSet::new();
 
     for draft in drafts {
         let BlockDraft::ReferenceDefinition { definitions } = draft else {
@@ -809,12 +803,7 @@ fn collect_duplicate_reference_diagnostics<'a>(
         };
 
         for definition in definitions {
-            let inserted = match &definition.kind {
-                ReferenceDefinitionDraftKind::Link { title, .. } => links.insert(*title),
-                ReferenceDefinitionDraftKind::Footnote { label, .. } => footnotes.insert(*label),
-            };
-
-            if !inserted {
+            if !keys.insert(definition.key) {
                 diagnostics.push(ParseDiagnostic {
                     line: definition.line,
                     span: definition.span,

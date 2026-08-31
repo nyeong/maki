@@ -1,27 +1,21 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::types::{
-    DateRange, DateStamp, DateStampKind, DateStampTarget, Inline, ReferenceDefinition,
-    ReferenceDefinitions,
+    DateRange, DateStamp, DateStampKind, DateStampTarget, Inline, ReferenceDefinitions,
 };
 
 #[derive(Default)]
 pub(super) struct ReferenceLookup<'a> {
-    links: BTreeMap<&'a str, &'a str>,
-    footnotes: BTreeSet<&'a str>,
+    definitions: BTreeMap<&'a str, &'a str>,
 }
 
 impl<'a> ReferenceLookup<'a> {
-    pub(super) fn insert_link(&mut self, title: &'a str, target: &'a str) -> bool {
-        if self.links.contains_key(title) {
+    pub(super) fn insert(&mut self, key: &'a str, raw_value: &'a str) -> bool {
+        if self.definitions.contains_key(key) {
             return false;
         }
-        self.links.insert(title, target);
+        self.definitions.insert(key, raw_value);
         true
-    }
-
-    pub(super) fn insert_footnote(&mut self, label: &'a str) -> bool {
-        self.footnotes.insert(label)
     }
 
     pub(super) fn extend<'parent>(&mut self, references: &ReferenceDefinitions<'parent>)
@@ -29,23 +23,16 @@ impl<'a> ReferenceLookup<'a> {
         'parent: 'a,
     {
         for definition in references.all() {
-            match definition {
-                ReferenceDefinition::Link { title, target } => {
-                    self.insert_link(title, target);
-                }
-                ReferenceDefinition::Footnote { label, .. } => {
-                    self.insert_footnote(label);
-                }
-            }
+            self.insert(definition.key, definition.raw_value);
         }
     }
 
-    fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.links.get(title).copied()
+    fn link_target(&self, key: &str) -> Option<&'a str> {
+        self.definitions.get(key).copied().map(str::trim)
     }
 
-    fn has_footnote(&self, label: &str) -> bool {
-        self.footnotes.contains(label)
+    fn contains(&self, key: &str) -> bool {
+        self.definitions.contains_key(key)
     }
 }
 
@@ -245,7 +232,7 @@ fn parse_inline_footnote<'a>(
     if label.is_empty()
         || label.contains(['[', ']'])
         || label.chars().any(char::is_whitespace)
-        || !references.has_footnote(label)
+        || !references.contains(label)
     {
         return None;
     }

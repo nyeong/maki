@@ -177,9 +177,220 @@ fn render_stable_inline_and_footnote_syntax() {
     assert!(html.contains(
         "<a class=\"external-link\" href=\"http://example.com/docs\">example.com/docs</a>"
     ));
-    assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-note\">[note]</a></sup>"));
-    assert!(html.contains("<section class=\"footnotes\"><ol><li id=\"fn-note\">Footnote <strong>body</strong>.</li></ol></section>"));
+    assert!(html.contains(
+        "<a class=\"maki-reference-use maki-reference-footnote\" id=\"maki-reference-use-1-1\" href=\"#maki-reference-note-1\" role=\"doc-noteref\">note<sup class=\"maki-reference-number\">1</sup></a>"
+    ));
+    assert!(html.contains(
+        "<section class=\"maki-reference-notes\" aria-labelledby=\"maki-reference-notes-title\"><h2 class=\"maki-reference-notes-title\" id=\"maki-reference-notes-title\">Notes</h2><ol><li id=\"maki-reference-note-1\" tabindex=\"-1\">Footnote <strong>body</strong>.<span class=\"maki-reference-backlinks\"><a class=\"maki-reference-backlink\" href=\"#maki-reference-use-1-1\" aria-label=\"Back to note reference 1\">&#8617;</a></span></li></ol></section>"
+    ));
     assert!(!html.contains("[^note]:"));
+}
+
+#[test]
+fn reference_value_shape_selects_link_or_annotation_presentation() {
+    let parsed = parser::parse(
+        r#"[site], [description], and [explicit path].
+
+[site]: https://example.com/search?q=maki
+[description]: Famous *search* portal & directory
+[explicit path]: /notes/path with spaces
+[unused]: Unused prose reference"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains(
+        "<a class=\"external-link\" href=\"https://example.com/search?q=maki\">site</a>"
+    ));
+    assert!(html.contains("<a href=\"/notes/path with spaces\">explicit path</a>"));
+    assert!(html.contains(
+        "<a class=\"maki-reference-use maki-reference-annotation\" id=\"maki-reference-use-1-1\" href=\"#maki-reference-note-1\" role=\"doc-noteref\">description<sup class=\"maki-reference-number\">1</sup></a>"
+    ));
+    assert!(html.contains(
+        "<li id=\"maki-reference-note-1\" tabindex=\"-1\">Famous <strong>search</strong> portal &amp; directory"
+    ));
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 1);
+    assert!(!html.contains("Unused prose reference"));
+}
+
+#[test]
+fn reference_notes_follow_first_use_and_share_occurrence_backlinks() {
+    let parsed = parser::parse(
+        r#"[^source] [details] [^details] [details]
+
+[details]: Detailed *prose* & context
+[source]: https://example.com/?a=1&b=2"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains(
+        "id=\"maki-reference-use-1-1\" href=\"#maki-reference-note-1\" role=\"doc-noteref\">source<sup class=\"maki-reference-number\">1</sup>"
+    ));
+    assert!(html.contains(
+        "id=\"maki-reference-use-2-1\" href=\"#maki-reference-note-2\" role=\"doc-noteref\">details<sup class=\"maki-reference-number\">2</sup>"
+    ));
+    assert!(html.contains(
+        "id=\"maki-reference-use-2-2\" href=\"#maki-reference-note-2\" role=\"doc-noteref\">details<sup class=\"maki-reference-number\">2</sup>"
+    ));
+    assert!(html.contains("id=\"maki-reference-use-2-3\""));
+
+    let source_note = html.find("<li id=\"maki-reference-note-1\"").unwrap();
+    let details_note = html.find("<li id=\"maki-reference-note-2\"").unwrap();
+    assert!(source_note < details_note);
+    assert!(html.contains(
+        "<a class=\"external-link\" href=\"https://example.com/?a=1&amp;b=2\">https://example.com/?a=1&amp;b=2</a>"
+    ));
+    assert!(html.contains("Detailed <strong>prose</strong> &amp; context"));
+    assert_eq!(
+        html.matches("aria-label=\"Back to details reference ")
+            .count(),
+        3
+    );
+    assert!(html.contains("href=\"#maki-reference-use-2-1\""));
+    assert!(html.contains("href=\"#maki-reference-use-2-2\""));
+    assert!(html.contains("href=\"#maki-reference-use-2-3\""));
+}
+
+#[test]
+fn reference_note_labels_and_values_are_html_escaped() {
+    let parsed = parser::parse(
+        r#"[odd & "<key>"] and [odd & "<key>"]
+
+[odd & "<key>"]: Value with <unsafe> & "quotes""#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("role=\"doc-noteref\">odd &amp; &quot;&lt;key&gt;&quot;<sup"));
+    assert!(html.contains("Value with &lt;unsafe&gt; &amp; &quot;quotes&quot;"));
+    assert_eq!(
+        html.matches("aria-label=\"Back to odd &amp; &quot;&lt;key&gt;&quot; reference ")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn nested_reference_notes_use_the_nested_document_definition() {
+    let parsed = parser::parse(
+        r#"[^same]
+
+> [^same]
+>
+> [same]: Nested value.
+
+[same]: Outer value."#,
+    );
+
+    let html = render_document(&parsed.document);
+    let quote_start = html.find("<blockquote>").unwrap();
+    let quote_end = html.find("</blockquote>").unwrap();
+    let quote = &html[quote_start..quote_end];
+    let outer = &html[quote_end..];
+
+    assert!(quote.contains("Nested value."), "{quote}");
+    assert!(!quote.contains("Outer value."), "{quote}");
+    assert!(outer.contains("Outer value."), "{outer}");
+    assert!(!outer.contains("Nested value."), "{outer}");
+    assert!(quote.contains("id=\"maki-reference-note-1-2\""), "{quote}");
+    assert!(outer.contains("id=\"maki-reference-note-1\""), "{outer}");
+}
+
+#[test]
+fn reference_note_bodies_contribute_late_backlinks_before_notes_are_emitted() {
+    let parsed = parser::parse(
+        r#"[^first] [^second]
+
+[first]: First note.
+[second]: Second note cites [first]."#,
+    );
+
+    let html = render_document(&parsed.document);
+    let first_note_start = html.find("<li id=\"maki-reference-note-1\"").unwrap();
+    let second_note_start = html.find("<li id=\"maki-reference-note-2\"").unwrap();
+    let first_note = &html[first_note_start..second_note_start];
+
+    assert!(
+        first_note.contains("href=\"#maki-reference-use-1-1\""),
+        "{first_note}"
+    );
+    assert!(
+        first_note.contains("href=\"#maki-reference-use-1-2\""),
+        "{first_note}"
+    );
+    assert_eq!(
+        first_note
+            .matches("aria-label=\"Back to first reference ")
+            .count(),
+        2,
+        "{first_note}"
+    );
+}
+
+#[test]
+fn reference_note_body_discovery_handles_cycles_once_per_definition() {
+    let parsed = parser::parse(
+        r#"[first]
+
+[first]: First cites [second].
+[second]: Second cites [first]."#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert_eq!(html.matches("tabindex=\"-1\"").count(), 2);
+    assert!(html.contains("First cites"));
+    assert!(html.contains("Second cites"));
+    assert!(html.contains("id=\"maki-reference-use-1-2\""));
+    assert_eq!(
+        html.matches("aria-label=\"Back to first reference ")
+            .count(),
+        2
+    );
+    assert_eq!(
+        html.matches("aria-label=\"Back to second reference ")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn generated_reference_ids_avoid_all_authored_document_ids() {
+    let parsed = parser::parse(
+        r#"--^ title: maki-reference-notes-title
+
+Anchored block
+--^ id: maki-reference-note-1
+
+[^note] [^note]
+
+= maki-reference-use-1-1
+
+> = maki-reference-use-1-2
+
+[note]: Note body."#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<h1 id=\"maki-reference-notes-title\""));
+    assert!(html.contains("class=\"maki-block-anchor\" id=\"maki-reference-note-1\""));
+    assert!(html.contains("<h2 id=\"maki-reference-use-1-1\""));
+    assert!(html.contains("<h2 id=\"maki-reference-use-1-2\""));
+    assert!(html.contains("id=\"maki-reference-note-1-2\""));
+    assert!(html.contains("id=\"maki-reference-use-1-1-2\""));
+    assert!(html.contains("id=\"maki-reference-use-1-2-2\""));
+    assert!(html.contains("aria-labelledby=\"maki-reference-notes-title-2\""));
+    assert!(html.contains("id=\"maki-reference-notes-title-2\""));
+
+    let ids: Vec<_> = html
+        .split(" id=\"")
+        .skip(1)
+        .filter_map(|html| html.split('"').next())
+        .collect();
+    let unique_ids: std::collections::BTreeSet<_> = ids.iter().copied().collect();
+    assert_eq!(ids.len(), unique_ids.len(), "duplicate IDs in {ids:?}");
 }
 
 #[test]

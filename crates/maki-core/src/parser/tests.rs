@@ -201,18 +201,91 @@ fn parse_document_resolves_forward_reference_links_and_footnotes() {
         parsed.document.link_target("djot"),
         Some("https://github.com/jgm/djot")
     );
-    let Some(ReferenceDefinition::Footnote { body, .. }) = parsed.document.footnote("source")
-    else {
-        panic!("expected a footnote definition");
+    let Some(definition) = parsed.document.reference("source") else {
+        panic!("expected a reference definition");
     };
+    assert_eq!(
+        definition.spelling,
+        ReferenceDefinitionSpelling::FootnoteAlias
+    );
     assert!(matches!(
-        body.as_slice(),
+        definition.value.as_slice(),
         [
             Inline::Text("Published on "),
             Inline::DateStamp(_),
             Inline::Text(".")
         ]
     ));
+}
+
+#[test]
+fn canonical_and_footnote_alias_definitions_resolve_both_presentations() {
+    let parsed = parse(
+        r#"[canonical] [^canonical] [alias] [^alias]
+
+[canonical]: https://canonical.example
+[^alias]: Alias body."#,
+    );
+
+    assert!(parsed.diagnostics.is_empty());
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
+    assert_eq!(
+        body,
+        &vec![
+            Inline::Link {
+                title: "canonical",
+                target: "https://canonical.example",
+            },
+            Inline::Text(" "),
+            Inline::Footnote { label: "canonical" },
+            Inline::Text(" "),
+            Inline::Link {
+                title: "alias",
+                target: "Alias body.",
+            },
+            Inline::Text(" "),
+            Inline::Footnote { label: "alias" },
+        ]
+    );
+    assert_eq!(
+        parsed.document.reference("canonical").unwrap().spelling,
+        ReferenceDefinitionSpelling::Canonical
+    );
+    assert_eq!(
+        parsed.document.reference("alias").unwrap().spelling,
+        ReferenceDefinitionSpelling::FootnoteAlias
+    );
+}
+
+#[test]
+fn reference_value_shape_is_shared_by_all_semantic_consumers() {
+    assert!(reference_value_is_link_shaped("https://example.com/path"));
+    assert!(reference_value_is_link_shaped("  [[target]]  "));
+    assert!(reference_value_is_link_shaped("/notes/path with spaces"));
+    assert!(!reference_value_is_link_shaped("https://example.com/a b"));
+    assert!(!reference_value_is_link_shaped("descriptive prose"));
+    assert!(!reference_value_is_link_shaped("   "));
+}
+
+#[test]
+fn unified_references_preserve_each_marker_lexical_limits() {
+    let parsed = parse("[with space] [^with space]\n\n[with space]: target");
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
+
+    assert_eq!(
+        body,
+        &vec![
+            Inline::Link {
+                title: "with space",
+                target: "target",
+            },
+            Inline::Text(" [^with space]"),
+        ]
+    );
 }
 
 #[test]
@@ -1110,6 +1183,64 @@ fn parse_reports_duplicate_reference_definitions_and_uses_the_first() {
             ..
         }
     ));
+}
+
+#[test]
+fn canonical_and_footnote_alias_spellings_share_a_first_wins_namespace() {
+    let parsed = parse(
+        r#"[same] [^same]
+[same]: first
+[^same]: second"#,
+    );
+
+    assert_eq!(parsed.document.link_target("same"), Some("first"));
+    assert_eq!(parsed.diagnostics.len(), 1);
+    assert!(matches!(
+        parsed.diagnostics[0],
+        ParseDiagnostic {
+            line: 3,
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
+            ..
+        }
+    ));
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
+    assert!(matches!(
+        body.as_slice(),
+        [
+            Inline::Link {
+                title: "same",
+                target: "first"
+            },
+            Inline::Text(" "),
+            Inline::Footnote { label: "same" }
+        ]
+    ));
+}
+
+#[test]
+fn compatibility_alias_can_win_first_and_preserves_legacy_value_edges() {
+    let parsed = parse("[same] [^same] [^empty]\n[^same]: first  \n[same]: second\n[^empty]:   ");
+
+    let same = parsed.document.reference("same").unwrap();
+    assert_eq!(same.spelling, ReferenceDefinitionSpelling::FootnoteAlias);
+    assert_eq!(same.raw_value, "first  ");
+    assert_eq!(parsed.document.link_target("same"), Some("first"));
+    assert_eq!(parsed.diagnostics.len(), 1);
+    assert!(matches!(
+        parsed.diagnostics[0],
+        ParseDiagnostic {
+            line: 3,
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
+            ..
+        }
+    ));
+
+    let empty = parsed.document.reference("empty").unwrap();
+    assert_eq!(empty.spelling, ReferenceDefinitionSpelling::FootnoteAlias);
+    assert_eq!(empty.raw_value, "");
+    assert!(empty.value.is_empty());
 }
 
 #[test]

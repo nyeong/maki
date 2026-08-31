@@ -235,7 +235,7 @@ fn date_context_preserves_braced_changes_and_highlight_syntax() {
 }
 
 #[test]
-fn date_index_collects_dates_from_footnote_definitions() {
+fn date_index_collects_dates_from_reference_definitions() {
     let project = temp_project("footnote-date-index");
     write_note_with_content(
         &project,
@@ -244,7 +244,7 @@ fn date_index_collects_dates_from_footnote_definitions() {
 
 Body[^release].
 
-[^release]: Released on [2026-08-24]."#,
+[release]: Released on [2026-08-24]."#,
     );
 
     let maki = Maki::load(&project.root).unwrap();
@@ -255,13 +255,93 @@ Body[^release].
         .occurrence(backlinks[0].occurrence_id())
         .unwrap();
 
-    assert_eq!(
-        occurrence.context(),
-        "[^release]: Released on [2026-08-24]."
-    );
+    assert_eq!(occurrence.context(), "[release]: Released on [2026-08-24].");
     let html = maki.render_html(Path::new("start.maki")).unwrap();
     assert!(html.contains("id=\"date-inline-start-maki-1\""));
-    assert!(html.contains("<section class=\"footnotes\">"));
+    assert!(html.contains("<section class=\"maki-reference-notes\""));
+}
+
+#[test]
+fn reference_definition_dates_follow_rendered_note_order_and_skip_unused_notes() {
+    let project = temp_project("reference-date-render-order");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"Second [second], then first [first].
+
+[first]: First date [2026-08-24].
+[second]: Second date [2026-08-25].
+[unused]: Unused date [2026-08-26]."#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let first = Date::parse("2026-08-24").unwrap();
+    let second = Date::parse("2026-08-25").unwrap();
+    let unused = Date::parse("2026-08-26").unwrap();
+
+    let first_id = maki.date_index().backlinks_for(&first).unwrap()[0].occurrence_id();
+    let second_id = maki.date_index().backlinks_for(&second).unwrap()[0].occurrence_id();
+    assert_eq!(second_id, "date-inline-start-maki-1");
+    assert_eq!(first_id, "date-inline-start-maki-2");
+    assert!(maki.date_index().backlinks_for(&unused).is_none());
+
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert!(html.contains("id=\"date-inline-start-maki-1\""));
+    assert!(html.contains("id=\"date-inline-start-maki-2\""));
+    assert!(!html.contains("date-inline-start-maki-3"));
+    assert!(!html.contains("Unused date"));
+}
+
+#[test]
+fn link_shaped_reference_values_do_not_create_phantom_date_occurrences() {
+    let project = temp_project("link-shaped-reference-date");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "Follow [release].\n\n[release]: [2026-08-24]",
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let date = Date::parse("2026-08-24").unwrap();
+
+    assert!(maki.date_index().backlinks_for(&date).is_none());
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert!(html.contains("[2026-08-24]"));
+    assert!(!html.contains("date-inline-start-maki"));
+}
+
+#[test]
+fn nested_reference_date_ids_follow_each_render_scope() {
+    let project = temp_project("nested-reference-date-scope");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"> [same]
+> [same]: Nested date [2026-08-25].
+
+[same]
+
+[same]: Outer date [2026-08-24]."#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let nested = Date::parse("2026-08-25").unwrap();
+    let outer = Date::parse("2026-08-24").unwrap();
+
+    assert_eq!(
+        maki.date_index().backlinks_for(&nested).unwrap()[0].occurrence_id(),
+        "date-inline-start-maki-1"
+    );
+    assert_eq!(
+        maki.date_index().backlinks_for(&outer).unwrap()[0].occurrence_id(),
+        "date-inline-start-maki-2"
+    );
+
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert!(html.contains("Nested date"));
+    assert!(html.contains("Outer date"));
+    assert!(html.contains("id=\"date-inline-start-maki-1\""));
+    assert!(html.contains("id=\"date-inline-start-maki-2\""));
 }
 
 #[test]

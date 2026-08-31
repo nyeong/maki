@@ -612,6 +612,93 @@ a.maki-external-link-has-favicon::after {
   content: none;
 }
 
+.maki-reference-use,
+.maki-reference-use:visited {
+  color: inherit;
+  text-decoration: none;
+}
+
+.maki-reference-annotation {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.maki-reference-use:hover {
+  color: var(--link);
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+}
+
+.maki-reference-use:focus-visible,
+.maki-reference-backlink:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid #c9dafc;
+  outline-offset: 2px;
+}
+
+.maki-reference-number {
+  margin-left: 0.08em;
+  color: var(--link);
+  font-size: 0.7em;
+  line-height: 0;
+}
+
+.maki-reference-notes {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.maki-reference-notes-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.maki-reference-notes > ol {
+  margin: 0;
+  padding-left: 1.75rem;
+}
+
+.maki-reference-notes > ol > li {
+  margin: 0.55rem 0;
+  scroll-margin-top: 1.5rem;
+}
+
+.maki-reference-notes > ol > li:focus {
+  border-radius: 3px;
+  outline: 2px solid #c9dafc;
+  outline-offset: 3px;
+}
+
+.maki-reference-backlinks {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin-left: 0.55em;
+  vertical-align: baseline;
+}
+
+.maki-reference-backlink,
+.maki-reference-backlink:visited {
+  display: inline-flex;
+  min-width: 1.6rem;
+  min-height: 1.6rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.maki-reference-backlink:hover {
+  border-color: var(--link);
+  color: var(--link);
+}
+
 .broken-link,
 .ambiguous-link {
   position: relative;

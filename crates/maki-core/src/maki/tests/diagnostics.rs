@@ -210,6 +210,38 @@ fn diagnostics_do_not_report_missing_footnote_definitions() {
 }
 
 #[test]
+fn reference_values_are_checked_once_according_to_their_shared_shape() {
+    let project = temp_project("reference-value-shape-diagnostics");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"[raw] [prose]
+
+[raw]: [[missing]]
+[prose]: https://example.com/a b"#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let broken_targets = maki
+        .diagnostics_without_external_links()
+        .into_iter()
+        .filter_map(|diagnostic| match diagnostic.kind() {
+            ProjectDiagnosticKind::BrokenLink { target } => Some(target.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(broken_targets, vec!["[[missing]]".to_string()]);
+
+    let checked = RefCell::new(vec![]);
+    maki.diagnostics_with_external_link_checker(&|target| {
+        checked.borrow_mut().push(target.to_string());
+        ExternalLinkCheck::Ok
+    });
+    assert!(checked.into_inner().is_empty());
+}
+
+#[test]
 fn diagnostics_report_every_duplicate_id_declaration_with_its_line() {
     let project = temp_project("duplicate-id-diagnostics");
     write_note_with_content(

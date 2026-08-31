@@ -29,7 +29,10 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - block ID occurrence: document-local ID, owner block kind/span, property declaration/value span
 - property occurrence: direction, key/value, line/key/value span
 - note link occurrence: raw target, 전체 span, target span, resolution
-- reference link occurrence: title, target, marker 전체 span, title span
+- reference definition occurrence: document-local ID, key/value, spelling, active 여부, definition/key/value span
+- reference use occurrence: key, Link/Footnote presentation, marker/key span, active definition ID
+- document reference graph: key별 active definition과 definition별 reverse use index
+- compatibility reference link occurrence: 공통 value-shape 판정에서 Link인 reference use의 title/target/span
 - date occurrence: visible inline/property value origin, property key, kind, span
 - diagnostic: source path, span, kind, message
 
@@ -39,7 +42,8 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - Heading marker span은 `=` run만 포함하고 title span은 delimiter space 뒤의 text만 포함한다.
 - Note Link target span은 `[[`, `]]`를 제외한다.
 - Block ID owner span은 addressable block의 source span이고 declaration/value span은 ID를 정의한 property line과 trimmed value다.
-- Reference Link span은 `[`, `]`를 포함하고 title span은 delimiter를 제외한다.
+- Reference Definition span은 definition line 전체이고 key span은 delimiter를 제외한다. Value span은 leading whitespace를 제외하며 canonical spelling은 trailing whitespace도 제외하고 compatibility alias는 보존한다.
+- Reference Use marker span은 `[`, `]`와 Footnote의 `^`를 포함하고 key span은 delimiter와 `^`를 제외한다.
 - Property key/value span은 prefix, `:`, 양끝 whitespace를 제외한다.
 - Parser warning은 문제가 있는 source line span을 우선 사용한다.
 - Project semantic warning은 문제가 있는 semantic target span을 사용한다.
@@ -55,6 +59,12 @@ Project 분석은 document/heading/explicit-ID link resolution과 semantic diagn
 
 Note Link target parser는 `/`와 `+` document selector, `#`와 `@` internal selector를 protocol-neutral data로 보존한다.
 Runtime renderer, analysis와 LSP는 이 target parser의 selector 규칙을 공유한다.
+
+Document reference graph는 Note Link project graph와 별개다.
+Reference key는 case-sensitive하며 `(Document path, key)`가 identity이므로 다른 Document의 같은 key를 합치지 않는다.
+`[key]: value`와 compatibility alias `[^key]: value`는 같은 namespace에 들어가고 source에서 첫 definition이 active다.
+이후 duplicate definition occurrence도 위치 정보에는 남지만 모든 resolved Link/Footnote use와 reverse index는 active definition ID를 가리킨다.
+Definition value 안의 use는 active definition body를 한 번만 순회해 수집한다.
 
 Explicit block ID index의 key는 `(DocumentRef, LocalId)`다.
 `LocalId` 비교와 중복 검사는 case-sensitive이며 다른 Document의 같은 문자열은 서로 다른 key다.
@@ -78,7 +88,8 @@ External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이
 - List item의 child block은 원본 Document source를 빌리므로 top-level block과 같은 located occurrence 및 explicit ID surface를 제공한다.
 - Quote와 quote container에서 Maki로 다시 파싱하는 body는 원본 Document의 located occurrence surface에 포함하지 않는다.
   그 body 안의 link, property와 ID에 원본 source span이 필요한 기능은 제공하지 않는다.
-- Reference Definition occurrence는 title과 resolved target을 제공하지만 target source span은 제공하지 않는다.
+- Reference Definition과 Reference Use는 원본 source 좌표가 있는 root/list/table/nested Inline에서 located graph를 제공한다.
+- Quote와 quote container에서 별도 문자열로 다시 파싱한 nested Maki reference는 원본 source span이 없으므로 located graph에서 제외한다.
 - 일반 Property occurrence는 방향과 key/value span을 제공하며 owner block relation은 별도 field로 제공하지 않는다.
   Addressable `id` property만 Block ID occurrence가 owner block relation을 별도로 제공한다.
 - Date Range의 두 endpoint는 각각의 date occurrence로 노출된다.

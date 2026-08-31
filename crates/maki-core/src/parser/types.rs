@@ -31,25 +31,30 @@ impl<'a> Inline<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceDefinitionSpelling {
+    Canonical,
+    FootnoteAlias,
+}
+
+pub fn reference_value_is_link_shaped(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && (value.starts_with('/') || !value.chars().any(char::is_whitespace))
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum ReferenceDefinition<'a> {
-    Link {
-        title: &'a str,
-        target: &'a str,
-    },
-    Footnote {
-        label: &'a str,
-        body: Vec<Inline<'a>>,
-        raw_body: &'a str,
-    },
+pub struct ReferenceDefinition<'a> {
+    pub key: &'a str,
+    pub raw_value: &'a str,
+    pub value: Vec<Inline<'a>>,
+    pub spelling: ReferenceDefinitionSpelling,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ReferenceDefinitions<'a> {
     definitions: Vec<ReferenceDefinition<'a>>,
     local_len: usize,
-    links: BTreeMap<&'a str, &'a str>,
-    footnotes: BTreeMap<&'a str, usize>,
+    by_key: BTreeMap<&'a str, usize>,
 }
 
 impl<'a> ReferenceDefinitions<'a> {
@@ -71,25 +76,16 @@ impl<'a> ReferenceDefinitions<'a> {
     }
 
     fn from_definitions(definitions: Vec<ReferenceDefinition<'a>>, local_len: usize) -> Self {
-        let mut links = BTreeMap::new();
-        let mut footnotes = BTreeMap::new();
+        let mut by_key = BTreeMap::new();
 
         for (index, definition) in definitions.iter().enumerate() {
-            match definition {
-                ReferenceDefinition::Link { title, target } => {
-                    links.entry(*title).or_insert(*target);
-                }
-                ReferenceDefinition::Footnote { label, .. } => {
-                    footnotes.entry(*label).or_insert(index);
-                }
-            }
+            by_key.entry(definition.key).or_insert(index);
         }
 
         Self {
             definitions,
             local_len,
-            links,
-            footnotes,
+            by_key,
         }
     }
 
@@ -101,20 +97,14 @@ impl<'a> ReferenceDefinitions<'a> {
         self.definitions.iter()
     }
 
-    pub fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.links.get(title).copied()
-    }
-
-    pub fn footnote(&self, label: &str) -> Option<&ReferenceDefinition<'a>> {
-        self.footnotes
-            .get(label)
+    pub fn get(&self, key: &str) -> Option<&ReferenceDefinition<'a>> {
+        self.by_key
+            .get(key)
             .and_then(|index| self.definitions.get(*index))
     }
 
-    pub fn footnotes(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
-        self.definitions[..self.local_len]
-            .iter()
-            .filter(|definition| matches!(definition, ReferenceDefinition::Footnote { .. }))
+    pub fn link_target(&self, key: &str) -> Option<&'a str> {
+        self.get(key).map(|definition| definition.raw_value.trim())
     }
 }
 
@@ -593,12 +583,12 @@ impl<'a> Document<'a> {
         &self.references
     }
 
-    pub fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.references.link_target(title)
+    pub fn reference(&self, key: &str) -> Option<&ReferenceDefinition<'a>> {
+        self.references.get(key)
     }
 
-    pub fn footnote(&self, label: &str) -> Option<&ReferenceDefinition<'a>> {
-        self.references.footnote(label)
+    pub fn link_target(&self, title: &str) -> Option<&'a str> {
+        self.references.link_target(title)
     }
 }
 
