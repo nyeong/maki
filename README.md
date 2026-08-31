@@ -100,9 +100,9 @@ Common `.maki` building blocks:
 
 = Heading
 
-Paragraph with a [[note link]], [reference link], and <https://example.com>.
+Paragraph with a [[note link]], [reference link][], and <https://example.com>.
 
-[reference link]: https://example.com
+[reference link]: <https://example.com>
 
 - [ ] Todo item
 - [x] Done item

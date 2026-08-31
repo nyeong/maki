@@ -170,15 +170,15 @@ fn parse_nested_todo_list_items() {
 }
 
 #[test]
-fn parse_document_resolves_forward_reference_links_and_footnotes() {
+fn parse_document_recognizes_all_explicit_reference_uses_before_definitions() {
     let parsed = parse(
-        r#"Read [djot], [[Maki]], and this note[^source].
-[djot]: https://github.com/jgm/djot
-[^source]: Published on [2026-08-25]."#,
+        r#"Read [djot][], [ the language ][djot], [^source][], [^ 출처 ][source], [^][source], and [ inline ](https://example.com).
+
+[djot]: <https://github.com/jgm/djot>
+[source]: Published on [2026-08-25]."#,
     );
 
     assert!(parsed.diagnostics.is_empty());
-    assert_eq!(parsed.document.blocks.len(), 2);
     let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
         panic!("expected a paragraph");
     };
@@ -186,40 +186,151 @@ fn parse_document_resolves_forward_reference_links_and_footnotes() {
         body,
         &vec![
             Inline::Text("Read "),
-            Inline::Link {
+            Inline::Reference {
+                raw: "[djot][]",
                 title: "djot",
-                target: "https://github.com/jgm/djot",
+                key: "djot",
             },
             Inline::Text(", "),
-            Inline::NoteLink { target: "Maki" },
-            Inline::Text(", and this note"),
-            Inline::Footnote { label: "source" },
+            Inline::Reference {
+                raw: "[ the language ][djot]",
+                title: "the language",
+                key: "djot",
+            },
+            Inline::Text(", "),
+            Inline::Footnote {
+                raw: "[^source][]",
+                title: Some("source"),
+                key: "source",
+            },
+            Inline::Text(", "),
+            Inline::Footnote {
+                raw: "[^ 출처 ][source]",
+                title: Some("출처"),
+                key: "source",
+            },
+            Inline::Text(", "),
+            Inline::Footnote {
+                raw: "[^][source]",
+                title: None,
+                key: "source",
+            },
+            Inline::Text(", and "),
+            Inline::DirectLink {
+                raw: "[ inline ](https://example.com)",
+                title: "inline",
+                target: "https://example.com",
+            },
             Inline::Text("."),
         ]
     );
-    assert_eq!(
-        parsed.document.link_target("djot"),
-        Some("https://github.com/jgm/djot")
-    );
-    let Some(ReferenceDefinition::Footnote { body, .. }) = parsed.document.footnote("source")
-    else {
-        panic!("expected a footnote definition");
+}
+
+#[test]
+fn canonical_definitions_trim_keys_and_do_not_accept_footnote_aliases() {
+    let parsed = parse("[ foo bar ]: value\n[^legacy]: body");
+
+    let definition = parsed.document.reference("foo bar").unwrap();
+    assert_eq!(definition.key, "foo bar");
+    assert_eq!(definition.raw_value, "value");
+    assert!(parsed.document.reference("legacy").is_none());
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[1].kind else {
+        panic!("expected the former alias syntax to remain text");
     };
+    assert_eq!(body, &vec![Inline::Text("[^legacy]: body")]);
+}
+
+#[test]
+fn reference_value_kind_requires_one_exact_semantic_target() {
+    let parsed = parse(
+        r#"[web]: <https://example.com/path>
+[note]: [[target]]
+[date]: [2026-08-25]
+[range]: [2026-08-25]--[2026-08-26]
+[bare-url]: https://example.com/path
+[direct]: [title](https://example.com)
+[prose]: Published on [2026-08-25]."#,
+    );
+
+    assert_eq!(
+        parsed.document.reference("web").unwrap().value_kind(),
+        ReferenceValueKind::HyperLink
+    );
+    assert_eq!(
+        parsed.document.reference("note").unwrap().value_kind(),
+        ReferenceValueKind::NoteLink
+    );
+    assert_eq!(
+        parsed.document.reference("date").unwrap().value_kind(),
+        ReferenceValueKind::DateStamp
+    );
+    assert_eq!(
+        parsed.document.reference("range").unwrap().value_kind(),
+        ReferenceValueKind::DateRange
+    );
+    for key in ["bare-url", "direct", "prose"] {
+        assert_eq!(
+            parsed.document.reference(key).unwrap().value_kind(),
+            ReferenceValueKind::Prose
+        );
+    }
+}
+
+#[test]
+fn explicit_compounds_precede_dates_and_note_links_keep_priority() {
     assert!(matches!(
-        body.as_slice(),
-        [
-            Inline::Text("Published on "),
-            Inline::DateStamp(_),
-            Inline::Text(".")
-        ]
+        parse_inline("[2026-08-25][date]").as_slice(),
+        [Inline::Reference {
+            title: "2026-08-25",
+            key: "date",
+            ..
+        }]
+    ));
+    assert!(matches!(
+        parse_inline("[[note]]").as_slice(),
+        [Inline::NoteLink { target: "note" }]
+    ));
+    assert!(matches!(
+        parse_inline("[2026-08-25]").as_slice(),
+        [Inline::DateStamp(_)]
     ));
 }
 
 #[test]
-fn parse_missing_references_and_legacy_links_as_text() {
+fn bare_markers_are_text_but_explicit_uses_do_not_require_a_definition() {
     assert_eq!(
-        parse_inline("[missing] [^missing] [title](target)"),
-        vec![Inline::Text("[missing] [^missing] [title](target)")]
+        parse_inline("[missing] [^missing] "),
+        vec![Inline::Text("[missing] [^missing] ")]
+    );
+    assert_eq!(
+        parse_inline("[missing][] [^missing][]"),
+        vec![
+            Inline::Reference {
+                raw: "[missing][]",
+                title: "missing",
+                key: "missing",
+            },
+            Inline::Text(" "),
+            Inline::Footnote {
+                raw: "[^missing][]",
+                title: Some("missing"),
+                key: "missing",
+            },
+        ]
+    );
+}
+
+#[test]
+fn direct_links_reserve_leading_caret_and_require_nonempty_trimmed_titles() {
+    assert_eq!(
+        parse_inline("[^^](target)"),
+        vec![Inline::Text("[^^](target)")]
+    );
+    assert_eq!(
+        parse_inline("[ ^title ](target) [   ](target) [   ][key] [^   ][key] [^^title][key]"),
+        vec![Inline::Text(
+            "[ ^title ](target) [   ](target) [   ][key] [^   ][key] [^^title][key]"
+        )]
     );
 }
 
@@ -396,9 +507,9 @@ fn parse_inline_backslash_escapes_ascii_punctuation() {
 #[test]
 fn parse_inline_escape_keeps_reference_syntax_literal() {
     let parsed = parse(
-        r#"Escaped \[known], normal [known].
+        r#"Escaped \[known][], normal [known][].
 
-[known]: /target"#,
+[known]: <https://example.com>"#,
     );
     let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
         panic!("expected a paragraph");
@@ -408,10 +519,11 @@ fn parse_inline_escape_keeps_reference_syntax_literal() {
         body,
         &vec![
             Inline::Text("Escaped "),
-            Inline::Text("[known], normal "),
-            Inline::Link {
+            Inline::Text("[known][], normal "),
+            Inline::Reference {
+                raw: "[known][]",
                 title: "known",
-                target: "/target",
+                key: "known",
             },
             Inline::Text("."),
         ]
@@ -1085,15 +1197,16 @@ fn parse_reports_property_on_property_and_ignores_the_second_property() {
 #[test]
 fn parse_reports_duplicate_reference_definitions_and_uses_the_first() {
     let parsed = parse(
-        r#"[link]
+        r#"[link][]
 [link]: first
-[link]: second
-[^note]: first
-[^note]: second"#,
+[link]: second"#,
     );
 
-    assert_eq!(parsed.document.link_target("link"), Some("first"));
-    assert_eq!(parsed.diagnostics.len(), 2);
+    assert_eq!(
+        parsed.document.reference("link").unwrap().raw_value,
+        "first"
+    );
+    assert_eq!(parsed.diagnostics.len(), 1);
     assert!(matches!(
         parsed.diagnostics[0],
         ParseDiagnostic {
@@ -1102,14 +1215,60 @@ fn parse_reports_duplicate_reference_definitions_and_uses_the_first() {
             ..
         }
     ));
+}
+
+#[test]
+fn trimmed_definition_keys_share_a_first_wins_namespace() {
+    let parsed = parse(
+        r#"[same][] [^same][]
+[ same ]: first
+[same]: second"#,
+    );
+
+    assert_eq!(
+        parsed.document.reference("same").unwrap().raw_value,
+        "first"
+    );
+    assert_eq!(parsed.diagnostics.len(), 1);
     assert!(matches!(
-        parsed.diagnostics[1],
+        parsed.diagnostics[0],
         ParseDiagnostic {
-            line: 5,
+            line: 3,
             kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
             ..
         }
     ));
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
+    assert!(matches!(
+        body.as_slice(),
+        [
+            Inline::Reference {
+                raw: "[same][]",
+                title: "same",
+                key: "same"
+            },
+            Inline::Text(" "),
+            Inline::Footnote {
+                raw: "[^same][]",
+                title: Some("same"),
+                key: "same"
+            }
+        ]
+    ));
+}
+
+#[test]
+fn former_footnote_alias_definition_is_plain_text() {
+    let parsed = parse("[^same]: first");
+
+    assert!(parsed.document.reference("same").is_none());
+    assert!(parsed.diagnostics.is_empty());
+    let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+        panic!("expected a paragraph");
+    };
+    assert_eq!(body, &vec![Inline::Text("[^same]: first")]);
 }
 
 #[test]

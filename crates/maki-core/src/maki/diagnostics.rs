@@ -7,7 +7,7 @@ use crate::{
     source::SourceMap,
 };
 
-use super::links::{ExternalLinkCheck, check_external_link, note_link_target_for_href};
+use super::links::{ExternalLinkCheck, check_external_link};
 use super::{Maki, NoteLinkResolution, NoteRef, quote_mode_is_raw};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,31 +62,45 @@ impl Maki {
 
             if let Some(document) = self.snapshot.analysis().document(source_path) {
                 let source_map = SourceMap::new(source);
-                for diagnostic in document
-                    .diagnostics
-                    .iter()
-                    .filter(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::DuplicateId)
-                {
-                    let id = document
-                        .block_ids
-                        .iter()
-                        .find(|block_id| block_id.value_span == diagnostic.span)
-                        .map(|block_id| block_id.id.clone())
-                        .unwrap_or_else(|| {
-                            diagnostic
-                                .message
-                                .strip_prefix("duplicate id: ")
-                                .unwrap_or(&diagnostic.message)
-                                .to_string()
-                        });
+                for diagnostic in &document.diagnostics {
+                    let kind = match diagnostic.kind {
+                        AnalysisDiagnosticKind::DuplicateId => {
+                            let id = document
+                                .block_ids
+                                .iter()
+                                .find(|block_id| block_id.value_span == diagnostic.span)
+                                .map(|block_id| block_id.id.clone())
+                                .unwrap_or_else(|| {
+                                    diagnostic
+                                        .message
+                                        .strip_prefix("duplicate id: ")
+                                        .unwrap_or(&diagnostic.message)
+                                        .to_string()
+                                });
+                            ProjectDiagnosticKind::DuplicateId { id }
+                        }
+                        AnalysisDiagnosticKind::UnresolvedReference => {
+                            let key = document
+                                .reference_graph
+                                .uses
+                                .iter()
+                                .find(|usage| usage.key_span == diagnostic.span)
+                                .map(|usage| usage.key.clone())
+                                .unwrap_or_else(|| {
+                                    diagnostic
+                                        .message
+                                        .strip_prefix("unresolved reference: ")
+                                        .unwrap_or(&diagnostic.message)
+                                        .to_string()
+                                });
+                            ProjectDiagnosticKind::UnresolvedReference { key }
+                        }
+                        _ => continue,
+                    };
                     let line = source_map
                         .position(diagnostic.span.start)
                         .map(|position| position.line + 1);
-                    diagnostics.push(ProjectDiagnostic::new(
-                        source_path,
-                        line,
-                        ProjectDiagnosticKind::DuplicateId { id },
-                    ));
+                    diagnostics.push(ProjectDiagnostic::new(source_path, line, kind));
                 }
             }
 
@@ -164,6 +178,7 @@ impl ProjectDiagnostic {
 pub enum ProjectDiagnosticKind {
     ParseWarning { message: String },
     DuplicateId { id: String },
+    UnresolvedReference { key: String },
     BrokenLink { target: String },
     AmbiguousLink { target: String },
     BrokenExternalLink { target: String, reason: String },
@@ -175,6 +190,7 @@ impl ProjectDiagnosticKind {
         match self {
             Self::ParseWarning { .. } => "parser",
             Self::DuplicateId { .. } => "duplicate id",
+            Self::UnresolvedReference { .. } => "unresolved reference",
             Self::BrokenLink { .. } => "broken link",
             Self::AmbiguousLink { .. } => "ambiguous link",
             Self::BrokenExternalLink { .. } => "external link",
@@ -186,6 +202,7 @@ impl ProjectDiagnosticKind {
         match self {
             Self::ParseWarning { message } => message.clone(),
             Self::DuplicateId { id } => format!("duplicate id: {id}"),
+            Self::UnresolvedReference { key } => format!("unresolved reference: {key}"),
             Self::BrokenLink { target } => format!("broken link: {target}"),
             Self::AmbiguousLink { target } => format!("ambiguous link: {target}"),
             Self::BrokenExternalLink { target, reason } => {
@@ -201,6 +218,7 @@ pub struct ProjectDiagnosticSummary {
     total: usize,
     parse_warnings: usize,
     duplicate_ids: usize,
+    unresolved_references: usize,
     broken_links: usize,
     ambiguous_links: usize,
     broken_external_links: usize,
@@ -218,6 +236,9 @@ impl ProjectDiagnosticSummary {
             match diagnostic.kind() {
                 ProjectDiagnosticKind::ParseWarning { .. } => summary.parse_warnings += 1,
                 ProjectDiagnosticKind::DuplicateId { .. } => summary.duplicate_ids += 1,
+                ProjectDiagnosticKind::UnresolvedReference { .. } => {
+                    summary.unresolved_references += 1
+                }
                 ProjectDiagnosticKind::BrokenLink { .. } => summary.broken_links += 1,
                 ProjectDiagnosticKind::AmbiguousLink { .. } => summary.ambiguous_links += 1,
                 ProjectDiagnosticKind::BrokenExternalLink { .. } => {
@@ -240,6 +261,10 @@ impl ProjectDiagnosticSummary {
 
     pub fn duplicate_ids(&self) -> usize {
         self.duplicate_ids
+    }
+
+    pub fn unresolved_references(&self) -> usize {
+        self.unresolved_references
     }
 
     pub fn broken_links(&self) -> usize {
@@ -391,21 +416,7 @@ fn collect_document_link_diagnostics(
     document: &parser::Document<'_>,
 ) {
     for definition in document.reference_definitions().iter() {
-        match definition {
-            parser::ReferenceDefinition::Link { target, .. } => {
-                if let Some(note_target) = note_link_target_for_href(target) {
-                    push_link_diagnostic(
-                        diagnostics,
-                        source_path,
-                        maki.resolve_note_link(current, &note_target),
-                        &note_target,
-                    );
-                }
-            }
-            parser::ReferenceDefinition::Footnote { body, .. } => {
-                collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
-            }
-        }
+        collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &definition.value);
     }
 
     for block in &document.blocks {

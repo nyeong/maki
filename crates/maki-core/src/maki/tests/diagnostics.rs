@@ -8,13 +8,13 @@ fn diagnostics_collect_parse_warnings_and_link_resolution_issues() {
         "start.maki",
         r#"--^ invalid-property
 
-See [[missing]], [Ghost], and [[same]].
+See [[missing]], [Ghost][], and [[same]].
 
-[Ghost]: ghost
+[Ghost]: [[ghost]]
 
 > See [[quoted-missing]].
-> [quoted reference]
-> [quoted reference]: quoted-reference-missing
+> [quoted reference][]
+> [quoted reference]: [[quoted-reference-missing]]
 
 --- quote
 See [[container-missing]].
@@ -83,7 +83,7 @@ fn diagnostics_without_external_links_skips_external_link_checks() {
     write_note_with_content(
         &project,
         "start.maki",
-        "See [Down] and [[missing]].\n\n[Down]: https://down.example/path",
+        "See [Down][] and [[missing]].\n\n[Down]: <https://down.example/path>",
     );
 
     let maki = Maki::load(&project.root).unwrap();
@@ -107,9 +107,9 @@ fn diagnostics_collect_broken_external_links() {
     write_note_with_content(
         &project,
         "start.maki",
-        r#"See [Down], <https://ok.example/docs>, and `https://code.example`.
+        r#"See [Down][], <https://ok.example/docs>, and `https://code.example`.
 
-[Down]: https://down.example/path
+[Down]: <https://down.example/path>
 
 --- quote
 See <https://down.example/path>.
@@ -160,9 +160,9 @@ fn diagnostics_collect_links_inside_strong_inline() {
     write_note_with_content(
         &project,
         "start.maki",
-        r#"See *[[missing]] and [Missing] and <https://down.example/path>*.
+        r#"See *[[missing]] and [Missing][] and <https://down.example/path>*.
 
-[Missing]: /missing-note"#,
+[Missing]: [[/missing-note]]"#,
     );
 
     let maki = Maki::load(&project.root).unwrap();
@@ -207,6 +207,72 @@ fn diagnostics_do_not_report_missing_footnote_definitions() {
     let maki = Maki::load(&project.root).unwrap();
 
     assert!(maki.diagnostics_without_external_links().is_empty());
+}
+
+#[test]
+fn diagnostics_report_unresolved_explicit_references_but_not_bare_markers() {
+    let project = temp_project("unresolved-reference-diagnostics");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "[missing] [^missing] [missing][] [title][ missing ] [^missing][] [^][ missing ]",
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let unresolved = maki
+        .diagnostics_without_external_links()
+        .into_iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::UnresolvedReference { key } if key == "missing"
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(unresolved.len(), 4);
+    assert!(
+        unresolved
+            .iter()
+            .all(|diagnostic| diagnostic.line() == Some(1))
+    );
+    let summary = ProjectDiagnosticSummary::from_diagnostics(&unresolved);
+    assert_eq!(summary.unresolved_references(), 4);
+}
+
+#[test]
+fn reference_values_are_checked_once_according_to_their_shared_shape() {
+    let project = temp_project("reference-value-shape-diagnostics");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"[raw][] [prose][]
+
+[raw]: [[missing]]
+[prose]: <https://example.com/a> has details"#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let broken_targets = maki
+        .diagnostics_without_external_links()
+        .into_iter()
+        .filter_map(|diagnostic| match diagnostic.kind() {
+            ProjectDiagnosticKind::BrokenLink { target } => Some(target.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(broken_targets, vec!["missing".to_string()]);
+
+    let checked = RefCell::new(vec![]);
+    maki.diagnostics_with_external_link_checker(&|target| {
+        checked.borrow_mut().push(target.to_string());
+        ExternalLinkCheck::Ok
+    });
+    assert_eq!(
+        checked.into_inner(),
+        vec!["https://example.com/a".to_string()]
+    );
 }
 
 #[test]

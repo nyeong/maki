@@ -25,7 +25,7 @@ Maki source는 renderer 없이 읽을 때도 문서의 의미가 드러나는 �
 
 - Heading level은 `=` 개수로 보인다.
 - List와 quote marker는 line의 역할을 직접 표시한다.
-- `[[note]]`, `[reference]`, `[date]`, `<date>`는 서로 다른 의미를 source에 보존한다.
+- `[[note]]`, `[reference][]`, `[date]`, `<date>`는 서로 다른 의미를 source에 보존한다.
 - Property는 연결된 document 또는 block 가까이에 둔다.
 - Reference Definition은 본문 display와 긴 target을 분리한다.
 
@@ -39,6 +39,6 @@ Maki source는 renderer 없이 읽을 때도 문서의 의미가 드러나는 �
 
 = 영향을 받은 형식과 도구
 
-Maki의 문법과 사용 모델은 Markdown, Org mode, AsciiDoc, reStructuredText, Gemtext, Typst, Obsidian, Logseq, MFM, [Djot]과 불렛저널의 영향을 받았다.
+Maki의 문법과 사용 모델은 Markdown, Org mode, AsciiDoc, reStructuredText, Gemtext, Typst, Obsidian, Logseq, MFM, [Djot][]과 불렛저널의 영향을 받았다.
 
-[Djot]: https://github.com/jgm/djot
+[Djot]: <https://github.com/jgm/djot>

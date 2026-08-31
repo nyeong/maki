@@ -50,14 +50,16 @@ fn test_render_heading_supports_inline_links() {
     let parsed = parser::parse(
         r#"--^ title: Diagnostics
 
-== [home.maki]
+== [home.maki][]
 
-[home.maki]: /home"#,
+[home.maki]: [[/home]]"#,
     );
 
     let html = render_document(&parsed.document);
 
-    assert!(html.contains("<h3 id=\"[home.maki]\"><a href=\"/home\">home.maki</a></h3>"));
+    assert!(html.contains(
+        "<h3 id=\"[home.maki][]\"><a href=\"/home\">home.maki</a><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#maki-reference-note-1\" role=\"doc-noteref\" aria-label=\"Reference note 1\"><bdi>[1]</bdi></a></sup></h3>"
+    ));
 }
 
 #[test]
@@ -142,24 +144,24 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
         r#"| 이름 | 점수 |
 |---+---|
 | `Alice` | 10 |
-| [Bob] | 2 |
+| [Bob][] | 2 |
 
-[Bob]: /bob"#,
+[Bob]: [[/bob]]"#,
     );
 
     let html = render_document(&parsed.document);
 
     assert!(html.contains(
-            "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><a href=\"/bob\">Bob</a></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
+            "<table><thead><tr><th scope=\"col\">이름</th><th class=\"maki-table-number\" scope=\"col\">점수</th></tr></thead><tbody><tr><td><code>Alice</code></td><td class=\"maki-table-number\">10</td></tr><tr><td><a href=\"/bob\">Bob</a><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#maki-reference-note-1\" role=\"doc-noteref\" aria-label=\"Reference note 1\"><bdi>[1]</bdi></a></sup></td><td class=\"maki-table-number\">2</td></tr></tbody></table>"
         ));
 }
 
 #[test]
 fn render_stable_inline_and_footnote_syntax() {
     let parsed = parser::parse(
-        r#"Use /italic/, *strong*, ^{sup}, _{sub}, +{inserted}, -{deleted}, and ::highlight:: with <https://example.com> and <http://example.com/docs>.[^note]
+        r#"Use /italic/, *strong*, ^{sup}, _{sub}, +{inserted}, -{deleted}, and ::highlight:: with <https://example.com> and <http://example.com/docs>.[^note][]
 
-[^note]: Footnote *body*."#,
+[note]: Footnote *body*."#,
     );
 
     let html = render_document(&parsed.document);
@@ -177,9 +179,262 @@ fn render_stable_inline_and_footnote_syntax() {
     assert!(html.contains(
         "<a class=\"external-link\" href=\"http://example.com/docs\">example.com/docs</a>"
     ));
-    assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-note\">[note]</a></sup>"));
-    assert!(html.contains("<section class=\"footnotes\"><ol><li id=\"fn-note\">Footnote <strong>body</strong>.</li></ol></section>"));
-    assert!(!html.contains("[^note]:"));
+    assert!(html.contains(
+        "<sup class=\"maki-reference-marker\"><a class=\"maki-reference-use maki-reference-footnote maki-reference-footnote-named\" href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[note]</bdi></a></sup>"
+    ));
+    assert!(html.contains(
+        "<section class=\"maki-reference-notes\" aria-labelledby=\"maki-reference-notes-title\"><h2 class=\"maki-reference-notes-title\" id=\"maki-reference-notes-title\">Notes</h2><ol><li id=\"maki-reference-note-1\" tabindex=\"-1\"><span class=\"maki-reference-note-marker\"><bdi>[1]</bdi></span><span class=\"maki-reference-note-body\">Footnote <strong>body</strong>.</span></li></ol></section>"
+    ));
+    assert!(!html.contains("maki-reference-backlink"));
+    assert!(!html.contains("&#8617;"));
+    assert!(!html.contains("[note]:"));
+}
+
+#[test]
+fn reference_value_kind_selects_target_or_term_presentation() {
+    let parsed = parser::parse(
+        r#"[site][], [ 문서 ][ document ], [description][], and [ direct ]( https://direct.example/path ).
+
+[site]: <https://example.com/search?q=maki>
+[document]: [[/notes/path]]
+[description]: Famous *search* portal & directory
+[unused]: Unused prose reference"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains(
+        "<a class=\"external-link\" href=\"https://example.com/search?q=maki\">site</a>"
+    ));
+    assert!(html.contains("href=\"/notes/path\">문서</a>"));
+    assert!(html.contains(
+        "<a class=\"maki-reference-use maki-reference-term\" href=\"#maki-reference-note-3\">description</a>"
+    ));
+    assert!(
+        html.contains("<a class=\"external-link\" href=\"https://direct.example/path\">direct</a>")
+    );
+    assert!(html.contains(
+        "<li id=\"maki-reference-note-3\" tabindex=\"-1\"><span class=\"maki-reference-note-marker\"><bdi>[3]</bdi></span><span class=\"maki-reference-note-body\">Famous <strong>search</strong> portal &amp; directory"
+    ));
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 3);
+    assert!(!html.contains("Unused prose reference"));
+}
+
+#[test]
+fn prose_term_and_footnote_presentations_share_one_note() {
+    let parsed = parser::parse(
+        r#"[term][] [^label][term] [^][term]
+
+[term]: Shared definition."#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains(
+        "<a class=\"maki-reference-use maki-reference-term\" href=\"#maki-reference-note-1\">term</a>"
+    ));
+    assert!(
+        html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[label]</bdi>")
+    );
+    assert!(html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[1]</bdi>"));
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 1);
+    assert_eq!(html.matches("href=\"#maki-reference-note-1\"").count(), 3);
+    assert!(!html.contains("maki-reference-backlink"));
+}
+
+#[test]
+fn date_targets_link_when_they_have_one_destination() {
+    let parsed = parser::parse(
+        r#"[deadline][] [period][] [일정][period]
+
+[deadline]: [2026-09-01]
+[period]: [2026-09-01]--[2026-09-03]"#,
+    );
+    let html = render_document_with_context(
+        &parsed.document,
+        RenderContext::default().with_date_source_path(std::path::Path::new("index.maki")),
+    );
+
+    assert!(html.contains("href=\"/@/dates/2026-09-01#date-inline-index-maki-1\">deadline</a>"));
+    assert!(html.contains(
+        "id=\"date-inline-index-maki-2\" href=\"/@/dates/2026-09-01#date-inline-index-maki-2\">[2026-09-01]</a>&ndash;"
+    ));
+    assert!(html.contains(
+        "<a class=\"maki-reference-use maki-reference-term\" href=\"#maki-reference-note-2\">일정</a>"
+    ));
+    assert_eq!(html.matches("id=\"date-inline-index-maki-").count(), 2);
+    assert!(html.contains("<span class=\"maki-reference-note-body\">[2026-09-01]</span>"));
+    assert!(html.contains(
+        "<span class=\"maki-reference-note-body\">[2026-09-01]&ndash;[2026-09-03]</span>"
+    ));
+}
+
+#[test]
+fn unresolved_reference_markers_render_the_exact_source() {
+    let parsed = parser::parse("[missing][] [shown][missing] [^missing][] [^][missing]");
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<p>[missing][] [shown][missing] [^missing][] [^][missing]</p>"));
+    assert!(!html.contains("<section class=\"maki-reference-notes\""));
+}
+
+#[test]
+fn direct_links_keep_raw_local_hrefs_and_do_not_activate_unsafe_schemes() {
+    let parsed =
+        parser::parse("[asset](downloads) [fragment](#section) [unsafe](javascript:alert(1))");
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<a href=\"downloads\">asset</a>"));
+    assert!(html.contains("<a href=\"#section\">fragment</a>"));
+    assert!(html.contains("[unsafe](javascript:alert(1))"));
+    assert!(!html.contains("href=\"javascript:"));
+}
+
+#[test]
+fn named_and_numbered_footnotes_share_definition_ordinal_without_backlinks() {
+    let parsed = parser::parse(
+        r#"[^ source ][] [^ origin ][ source ] [^][ source ]
+
+[ source ]: <https://example.com/?a=1&b=2>"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(
+        html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[source]</bdi>")
+    );
+    assert!(
+        html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[origin]</bdi>")
+    );
+    assert!(html.contains("href=\"#maki-reference-note-1\" role=\"doc-noteref\"><bdi>[1]</bdi>"));
+    assert!(html.contains("<span class=\"maki-reference-note-marker\"><bdi>[1]</bdi></span>"));
+    assert_eq!(html.matches("href=\"#maki-reference-note-1\"").count(), 3);
+    assert!(!html.contains("maki-reference-backlink"));
+    assert!(!html.contains("id=\"maki-reference-use-"));
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 1);
+}
+
+#[test]
+fn reference_note_labels_and_values_are_html_escaped() {
+    let parsed = parser::parse(
+        r#"[^odd & "<key>"][] and [^visible & "<title>"][odd & "<key>"]
+
+[odd & "<key>"]: Value with <unsafe> & "quotes""#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<bdi>[odd &amp; &quot;&lt;key&gt;&quot;]</bdi>"));
+    assert!(html.contains("<bdi>[visible &amp; &quot;&lt;title&gt;&quot;]</bdi>"));
+    assert!(html.contains("Value with &lt;unsafe&gt; &amp; &quot;quotes&quot;"));
+    assert!(!html.contains("maki-reference-backlink"));
+}
+
+#[test]
+fn nested_reference_notes_use_the_nested_document_definition() {
+    let parsed = parser::parse(
+        r#"[^same][]
+
+> [^same][]
+>
+> [same]: Nested value.
+
+[same]: Outer value."#,
+    );
+
+    let html = render_document(&parsed.document);
+    let quote_start = html.find("<blockquote>").unwrap();
+    let quote_end = html.find("</blockquote>").unwrap();
+    let quote = &html[quote_start..quote_end];
+    let outer = &html[quote_end..];
+
+    assert!(quote.contains("Nested value."), "{quote}");
+    assert!(!quote.contains("Outer value."), "{quote}");
+    assert!(outer.contains("Outer value."), "{outer}");
+    assert!(!outer.contains("Nested value."), "{outer}");
+    assert!(quote.contains("id=\"maki-reference-note-1-2\""), "{quote}");
+    assert!(outer.contains("id=\"maki-reference-note-1\""), "{outer}");
+}
+
+#[test]
+fn reference_note_bodies_discover_late_notes_without_backlinks() {
+    let parsed = parser::parse(
+        r#"[^first][]
+
+[first]: First note cites [second][].
+[second]: Second note."#,
+    );
+
+    let html = render_document(&parsed.document);
+    let first_note_start = html.find("<li id=\"maki-reference-note-1\"").unwrap();
+    let second_note_start = html.find("<li id=\"maki-reference-note-2\"").unwrap();
+    let first_note = &html[first_note_start..second_note_start];
+
+    assert!(first_note.contains("First note cites"), "{first_note}");
+    assert!(
+        first_note.contains("href=\"#maki-reference-note-2\""),
+        "{first_note}"
+    );
+    assert!(!html.contains("maki-reference-backlink"));
+    assert!(!html.contains("id=\"maki-reference-use-"));
+}
+
+#[test]
+fn reference_note_body_discovery_handles_cycles_once_per_definition() {
+    let parsed = parser::parse(
+        r#"[first][]
+
+[first]: First cites [second][].
+[second]: Second cites [first][]."#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert_eq!(html.matches("tabindex=\"-1\"").count(), 2);
+    assert!(html.contains("First cites"));
+    assert!(html.contains("Second cites"));
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 2);
+    assert_eq!(html.matches("href=\"#maki-reference-note-1\"").count(), 2);
+    assert_eq!(html.matches("href=\"#maki-reference-note-2\"").count(), 1);
+    assert!(!html.contains("maki-reference-backlink"));
+}
+
+#[test]
+fn generated_note_ids_avoid_all_authored_document_ids() {
+    let parsed = parser::parse(
+        r#"--^ title: maki-reference-notes-title
+
+Anchored block
+--^ id: maki-reference-note-1
+
+[^note][] [^note][]
+
+= maki-reference-use-1-1
+
+> = maki-reference-use-1-2
+
+[note]: Note body."#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<h1 id=\"maki-reference-notes-title\""));
+    assert!(html.contains("class=\"maki-block-anchor\" id=\"maki-reference-note-1\""));
+    assert!(html.contains("<h2 id=\"maki-reference-use-1-1\""));
+    assert!(html.contains("<h2 id=\"maki-reference-use-1-2\""));
+    assert!(html.contains("id=\"maki-reference-note-1-2\""));
+    assert!(html.contains("aria-labelledby=\"maki-reference-notes-title-2\""));
+    assert!(html.contains("id=\"maki-reference-notes-title-2\""));
+    assert!(!html.contains("id=\"maki-reference-use-1-1-2\""));
+    assert!(!html.contains("id=\"maki-reference-use-1-2-2\""));
+
+    let ids: Vec<_> = html
+        .split(" id=\"")
+        .skip(1)
+        .filter_map(|html| html.split('"').next())
+        .collect();
+    let unique_ids: std::collections::BTreeSet<_> = ids.iter().copied().collect();
+    assert_eq!(ids.len(), unique_ids.len(), "duplicate IDs in {ids:?}");
 }
 
 #[test]
@@ -196,6 +451,15 @@ fn render_inline_backslash_escape_without_the_backslash() {
 fn external_link_favicon_css_uses_the_script_state_class() {
     assert!(DEFAULT_CSS.contains("a.maki-external-link-has-favicon >"));
     assert!(DEFAULT_CSS.contains("a.maki-external-link-has-favicon::after"));
+}
+
+#[test]
+fn reference_css_keeps_notes_fragment_focus_without_backlink_styles() {
+    assert!(DEFAULT_CSS.contains(".maki-reference-notes > ol > li:target"));
+    assert!(DEFAULT_CSS.contains("list-style: none"));
+    assert!(DEFAULT_CSS.contains(".maki-reference-use:focus-visible"));
+    assert!(!DEFAULT_CSS.contains(".maki-reference-backlink"));
+    assert!(!DEFAULT_CSS.contains(".maki-reference-target-location"));
 }
 
 #[test]
@@ -538,18 +802,18 @@ fn quote_attribution_separator_is_not_an_unknown_container() {
 #[test]
 fn nested_maki_blocks_resolve_their_reference_definitions() {
     let parsed = parser::parse(
-        r#"> [quoted]
-> [quoted]: https://quoted.example
-> [outer]
-> > [outer]
+        r#"> [quoted][]
+> [quoted]: <https://quoted.example>
+> [outer][]
+> > [outer][]
 
 --- quote
-[contained]
-[contained]: https://contained.example
-[outer]
+[contained][]
+[contained]: <https://contained.example>
+[outer][]
 ---
 
-[outer]: https://outer.example"#,
+[outer]: <https://outer.example>"#,
     );
 
     let html = render_document(&parsed.document);
@@ -583,9 +847,9 @@ fn main() {}
 
 --v mode: block
 > = Parsed heading
-> [site]
+> [site][]
 
-[site]: https://example.com"#,
+[site]: <https://example.com>"#,
     );
 
     let html = render_document(&parsed.document);
@@ -596,7 +860,8 @@ fn main() {}
         "<blockquote><div class=\"maki-quote-text\">= Raw container heading\n[site]</div></blockquote>"
     ));
     assert!(html.contains("<blockquote><h2 id=\"Parsed heading\">Parsed heading</h2>"));
-    assert_eq!(html.matches("href=\"https://example.com\"").count(), 1);
+    assert_eq!(html.matches("href=\"https://example.com\"").count(), 2);
+    assert!(html.contains("<section class=\"maki-reference-notes\""));
 }
 
 #[test]

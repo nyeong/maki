@@ -1348,11 +1348,7 @@ fn test_diagnostics_page_lists_project_issues() {
     let root = std::env::temp_dir().join(format!("maki-diagnostics-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("home.maki"),
-        "See [[missing]] and [Ghost].\n\n[Ghost]: ghost",
-    )
-    .unwrap();
+    fs::write(root.join("home.maki"), "See [[missing]] and [Ghost][].").unwrap();
 
     let maki = Maki::load(&root).unwrap();
     let state = AppState::new(maki);
@@ -1371,9 +1367,9 @@ fn test_diagnostics_page_lists_project_issues() {
     assert!(body.contains("<script src=\"/.maki/assets/maki-search.js\"></script>"));
     assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
     assert!(body.contains("2 issue(s)"));
-    assert!(body.contains("<h3 id=\"[home.maki]\"><a href=\"/home\">home.maki</a></h3>"));
+    assert!(body.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>"));
     assert!(body.contains("broken link: missing"));
-    assert!(body.contains("broken link: ghost"));
+    assert!(body.contains("unresolved reference: line 1: Ghost"));
     assert!(!body.contains("maki-diagnostics-table"));
 }
 

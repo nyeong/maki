@@ -86,7 +86,7 @@ crate 경계는 protocol·IO와 Maki 의미를 분리한다.
 
 기존 parser AST는 HTML renderer의 compatibility surface로 유지한다.
 `maki-core::analysis`는 AST가 빌린 원문 slice와 `SourceMap`을 사용해 block, heading, block ID, note link, property, date occurrence의 byte span을 계산한다.
-`analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 document/heading/explicit-ID link를 resolve하고 semantic diagnostic을 만든다.
+`analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 document/heading/explicit-ID link와 explicit reference를 resolve하고 semantic diagnostic을 만든다.
 
 Internal link target은 renderer나 protocol adapter마다 제각각 문자열을 나누지 않는다.
 Core의 공통 target parser가 `/`·`+` document selector와 `#`·`@` internal selector를 구조화하고, runtime과 sans-IO analysis의 index adapter가 같은 selection contract로 target을 결정한다.

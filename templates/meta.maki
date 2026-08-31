@@ -1,13 +1,7 @@
 --^ title: Meta
 
-- [Recents]
-- [Sitemap]
-- [Diagnostics]
-- [Dates]
-- [Project Index JSON]
-
-[Recents]: /@/recents
-[Sitemap]: /@/sitemap
-[Diagnostics]: /@/diagnostics
-[Dates]: /@/dates
-[Project Index JSON]: /.maki/project-index.json
+- [Recents](/@/recents)
+- [Sitemap](/@/sitemap)
+- [Diagnostics](/@/diagnostics)
+- [Dates](/@/dates)
+- [Project Index JSON](/.maki/project-index.json)

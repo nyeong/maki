@@ -369,6 +369,7 @@ fn diagnostic_kind_label(kind: AnalysisDiagnosticKind) -> &'static str {
     match kind {
         AnalysisDiagnosticKind::ParseWarning => "parse_warning",
         AnalysisDiagnosticKind::DuplicateId => "duplicate_id",
+        AnalysisDiagnosticKind::UnresolvedReference => "unresolved_reference",
         AnalysisDiagnosticKind::BrokenNoteLink => "broken_note_link",
         AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous_note_link",
         AnalysisDiagnosticKind::BrokenHeadingLink => "broken_heading_link",

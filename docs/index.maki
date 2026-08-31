@@ -2,9 +2,9 @@
 
 Maki는 line-first lightweight markup language이자 `.maki` 프로젝트를 HTML로 build·serve하는 personal wiki runtime이다.
 
-- [nyeong/maki]
-- [nyeong/maki-zed]
-- [nyeong/tree-sitter-maki]
+- [nyeong/maki][]
+- [nyeong/maki-zed][]
+- [nyeong/tree-sitter-maki][]
 
 = 시작하기
 
@@ -26,10 +26,10 @@ Maki는 line-first lightweight markup language이자 `.maki` 프로젝트를 HTM
 
 = 프로젝트 관리
 
-버그, 개선 제안과 아직 구현하지 않은 기능은 [Forgejo Issues]에서 관리한다.
+버그, 개선 제안과 아직 구현하지 않은 기능은 [Forgejo Issues][]에서 관리한다.
 이 문서 모음은 현재 배포된 동작과 사용법만 설명한다.
 
-[Forgejo Issues]: https://git.eska.nyeong.me/nyeong/maki/issues
-[nyeong/maki]: https://git.eska.nyeong.me/nyeong/maki
-[nyeong/maki-zed]: https://git.eska.nyeong.me/nyeong/maki-zed
-[nyeong/tree-sitter-maki]: https://git.eska.nyeong.me/nyeong/tree-sitter-maki
+[Forgejo Issues]: <https://git.eska.nyeong.me/nyeong/maki/issues>
+[nyeong/maki]: <https://git.eska.nyeong.me/nyeong/maki>
+[nyeong/maki-zed]: <https://git.eska.nyeong.me/nyeong/maki-zed>
+[nyeong/tree-sitter-maki]: <https://git.eska.nyeong.me/nyeong/tree-sitter-maki>

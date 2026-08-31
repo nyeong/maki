@@ -15,7 +15,7 @@ pub use inline::parse_inline;
 pub use types::{
     Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Document, Inline, IsoWeek, ListItem, ListKind, ReferenceDefinition, ReferenceDefinitions,
-    TableCell, TableColumnAlignment, TableRow, TableRowKind, TodoState,
+    ReferenceValueKind, TableCell, TableColumnAlignment, TableRow, TableRowKind, TodoState,
 };
 
 pub struct ParseResult<'a> {

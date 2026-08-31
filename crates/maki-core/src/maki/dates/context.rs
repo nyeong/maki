@@ -125,16 +125,9 @@ fn push_inline_date_context(context: &mut String, inlines: &[Inline<'_>]) {
                 context.push_str(target);
                 context.push_str("]]");
             }
-            Inline::Link { title, .. } => {
-                context.push('[');
-                context.push_str(title);
-                context.push(']');
-            }
-            Inline::Footnote { label } => {
-                context.push_str("[^");
-                context.push_str(label);
-                context.push(']');
-            }
+            Inline::Reference { raw, .. }
+            | Inline::Footnote { raw, .. }
+            | Inline::DirectLink { raw, .. } => context.push_str(raw),
             Inline::HyperLink { target } => {
                 context.push('<');
                 context.push_str(target);

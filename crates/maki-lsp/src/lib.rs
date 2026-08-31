@@ -18,8 +18,8 @@ use lsp_types::{
 };
 use maki_core::analysis::{
     AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin, DefinitionTarget, DefinitionTargetKind,
-    DocumentAnalysis, HeadingOccurrence, LinkResolution, ProjectAnalysis, SourceSnapshot,
-    analyze_project, property_description,
+    DocumentAnalysis, HeadingOccurrence, LinkResolution, ProjectAnalysis, ReferenceDefinitionId,
+    SourceSnapshot, analyze_project, property_description,
 };
 use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
@@ -308,14 +308,30 @@ impl Server {
         let uri = &params.text_document_position_params.text_document.uri;
         let (source, document) = self.document_for_uri(uri)?;
         let offset = lsp_offset(source, params.text_document_position_params.position)?;
-        let occurrence = document
+
+        if let Some(definition_id) = reference_use_definition_id_at(document, offset) {
+            let definition = document.reference_graph.definition(definition_id)?;
+            return Some(GotoDefinitionResponse::Scalar(
+                self.symbol_location(&document.path, definition.key_span)?,
+            ));
+        }
+
+        if let Some(occurrence) = document
             .note_links
             .iter()
-            .find(|occurrence| span_touches(occurrence.span, offset))?;
-        let LinkResolution::Found(target) = occurrence.resolution.as_ref()? else {
-            return None;
-        };
-        Some(GotoDefinitionResponse::Scalar(self.location(target)?))
+            .find(|occurrence| span_touches(occurrence.span, offset))
+        {
+            let LinkResolution::Found(target) = occurrence.resolution.as_ref()? else {
+                return None;
+            };
+            return Some(GotoDefinitionResponse::Scalar(self.location(target)?));
+        }
+
+        let definition_id = reference_declaration_definition_id_at(document, offset)?;
+        let definition = document.reference_graph.definition(definition_id)?;
+        Some(GotoDefinitionResponse::Scalar(
+            self.symbol_location(&document.path, definition.key_span)?,
+        ))
     }
 
     fn location(&self, target: &DefinitionTarget) -> Option<Location> {
@@ -328,9 +344,58 @@ impl Server {
         let source = self.documents.get(&path)?;
         let document = self.analysis.document(&path)?;
         let offset = lsp_offset(source, params.text_document_position.position)?;
-        let identity = self.reference_identity_at(document, offset)?;
 
-        Some(self.reference_locations(&identity, params.context.include_declaration))
+        if let Some(definition_id) = reference_use_definition_id_at(document, offset) {
+            return Some(self.document_reference_locations(
+                document,
+                definition_id,
+                params.context.include_declaration,
+            ));
+        }
+
+        if document
+            .note_links
+            .iter()
+            .any(|link| span_touches(link.span, offset))
+        {
+            let identity = self.reference_identity_at(document, offset)?;
+            return Some(self.reference_locations(&identity, params.context.include_declaration));
+        }
+
+        if let Some(identity) = self.reference_identity_at(document, offset) {
+            return Some(self.reference_locations(&identity, params.context.include_declaration));
+        }
+
+        let definition_id = reference_declaration_definition_id_at(document, offset)?;
+        Some(self.document_reference_locations(
+            document,
+            definition_id,
+            params.context.include_declaration,
+        ))
+    }
+
+    fn document_reference_locations(
+        &self,
+        document: &DocumentAnalysis,
+        definition_id: ReferenceDefinitionId,
+        include_declaration: bool,
+    ) -> Vec<Location> {
+        let mut locations = Vec::new();
+        if include_declaration
+            && let Some(definition) = document.reference_graph.definition(definition_id)
+            && let Some(location) = self.symbol_location(&document.path, definition.key_span)
+        {
+            locations.push(location);
+        }
+
+        locations.extend(
+            document
+                .reference_graph
+                .uses_for(definition_id)
+                .filter_map(|reference| self.symbol_location(&document.path, reference.key_span)),
+        );
+
+        locations
     }
 
     fn reference_identity_at(
@@ -621,6 +686,30 @@ impl Server {
         }
         None
     }
+}
+
+fn reference_use_definition_id_at(
+    document: &DocumentAnalysis,
+    offset: usize,
+) -> Option<ReferenceDefinitionId> {
+    document
+        .reference_graph
+        .uses
+        .iter()
+        .find(|reference| span_touches(reference.span, offset))
+        .and_then(|reference| reference.definition_id)
+}
+
+fn reference_declaration_definition_id_at(
+    document: &DocumentAnalysis,
+    offset: usize,
+) -> Option<ReferenceDefinitionId> {
+    document
+        .reference_graph
+        .definitions
+        .iter()
+        .find(|definition| span_touches(definition.definition_span, offset))
+        .map(|definition| definition.state.winner(definition.id))
 }
 
 fn source_root(workspace_root: &Path) -> LspResult<PathBuf> {
@@ -1084,13 +1173,14 @@ fn lsp_offset(source: &str, position: Position) -> Option<usize> {
 }
 
 fn span_touches(span: SourceSpan, offset: usize) -> bool {
-    span.start <= offset && offset <= span.end
+    span.contains(offset)
 }
 
 fn diagnostic_code(kind: AnalysisDiagnosticKind) -> &'static str {
     match kind {
         AnalysisDiagnosticKind::ParseWarning => "parse-warning",
         AnalysisDiagnosticKind::DuplicateId => "duplicate-id",
+        AnalysisDiagnosticKind::UnresolvedReference => "unresolved-reference",
         AnalysisDiagnosticKind::BrokenNoteLink => "broken-note-link",
         AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous-note-link",
         AnalysisDiagnosticKind::BrokenHeadingLink => "broken-heading-link",
@@ -1133,6 +1223,67 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, content).unwrap();
+    }
+
+    fn test_server(documents: BTreeMap<PathBuf, String>) -> Server {
+        Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::new(),
+            documents,
+        }
+    }
+
+    fn document_uri(path: &str) -> Url {
+        Url::parse(&format!("file:///workspace/{path}")).unwrap()
+    }
+
+    fn definition_at(server: &Server, path: &str, position: Position) -> Location {
+        let response = server
+            .definition(GotoDefinitionParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(document_uri(path)),
+                    position,
+                ),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .expect("position should resolve to a definition");
+        let GotoDefinitionResponse::Scalar(location) = response else {
+            panic!("definition should be a scalar location");
+        };
+        location
+    }
+
+    fn references_at(
+        server: &Server,
+        path: &str,
+        position: Position,
+        include_declaration: bool,
+    ) -> Vec<Location> {
+        server
+            .references(ReferenceParams {
+                text_document_position: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(document_uri(path)),
+                    position,
+                ),
+                context: lsp_types::ReferenceContext {
+                    include_declaration,
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .expect("position should have references")
+    }
+
+    fn document_links_for(server: &Server, path: &str) -> Vec<DocumentLink> {
+        server
+            .document_links(DocumentLinkParams {
+                text_document: lsp_types::TextDocumentIdentifier::new(document_uri(path)),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .expect("document should be analyzed")
     }
 
     #[test]
@@ -1345,12 +1496,12 @@ mod tests {
 
     #[test]
     fn document_links_open_url_reference_markers() {
-        let source = r#"- [요카토 추천 리스트]
-  - [김치]
-- [로컬]
+        let source = r#"- [요카토 추천 리스트][]
+  - [김치][]
+- [로컬][]
 
-[요카토 추천 리스트]: https://docs.google.com/document/d/example/edit
-[김치]: https://hakkeido.com/
+[요카토 추천 리스트]: <https://docs.google.com/document/d/example/edit>
+[김치]: <https://hakkeido.com/>
 [로컬]: other
 "#;
         let documents = BTreeMap::from([(PathBuf::from("index.maki"), source.to_string())]);
@@ -1381,7 +1532,403 @@ mod tests {
         );
         assert_eq!(
             links[1].range,
-            Range::new(Position::new(1, 4), Position::new(1, 8))
+            Range::new(Position::new(1, 4), Position::new(1, 10))
+        );
+    }
+
+    #[test]
+    fn document_references_support_definition_and_both_presentations() {
+        let source = "[topic][] [^topic][]\n\n[topic]: <https://example.com/topic>\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        let definition = Location::new(
+            document_uri("index.maki"),
+            Range::new(Position::new(2, 1), Position::new(2, 6)),
+        );
+        let uses = vec![
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(0, 1), Position::new(0, 6)),
+            ),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(0, 12), Position::new(0, 17)),
+            ),
+        ];
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 2)),
+            definition
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 13)),
+            definition
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(2, 0)),
+            definition
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(2, 20)),
+            definition
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 2), false),
+            uses
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 13), true),
+            std::iter::once(definition.clone())
+                .chain(uses.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(2, 2), false),
+            uses
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(2, 20), false),
+            uses
+        );
+    }
+
+    #[test]
+    fn document_references_never_cross_document_boundaries() {
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("a.maki"),
+                "[shared][] [^shared][]\n\n[shared]: <https://a.example/>\n".to_string(),
+            ),
+            (
+                PathBuf::from("b.maki"),
+                "[shared][] [^shared][]\n\n[shared]: <https://b.example/>\n".to_string(),
+            ),
+        ]);
+        let server = test_server(documents);
+
+        let definition = definition_at(&server, "a.maki", Position::new(0, 2));
+        assert_eq!(definition.uri, document_uri("a.maki"));
+        let references = references_at(&server, "a.maki", Position::new(0, 2), true);
+        assert_eq!(references.len(), 3);
+        assert!(
+            references
+                .iter()
+                .all(|location| location.uri == document_uri("a.maki"))
+        );
+    }
+
+    #[test]
+    fn duplicate_definition_navigation_uses_the_canonical_winner() {
+        let source = "[dup][] [^dup][]\n\n[dup]: <https://first.example/>\n[dup]: <https://second.example/>\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        let winner = Location::new(
+            document_uri("index.maki"),
+            Range::new(Position::new(2, 1), Position::new(2, 4)),
+        );
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(3, 3)),
+            winner
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(3, 3), true),
+            vec![
+                winner,
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 1), Position::new(0, 4)),
+                ),
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 10), Position::new(0, 13)),
+                ),
+            ]
+        );
+        let links = document_links_for(&server, "index.maki");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().map(Url::as_str),
+            Some("https://first.example/")
+        );
+    }
+
+    #[test]
+    fn document_links_open_only_link_presentation_markers() {
+        let source =
+            "[url][] [^url][] *[url][]* ::[^url][]::\n\n[url]: <https://example.com/path>\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        let links = document_links_for(&server, "index.maki");
+
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().all(|link| {
+            link.target.as_ref().map(Url::as_str) == Some("https://example.com/path")
+        }));
+        assert_eq!(
+            links.iter().map(|link| link.range).collect::<Vec<_>>(),
+            vec![
+                Range::new(Position::new(0, 0), Position::new(0, 7)),
+                Range::new(Position::new(0, 18), Position::new(0, 25)),
+            ]
+        );
+    }
+
+    #[test]
+    fn document_links_require_an_exact_hyperlink_value() {
+        let source = "[url][] [prose][]\n\n[url]: <https://example.com/path>\n[prose]: <https://example.com> has details\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        let links = document_links_for(&server, "index.maki");
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().map(Url::as_str),
+            Some("https://example.com/path")
+        );
+        assert_eq!(
+            links[0].range,
+            Range::new(Position::new(0, 0), Position::new(0, 7))
+        );
+    }
+
+    #[test]
+    fn document_links_include_direct_http_links_with_the_full_construct_range() {
+        let source = "[site](https://example.com) [local](page)";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        let links = document_links_for(&server, "index.maki");
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().map(Url::as_str),
+            Some("https://example.com/")
+        );
+        assert_eq!(
+            links[0].range,
+            Range::new(Position::new(0, 0), Position::new(0, 27))
+        );
+    }
+
+    #[test]
+    fn definition_line_navigation_prefers_nested_semantic_targets() {
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("index.maki"),
+                "[ref]: See [[target]]\n".to_string(),
+            ),
+            (
+                PathBuf::from("target.maki"),
+                "--^ title: Target\n\nbody\n".to_string(),
+            ),
+        ]);
+        let server = test_server(documents);
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 14)),
+            Location::new(
+                document_uri("target.maki"),
+                Range::new(Position::new(0, 11), Position::new(0, 17)),
+            )
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 8)),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(0, 1), Position::new(0, 4)),
+            )
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 14), true),
+            vec![
+                Location::new(
+                    document_uri("target.maki"),
+                    Range::new(Position::new(0, 11), Position::new(0, 17)),
+                ),
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 13), Position::new(0, 19)),
+                ),
+            ]
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 8), true),
+            vec![Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(0, 1), Position::new(0, 4)),
+            )]
+        );
+    }
+
+    #[test]
+    fn exact_note_link_reference_targets_keep_project_navigation() {
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("index.maki"),
+                "[ref][]\n\n[ref]: [[target]]\n".to_string(),
+            ),
+            (
+                PathBuf::from("target.maki"),
+                "--^ title: Target\n\nbody\n".to_string(),
+            ),
+        ]);
+        let server = test_server(documents);
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(2, 10)),
+            Location::new(
+                document_uri("target.maki"),
+                Range::new(Position::new(0, 11), Position::new(0, 17)),
+            )
+        );
+    }
+
+    #[test]
+    fn date_reference_use_hover_reports_the_semantic_target_at_the_marker() {
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            "[deadline][]\n\n[deadline]: [2026-08-31]\n".to_string(),
+        )]));
+
+        let hover = server
+            .hover(HoverParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(document_uri("index.maki")),
+                    Position::new(0, 3),
+                ),
+                work_done_progress_params: Default::default(),
+            })
+            .unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("date hover should use markup content");
+        };
+        assert_eq!(markup.value, "Maki date: `2026-08-31` (visible inline)");
+        assert_eq!(
+            hover.range,
+            Some(Range::new(Position::new(0, 0), Position::new(0, 12)))
+        );
+    }
+
+    #[test]
+    fn adjacent_reference_markers_use_half_open_utf16_spans() {
+        let source = "😀[a][b] [^a][b]\n\n[a]: https://a.example/\n[b]: https://b.example/\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        let b_definition = Location::new(
+            document_uri("index.maki"),
+            Range::new(Position::new(3, 1), Position::new(3, 2)),
+        );
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 5)),
+            b_definition
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 13)),
+            b_definition
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 5), false),
+            vec![
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 6), Position::new(0, 7)),
+                ),
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 14), Position::new(0, 15)),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn document_reference_locations_use_utf16_code_units() {
+        let source = "😀 [키😀][] [^키😀][]\n\n[키😀]: <https://emoji.example/>\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        let declaration = Location::new(
+            document_uri("index.maki"),
+            Range::new(Position::new(2, 1), Position::new(2, 4)),
+        );
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 11)),
+            declaration
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 4), true),
+            vec![
+                declaration,
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 4), Position::new(0, 7)),
+                ),
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 13), Position::new(0, 16)),
+                ),
+            ]
+        );
+        let links = document_links_for(&server, "index.maki");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].range,
+            Range::new(Position::new(0, 3), Position::new(0, 10))
+        );
+    }
+
+    #[test]
+    fn document_references_cover_list_table_and_nested_formatting() {
+        let source = "- [ctx][]\n  - *[^ctx][]*\n| reference |\n|---|\n| ::[ctx][]:: [^ctx][] |\n\n[ctx]: <https://example.com/context>\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(1, 8)).range,
+            Range::new(Position::new(6, 1), Position::new(6, 4))
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(4, 6), true)
+                .into_iter()
+                .map(|location| location.range)
+                .collect::<Vec<_>>(),
+            vec![
+                Range::new(Position::new(6, 1), Position::new(6, 4)),
+                Range::new(Position::new(0, 3), Position::new(0, 6)),
+                Range::new(Position::new(1, 7), Position::new(1, 10)),
+                Range::new(Position::new(4, 5), Position::new(4, 8)),
+                Range::new(Position::new(4, 16), Position::new(4, 19)),
+            ]
+        );
+        assert_eq!(
+            document_links_for(&server, "index.maki")
+                .into_iter()
+                .map(|link| link.range)
+                .collect::<Vec<_>>(),
+            vec![
+                Range::new(Position::new(0, 2), Position::new(0, 9)),
+                Range::new(Position::new(4, 4), Position::new(4, 11)),
+            ]
         );
     }
 
@@ -1553,6 +2100,44 @@ mod tests {
             Some(lsp_types::NumberOrString::String(
                 "broken-note-link".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn diagnostics_publish_unresolved_reference_key_ranges_in_utf16() {
+        let source = "😀 [ missing ][] [^][missing] [missing]\n";
+        let documents = BTreeMap::from([(PathBuf::from("open.maki"), source.to_string())]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
+            documents,
+        };
+        let (server_connection, client_connection) = Connection::memory();
+
+        server.publish_diagnostics(&server_connection).unwrap();
+
+        let Message::Notification(notification) = client_connection.receiver.recv().unwrap() else {
+            panic!("expected a diagnostics notification");
+        };
+        let params: PublishDiagnosticsParams = serde_json::from_value(notification.params).unwrap();
+        assert_eq!(params.diagnostics.len(), 2);
+        assert!(params.diagnostics.iter().all(|diagnostic| {
+            diagnostic.code
+                == Some(lsp_types::NumberOrString::String(
+                    "unresolved-reference".to_string(),
+                ))
+        }));
+        assert_eq!(
+            params
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.range)
+                .collect::<Vec<_>>(),
+            vec![
+                Range::new(Position::new(0, 5), Position::new(0, 12)),
+                Range::new(Position::new(0, 21), Position::new(0, 28)),
+            ]
         );
     }
 

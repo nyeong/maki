@@ -1,53 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use super::types::{
-    DateRange, DateStamp, DateStampKind, DateStampTarget, Inline, ReferenceDefinition,
-    ReferenceDefinitions,
-};
-
-#[derive(Default)]
-pub(super) struct ReferenceLookup<'a> {
-    links: BTreeMap<&'a str, &'a str>,
-    footnotes: BTreeSet<&'a str>,
-}
-
-impl<'a> ReferenceLookup<'a> {
-    pub(super) fn insert_link(&mut self, title: &'a str, target: &'a str) -> bool {
-        if self.links.contains_key(title) {
-            return false;
-        }
-        self.links.insert(title, target);
-        true
-    }
-
-    pub(super) fn insert_footnote(&mut self, label: &'a str) -> bool {
-        self.footnotes.insert(label)
-    }
-
-    pub(super) fn extend<'parent>(&mut self, references: &ReferenceDefinitions<'parent>)
-    where
-        'parent: 'a,
-    {
-        for definition in references.all() {
-            match definition {
-                ReferenceDefinition::Link { title, target } => {
-                    self.insert_link(title, target);
-                }
-                ReferenceDefinition::Footnote { label, .. } => {
-                    self.insert_footnote(label);
-                }
-            }
-        }
-    }
-
-    fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.links.get(title).copied()
-    }
-
-    fn has_footnote(&self, label: &str) -> bool {
-        self.footnotes.contains(label)
-    }
-}
+use super::types::{DateRange, DateStamp, DateStampKind, DateStampTarget, Inline};
 
 #[derive(Clone, Copy)]
 enum ClosingDelimiter {
@@ -234,42 +185,117 @@ fn parse_inline_date_stamp<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'
     Some(Inline::DateStamp(stamp))
 }
 
-fn parse_inline_footnote<'a>(
-    cursor: &mut InlineCursor<'a>,
-    references: &ReferenceLookup<'a>,
-) -> Option<Inline<'a>> {
-    let body = cursor.rest().strip_prefix("[^")?;
-    let end = cursor.find_closing(ClosingDelimiter::Bracket, "[^".len())? - "[^".len();
-    let label = &body[..end];
+fn bracket_contents_at<'a>(cursor: &InlineCursor<'a>, offset: usize) -> Option<(&'a str, usize)> {
+    let rest = cursor.rest();
+    rest.get(offset..)?.strip_prefix('[')?;
+    let body_start = offset + '['.len_utf8();
+    let close = cursor.find_closing(ClosingDelimiter::Bracket, body_start)?;
+    let body = &rest[body_start..close];
 
-    if label.is_empty()
-        || label.contains(['[', ']'])
-        || label.chars().any(char::is_whitespace)
-        || !references.has_footnote(label)
-    {
+    if body.contains('[') {
         return None;
     }
 
-    cursor.bump("[^".len() + label.len() + ']'.len_utf8());
-    Some(Inline::Footnote { label })
+    Some((body, close + ']'.len_utf8()))
 }
 
-fn parse_inline_link<'a>(
-    cursor: &mut InlineCursor<'a>,
-    references: &ReferenceLookup<'a>,
-) -> Option<Inline<'a>> {
-    let body = cursor.rest().strip_prefix('[')?;
-    let end = cursor.find_closing(ClosingDelimiter::Bracket, '['.len_utf8())? - '['.len_utf8();
-    let title = &body[..end];
+fn valid_reference_key(key: &str) -> bool {
+    !key.is_empty() && !key.starts_with('^') && !key.contains(['[', ']'])
+}
 
-    if title.is_empty() || title.starts_with('^') || title.contains(['[', ']']) {
+fn reference_key(raw: &str) -> Option<&str> {
+    let key = raw.trim();
+    valid_reference_key(key).then_some(key)
+}
+
+fn parse_inline_footnote<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    cursor.rest().strip_prefix("[^")?;
+    let (raw_title, first_end) = bracket_contents_at(cursor, 0)?;
+    let raw_title = raw_title.strip_prefix('^')?;
+    let (raw_key, second_end) = bracket_contents_at(cursor, first_end)?;
+
+    let (title, key) = if raw_key.is_empty() {
+        let key = reference_key(raw_title)?;
+        (Some(key), key)
+    } else {
+        let key = reference_key(raw_key)?;
+        let title = if raw_title.is_empty() {
+            None
+        } else {
+            let title = raw_title.trim();
+            if title.is_empty() || title.starts_with('^') {
+                return None;
+            }
+            Some(title)
+        };
+        (title, key)
+    };
+    let raw = &cursor.rest()[..second_end];
+
+    cursor.bump(second_end);
+    Some(Inline::Footnote { raw, title, key })
+}
+
+fn parse_inline_reference<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let (raw_title, first_end) = bracket_contents_at(cursor, 0)?;
+    let title = raw_title.trim();
+    if title.is_empty() || title.starts_with('^') {
         return None;
     }
+    let (raw_key, second_end) = bracket_contents_at(cursor, first_end)?;
 
-    let target = references.link_target(title)?;
-    cursor.bump('['.len_utf8() + title.len() + ']'.len_utf8());
+    let (title, key) = if raw_key.is_empty() {
+        let key = reference_key(raw_title)?;
+        (key, key)
+    } else {
+        let key = reference_key(raw_key)?;
+        (title, key)
+    };
+    let raw = &cursor.rest()[..second_end];
 
-    Some(Inline::Link { title, target })
+    cursor.bump(second_end);
+    Some(Inline::Reference { raw, title, key })
+}
+
+fn link_destination_end(source: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+
+    for (index, ch) in source.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(index),
+            ')' => depth -= 1,
+            '\n' | '\r' => return None,
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn parse_inline_direct_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    let (raw_title, title_end) = bracket_contents_at(cursor, 0)?;
+    let title = raw_title.trim();
+    if title.is_empty() || title.starts_with('^') {
+        return None;
+    }
+    let destination = cursor.rest().get(title_end..)?.strip_prefix('(')?;
+    let destination_end = link_destination_end(destination)?;
+    let target = destination[..destination_end].trim();
+    if target.is_empty() {
+        return None;
+    }
+    let end = title_end + '('.len_utf8() + destination_end + ')'.len_utf8();
+    let raw = &cursor.rest()[..end];
+
+    cursor.bump(end);
+    Some(Inline::DirectLink { raw, title, target })
 }
 
 fn parse_inline_hyper_link<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
@@ -454,26 +480,20 @@ fn parse_braced_inline<'a>(
     Some(wrap(contents))
 }
 
-pub(super) fn parse_inlines_with_references<'a>(
-    source: &[&'a str],
-    references: &ReferenceLookup<'a>,
-) -> Vec<Inline<'a>> {
+pub(super) fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
     let mut inlines = vec![];
 
     for (index, line) in source.iter().enumerate() {
         if index > 0 {
             inlines.push(Inline::SoftBreak);
         }
-        inlines.extend(parse_inline_with_references(line, references));
+        inlines.extend(parse_inline(line));
     }
 
     inlines
 }
 
-pub(super) fn parse_inline_with_references<'a>(
-    source: &'a str,
-    references: &ReferenceLookup<'a>,
-) -> Vec<Inline<'a>> {
+pub fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
     let mut cursor = InlineCursor::new(source);
     let mut inlines = vec![];
     let mut formatting_frames: Vec<FormattingFrame<'a>> = vec![];
@@ -485,10 +505,11 @@ pub(super) fn parse_inline_with_references<'a>(
 
         if let Some(inline) = parse_inline_code(&mut cursor)
             .or_else(|| parse_inline_note_link(&mut cursor))
+            .or_else(|| parse_inline_direct_link(&mut cursor))
+            .or_else(|| parse_inline_footnote(&mut cursor))
+            .or_else(|| parse_inline_reference(&mut cursor))
             .or_else(|| parse_inline_date_range(&mut cursor))
             .or_else(|| parse_inline_date_stamp(&mut cursor))
-            .or_else(|| parse_inline_footnote(&mut cursor, references))
-            .or_else(|| parse_inline_link(&mut cursor, references))
             .or_else(|| parse_inline_hyper_link(&mut cursor))
             .or_else(|| parse_braced_inline(&mut cursor, "^{", Inline::Superscript))
             .or_else(|| parse_braced_inline(&mut cursor, "_{", Inline::Subscript))
@@ -557,9 +578,4 @@ pub(super) fn parse_inline_with_references<'a>(
     }
 
     normalize_inlines(source, inlines)
-}
-
-/// Parses inline syntax that does not require a Document reference definition.
-pub fn parse_inline(source: &str) -> Vec<Inline<'_>> {
-    parse_inline_with_references(source, &ReferenceLookup::default())
 }

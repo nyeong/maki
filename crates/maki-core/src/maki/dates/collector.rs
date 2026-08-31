@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::parser::{self, BlockKind, DateRange, DateStamp, Inline};
@@ -20,6 +20,20 @@ struct DateIndexCollector<'a> {
     note_title: String,
     inline_ordinal: usize,
     property_ordinal: usize,
+}
+
+#[derive(Default)]
+struct ReferenceNoteOrder {
+    keys: Vec<String>,
+    seen: BTreeSet<String>,
+}
+
+impl ReferenceNoteOrder {
+    fn register(&mut self, key: &str) {
+        if self.seen.insert(key.to_string()) {
+            self.keys.push(key.to_string());
+        }
+    }
 }
 
 impl<'a> DateIndexCollector<'a> {
@@ -105,14 +119,51 @@ fn collect_inline_dates(
     collector: &mut DateIndexCollector<'_>,
     inlines: &[Inline<'_>],
     context: &str,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     for inline in inlines {
         match inline {
             Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp, context),
             Inline::DateRange(range) => collector.push_inline_range(*range, context),
+            Inline::Reference { raw, key, .. } => {
+                let Some(definition) = references.get(key) else {
+                    continue;
+                };
+                match definition.value.as_slice() {
+                    [Inline::DateStamp(stamp)] => collector.push_inline_stamp(*stamp, context),
+                    [Inline::DateRange(range)] if raw.ends_with("][]") => {
+                        collector.push_inline_range(*range, context)
+                    }
+                    _ => {}
+                }
+            }
             _ => {
                 if let Some(body) = inline.nested_inlines() {
-                    collect_inline_dates(collector, body, context);
+                    collect_inline_dates(collector, body, context, references);
+                }
+            }
+        }
+    }
+}
+
+fn collect_reference_note_keys(
+    inlines: &[Inline<'_>],
+    references: &parser::ReferenceDefinitions<'_>,
+    notes: &mut ReferenceNoteOrder,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::Reference { key, .. }
+                if references.get(key).is_some_and(|definition| {
+                    definition.value_kind() == parser::ReferenceValueKind::Prose
+                }) =>
+            {
+                notes.register(key);
+            }
+            Inline::Footnote { key, .. } => notes.register(key),
+            _ => {
+                if let Some(body) = inline.nested_inlines() {
+                    collect_reference_note_keys(body, references, notes);
                 }
             }
         }
@@ -155,14 +206,22 @@ fn collect_list_item_dates(
     item: &parser::ListItem<'_>,
     context: &DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
+    reference_notes: &mut ReferenceNoteOrder,
 ) {
     let item_line_context = list_item_line_date_context(item);
     let mut item_context = context.with_top_list_item(item_line_context.clone());
     let occurrence_context = item_context.contextualize(&item_line_context);
 
-    collect_inline_dates(collector, &item.body, &occurrence_context);
+    collect_inline_dates(collector, &item.body, &occurrence_context, references);
+    collect_reference_note_keys(&item.body, references, reference_notes);
     for child in &item.children {
-        collect_block_dates(collector, child, &mut item_context, references);
+        collect_block_dates(
+            collector,
+            child,
+            &mut item_context,
+            references,
+            reference_notes,
+        );
     }
 }
 
@@ -170,13 +229,16 @@ fn collect_table_row_dates(
     collector: &mut DateIndexCollector<'_>,
     row: &parser::TableRow<'_>,
     context: &str,
+    references: &parser::ReferenceDefinitions<'_>,
+    reference_notes: &mut ReferenceNoteOrder,
 ) {
     if row.is_separator() {
         return;
     }
 
     for cell in &row.cells {
-        collect_inline_dates(collector, &cell.body, context);
+        collect_inline_dates(collector, &cell.body, context, references);
+        collect_reference_note_keys(&cell.body, references, reference_notes);
     }
 }
 
@@ -185,6 +247,7 @@ fn collect_block_dates(
     block: &parser::Block<'_>,
     context: &mut DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
+    reference_notes: &mut ReferenceNoteOrder,
 ) {
     let local_context = block_date_context(block);
     let block_context = match &block.kind {
@@ -194,18 +257,22 @@ fn collect_block_dates(
     collect_property_dates(collector, block.properties(), &block_context);
 
     match &block.kind {
-        BlockKind::Paragraph { body } => collect_inline_dates(collector, body, &block_context),
+        BlockKind::Paragraph { body } => {
+            collect_inline_dates(collector, body, &block_context, references);
+            collect_reference_note_keys(body, references, reference_notes);
+        }
         BlockKind::Heading {
             level,
             body,
             raw_body,
         } => {
-            collect_inline_dates(collector, body, &block_context);
+            collect_inline_dates(collector, body, &block_context, references);
+            collect_reference_note_keys(body, references, reference_notes);
             context.enter_heading(*level, raw_body);
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_list_item_dates(collector, item, context, references);
+                collect_list_item_dates(collector, item, context, references, reference_notes);
             }
         }
         BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
@@ -214,11 +281,17 @@ fn collect_block_dates(
         BlockKind::Table { header, rows, .. } => {
             let table_header_context = table_row_date_context(header);
             let header_context = context.contextualize(&table_header_context);
-            collect_table_row_dates(collector, header, &header_context);
+            collect_table_row_dates(
+                collector,
+                header,
+                &header_context,
+                references,
+                reference_notes,
+            );
             for row in rows {
                 let row_context =
                     context.contextualize(&table_body_row_date_context(&table_header_context, row));
-                collect_table_row_dates(collector, row, &row_context);
+                collect_table_row_dates(collector, row, &row_context, references, reference_notes);
             }
         }
         BlockKind::Container { kind, lines, .. }
@@ -254,21 +327,41 @@ fn collect_document_dates_with_context(
         context.contextualize(&document_date_context(document, &collector.note_title));
 
     collect_property_dates(collector, document.properties(), &document_context);
+    let mut reference_notes = ReferenceNoteOrder::default();
     for block in &document.blocks {
-        collect_block_dates(collector, block, context, document.reference_definitions());
+        collect_block_dates(
+            collector,
+            block,
+            context,
+            document.reference_definitions(),
+            &mut reference_notes,
+        );
     }
-    for definition in document.reference_definitions().footnotes() {
-        let parser::ReferenceDefinition::Footnote {
-            label,
-            body,
-            raw_body,
-        } = definition
-        else {
+
+    let mut note_index = 0;
+    while note_index < reference_notes.keys.len() {
+        let key = reference_notes.keys[note_index].clone();
+        note_index += 1;
+        let Some(definition) = document.reference(&key) else {
             continue;
         };
-        let footnote_source = format!("[^{label}]: {raw_body}");
-        let footnote_context = context.contextualize(&footnote_source);
-        collect_inline_dates(collector, body, &footnote_context);
+        if definition.value_kind() != parser::ReferenceValueKind::Prose {
+            continue;
+        }
+        let marker = format!("[{}]", definition.key);
+        let reference_source = format!("{marker}: {}", definition.raw_value);
+        let reference_context = context.contextualize(&reference_source);
+        collect_inline_dates(
+            collector,
+            &definition.value,
+            &reference_context,
+            document.reference_definitions(),
+        );
+        collect_reference_note_keys(
+            &definition.value,
+            document.reference_definitions(),
+            &mut reference_notes,
+        );
     }
 }
 

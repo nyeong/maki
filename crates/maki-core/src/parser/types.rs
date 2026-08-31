@@ -4,10 +4,27 @@ use super::draft::PropertyItemDraft;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inline<'a> {
-    NoteLink { target: &'a str },
-    Link { title: &'a str, target: &'a str },
-    Footnote { label: &'a str },
-    HyperLink { target: &'a str },
+    NoteLink {
+        target: &'a str,
+    },
+    Reference {
+        raw: &'a str,
+        title: &'a str,
+        key: &'a str,
+    },
+    Footnote {
+        raw: &'a str,
+        title: Option<&'a str>,
+        key: &'a str,
+    },
+    DirectLink {
+        raw: &'a str,
+        title: &'a str,
+        target: &'a str,
+    },
+    HyperLink {
+        target: &'a str,
+    },
     Italic(Vec<Inline<'a>>),
     Strong(Vec<Inline<'a>>),
     Superscript(&'a str),
@@ -31,25 +48,39 @@ impl<'a> Inline<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceValueKind {
+    HyperLink,
+    NoteLink,
+    DateStamp,
+    DateRange,
+    Prose,
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum ReferenceDefinition<'a> {
-    Link {
-        title: &'a str,
-        target: &'a str,
-    },
-    Footnote {
-        label: &'a str,
-        body: Vec<Inline<'a>>,
-        raw_body: &'a str,
-    },
+pub struct ReferenceDefinition<'a> {
+    pub key: &'a str,
+    pub raw_value: &'a str,
+    pub value: Vec<Inline<'a>>,
+}
+
+impl ReferenceDefinition<'_> {
+    pub fn value_kind(&self) -> ReferenceValueKind {
+        match self.value.as_slice() {
+            [Inline::HyperLink { .. }] => ReferenceValueKind::HyperLink,
+            [Inline::NoteLink { .. }] => ReferenceValueKind::NoteLink,
+            [Inline::DateStamp(_)] => ReferenceValueKind::DateStamp,
+            [Inline::DateRange(_)] => ReferenceValueKind::DateRange,
+            _ => ReferenceValueKind::Prose,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ReferenceDefinitions<'a> {
     definitions: Vec<ReferenceDefinition<'a>>,
     local_len: usize,
-    links: BTreeMap<&'a str, &'a str>,
-    footnotes: BTreeMap<&'a str, usize>,
+    by_key: BTreeMap<&'a str, usize>,
 }
 
 impl<'a> ReferenceDefinitions<'a> {
@@ -71,25 +102,16 @@ impl<'a> ReferenceDefinitions<'a> {
     }
 
     fn from_definitions(definitions: Vec<ReferenceDefinition<'a>>, local_len: usize) -> Self {
-        let mut links = BTreeMap::new();
-        let mut footnotes = BTreeMap::new();
+        let mut by_key = BTreeMap::new();
 
         for (index, definition) in definitions.iter().enumerate() {
-            match definition {
-                ReferenceDefinition::Link { title, target } => {
-                    links.entry(*title).or_insert(*target);
-                }
-                ReferenceDefinition::Footnote { label, .. } => {
-                    footnotes.entry(*label).or_insert(index);
-                }
-            }
+            by_key.entry(definition.key).or_insert(index);
         }
 
         Self {
             definitions,
             local_len,
-            links,
-            footnotes,
+            by_key,
         }
     }
 
@@ -97,24 +119,10 @@ impl<'a> ReferenceDefinitions<'a> {
         self.definitions[..self.local_len].iter()
     }
 
-    pub(super) fn all(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
-        self.definitions.iter()
-    }
-
-    pub fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.links.get(title).copied()
-    }
-
-    pub fn footnote(&self, label: &str) -> Option<&ReferenceDefinition<'a>> {
-        self.footnotes
-            .get(label)
+    pub fn get(&self, key: &str) -> Option<&ReferenceDefinition<'a>> {
+        self.by_key
+            .get(key)
             .and_then(|index| self.definitions.get(*index))
-    }
-
-    pub fn footnotes(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
-        self.definitions[..self.local_len]
-            .iter()
-            .filter(|definition| matches!(definition, ReferenceDefinition::Footnote { .. }))
     }
 }
 
@@ -593,12 +601,8 @@ impl<'a> Document<'a> {
         &self.references
     }
 
-    pub fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.references.link_target(title)
-    }
-
-    pub fn footnote(&self, label: &str) -> Option<&ReferenceDefinition<'a>> {
-        self.references.footnote(label)
+    pub fn reference(&self, key: &str) -> Option<&ReferenceDefinition<'a>> {
+        self.references.get(key)
     }
 }
 
