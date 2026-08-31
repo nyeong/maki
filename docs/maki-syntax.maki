@@ -1,6 +1,6 @@
 --^ title: Maki Syntax
 --^ created: [2026-06-24]
---^ updated: [2026-08-31]
+--^ updated: [2026-09-01]
 --^ status: stable
 
 = 개요
@@ -520,19 +520,17 @@ Reference Definition 문법에 맞지 않는 `[` 시작 line은 다른 block-sta
 
 표현 계층은 active definition을 다음처럼 다룬다.
 
-- Definition 하나는 현재 render scope에서 Notes 항목과 ordinal을 최대 하나만 가진다.
-- 첫 use가 나타난 순서로 ordinal을 할당하며 일반 Prose Reference Use와 이름 있는 Footnote도 ordinal을 차지한다.
-- 일반 Reference Use에서 Hyper Link, Note Link와 Date Marker target은 display title을 실제 target으로 연결한다.
-- 실제 target으로 가는 일반 Reference Use 뒤에는 같은 definition의 Notes row로 가는 작은 canonical `[n]` marker를 함께 노출한다.
-- Date Range를 `[key][]`로 사용하면 기존 두 endpoint 표현을 렌더한다. `[title][key]`처럼 title을 재정의하면 단일 목적지가 없으므로 Prose와 같은 term/definition fallback을 사용한다.
-- 실제 target으로 연결되는 일반 Reference Use도 definition identity를 유지하며 같은 Notes row에 참여한다.
-- Prose Reference Use는 숫자를 노출하지 않는 dotted term anchor로 Notes 항목에 연결한다.
+- 일반 Reference Use는 Notes 항목이나 ordinal을 만들지 않는다.
+- 일반 Reference Use에서 Hyper Link, Note Link와 Date Marker target은 display title을 실제 target으로 직접 연결한다.
+- Date Range를 `[key][]`로 사용하면 기존 두 endpoint 표현을 렌더한다.
+- Prose Reference Use와 `[title][key]` 형태의 Date Range는 연결할 단일 target이 없으므로 marker 원문을 Text로 출력한다. Definition content를 Notes로 표현하려면 Footnote 문법을 명시해야 한다.
+- Footnote로 사용한 Definition만 현재 render scope에서 Notes 항목과 ordinal을 최대 하나 가진다.
+- 첫 Footnote가 나타난 순서로 ordinal을 할당하며 이름 있는 Footnote도 ordinal을 차지한다.
 - Footnote는 위첨자 안에 실제 bracket marker를 출력한다. 이름 있는 marker는 `[key]` 또는 `[title]`, 자동 marker는 definition ordinal인 `[n]`이다.
-- 같은 definition의 모든 use는 같은 Notes row와 ordinal을 공유한다.
-- Notes row는 presentation과 관계없이 canonical `[n]`과 definition content를 출력한다.
-- Use가 하나도 없는 definition은 Notes에 출력하지 않는다.
-- 일반 Reference Use와 Footnote는 JavaScript 없이도 Notes의 definition으로 이동할 수 있다.
-- Notes에서 source occurrence로 돌아가는 backlink는 출력하지 않는다.
+- 같은 definition의 모든 Footnote는 같은 Notes row와 ordinal을 공유한다. 같은 definition의 일반 Reference Use는 이 번호에 참여하지 않는다.
+- Notes row는 canonical `[n]`과 definition content를 출력하며 Footnote로 사용하지 않은 definition은 출력하지 않는다.
+- Footnote marker는 JavaScript 없이 Notes row로 이동하고, Notes row의 canonical `[n]` marker는 첫 Footnote occurrence로 돌아간다.
+- 같은 Footnote가 여러 번 나타나도 Notes의 단일 `[n]` backlink는 첫 occurrence를 대상으로 한다.
 
 = Inline
 
@@ -762,9 +760,10 @@ Title과 key는 Inline으로 다시 파싱하지 않는다.
 같은 Document 안에 key와 일치하는 active Reference Definition이 없으면 marker 전체를 원문 Text로 렌더하고 unresolved explicit reference diagnostic을 만든다.
 Backslash Escape는 marker 시작의 `[`를 escape하여 전체 문법을 literal text로 남길 수 있다.
 
-Reference Definition의 target kind가 Hyper Link, Note Link 또는 Date Marker면 display title을 실제 target으로 연결한다.
-Prose면 숫자 없는 term/definition anchor로 Notes row에 연결한다.
-Date Range는 inherited-title form인 `[key][]`에서만 두 endpoint를 그대로 렌더하며, title override form은 term/definition fallback을 사용한다.
+Reference Definition의 target kind가 Hyper Link, Note Link 또는 Date Marker면 display title을 실제 target으로 직접 연결한다.
+Date Range는 inherited-title form인 `[key][]`에서만 두 endpoint를 그대로 렌더한다.
+Prose와 Date Range title override form은 연결할 단일 target이 없으므로 marker 원문을 Text로 출력한다.
+일반 Reference Use는 target kind와 관계없이 Notes row 또는 footnote ordinal을 만들지 않는다. Definition content를 Notes로 표현하려면 `^` prefix가 있는 Footnote를 사용한다.
 
 예:
 
@@ -801,7 +800,9 @@ Title과 key에는 `[`, `]` 또는 newline이 들어갈 수 없으며 Inline으�
 같은 Document 안에 key와 일치하는 active Reference Definition이 없으면 marker 전체를 원문 Text로 렌더하고 unresolved explicit reference diagnostic을 만든다.
 
 같은 key를 이름, title override와 자동 번호 form으로 섞어 사용해도 active definition, Notes row와 ordinal은 하나다.
-이름 있는 marker에는 ordinal을 표시하지 않지만 첫 use라면 그 definition의 ordinal을 할당한다.
+이름 있는 marker에는 ordinal을 표시하지 않지만 첫 Footnote라면 그 definition의 ordinal을 할당한다.
+같은 definition의 일반 Reference Use는 Notes row를 만들거나 Footnote ordinal에 참여하지 않는다.
+Notes row의 canonical `[n]` marker는 첫 Footnote occurrence로 돌아가는 backlink다.
 
 예:
 

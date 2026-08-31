@@ -34,6 +34,8 @@ struct ReferenceNoteScope {
 struct ReferenceNote {
     key: String,
     id: String,
+    first_footnote_use_id: Option<String>,
+    footnote_use_count: usize,
     body_html: String,
 }
 
@@ -245,7 +247,7 @@ impl<'a> Renderer<'a> {
         self.reserve_document_ids(&parsed.document, false, false);
     }
 
-    fn register_reference_use(&mut self, key: &str) -> (usize, String) {
+    fn register_footnote_use(&mut self, key: &str) -> (usize, String, String) {
         let note_index = if let Some(index) = self.reference_note_scope.indexes.get(key) {
             *index
         } else {
@@ -255,6 +257,8 @@ impl<'a> Renderer<'a> {
             self.reference_note_scope.notes.push(ReferenceNote {
                 key: key.to_string(),
                 id: note_id,
+                first_footnote_use_id: None,
+                footnote_use_count: 0,
                 body_html: String::new(),
             });
             self.reference_note_scope
@@ -263,24 +267,21 @@ impl<'a> Renderer<'a> {
             index
         };
         let note_number = note_index + 1;
-        let note_id = self.reference_note_scope.notes[note_index].id.clone();
+        let occurrence_number = self.reference_note_scope.notes[note_index].footnote_use_count + 1;
+        let use_id = self.allocate_rendered_id(&format!(
+            "maki-reference-use-{note_number}-{occurrence_number}"
+        ));
+        let note = &mut self.reference_note_scope.notes[note_index];
+        note.footnote_use_count = occurrence_number;
+        note.first_footnote_use_id
+            .get_or_insert_with(|| use_id.clone());
+        let note_id = note.id.clone();
 
-        (note_number, note_id)
-    }
-
-    fn render_reference_term(&mut self, key: &str, title: &str) {
-        let (_, note_id) = self.register_reference_use(key);
-
-        self.html
-            .push_str("<a class=\"maki-reference-use maki-reference-term\" href=\"#");
-        self.html.push_str(&note_id);
-        self.html.push_str("\">");
-        self.escape_html_into(title);
-        self.html.push_str("</a>");
+        (note_number, note_id, use_id)
     }
 
     fn render_footnote_reference(&mut self, key: &str, title: Option<&str>) {
-        let (note_number, note_id) = self.register_reference_use(key);
+        let (note_number, note_id, use_id) = self.register_footnote_use(key);
         let (class_name, marker) = match title {
             Some(title) => ("maki-reference-footnote-named", title.to_string()),
             None => ("maki-reference-footnote-numbered", note_number.to_string()),
@@ -288,28 +289,12 @@ impl<'a> Renderer<'a> {
 
         self.html.push_str("<sup class=\"maki-reference-marker\"><a class=\"maki-reference-use maki-reference-footnote ");
         self.html.push_str(class_name);
+        self.html.push_str("\" id=\"");
+        self.html.push_str(&use_id);
         self.html.push_str("\" href=\"#");
         self.html.push_str(&note_id);
         self.html.push_str("\" role=\"doc-noteref\"><bdi>[");
         self.escape_html_into(&marker);
-        self.html.push_str("]</bdi></a></sup>");
-    }
-
-    fn render_reference_target_location(
-        &mut self,
-        key: &str,
-        render_target: impl FnOnce(&mut Self),
-    ) {
-        let (note_number, note_id) = self.register_reference_use(key);
-        let marker = note_number.to_string();
-        render_target(self);
-        self.html.push_str("<sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#");
-        self.html.push_str(&note_id);
-        self.html
-            .push_str("\" role=\"doc-noteref\" aria-label=\"Reference note ");
-        self.html.push_str(&marker);
-        self.html.push_str("\"><bdi>[");
-        self.html.push_str(&marker);
         self.html.push_str("]</bdi></a></sup>");
     }
 
@@ -335,7 +320,6 @@ impl<'a> Renderer<'a> {
         &mut self,
         raw: &str,
         title: &str,
-        key: &str,
         definition: Option<&ReferenceDefinition<'_>>,
     ) {
         let Some(definition) = definition else {
@@ -344,27 +328,11 @@ impl<'a> Renderer<'a> {
         };
 
         match definition.value.as_slice() {
-            [Inline::HyperLink { target }] => {
-                self.render_reference_target_location(key, |renderer| {
-                    renderer.render_anchor(target, title);
-                });
-            }
-            [Inline::NoteLink { target }] => {
-                self.render_reference_target_location(key, |renderer| {
-                    renderer.render_note_link_with_title(target, Some(title));
-                });
-            }
-            [Inline::DateStamp(stamp)] => {
-                self.render_reference_target_location(key, |renderer| {
-                    renderer.render_date_reference(title, *stamp);
-                });
-            }
-            [Inline::DateRange(range)] if raw.ends_with("][]") => {
-                self.render_reference_target_location(key, |renderer| {
-                    renderer.render_date_range(*range);
-                });
-            }
-            _ => self.render_reference_term(key, title),
+            [Inline::HyperLink { target }] => self.render_anchor(target, title),
+            [Inline::NoteLink { target }] => self.render_note_link_with_title(target, Some(title)),
+            [Inline::DateStamp(stamp)] => self.render_date_reference(title, *stamp),
+            [Inline::DateRange(range)] if raw.ends_with("][]") => self.render_date_range(*range),
+            _ => self.escape_html_into(raw),
         }
     }
 
@@ -544,7 +512,7 @@ impl<'a> Renderer<'a> {
         match inline {
             Inline::NoteLink { target } => self.render_note_link(target),
             Inline::Reference { raw, title, key } => {
-                self.render_reference(raw, title, key, references.get(key))
+                self.render_reference(raw, title, references.get(key))
             }
             Inline::Footnote { raw, title, key } => match references.get(key) {
                 Some(_) => self.render_footnote_reference(key, *title),
@@ -967,23 +935,28 @@ impl<'a> Renderer<'a> {
         self.html.push_str(&title_id);
         self.html.push_str("\">Notes</h2><ol>");
 
-        for note_index in 0..self.reference_note_scope.notes.len() {
-            let note = &self.reference_note_scope.notes[note_index];
-            let note_id = note.id.clone();
-            let body_html = note.body_html.clone();
-            let note_number = note_index + 1;
+        let notes = &self.reference_note_scope.notes;
+        let html = &mut self.html;
+        for (note_index, note) in notes.iter().enumerate() {
+            let first_use_id = note
+                .first_footnote_use_id
+                .as_deref()
+                .expect("a reference note is registered by a footnote use");
+            let note_number = (note_index + 1).to_string();
 
-            self.html.push_str("<li id=\"");
-            self.html.push_str(&note_id);
-            self.html
-                .push_str("\" tabindex=\"-1\"><span class=\"maki-reference-note-marker\"><bdi>[");
-            self.html.push_str(&note_number.to_string());
-            self.html
-                .push_str("]</bdi></span><span class=\"maki-reference-note-body\">");
-            self.html.push_str(&body_html);
-            self.html.push_str("</span></li>");
+            html.push_str("<li id=\"");
+            html.push_str(&note.id);
+            html.push_str("\" tabindex=\"-1\"><a class=\"maki-reference-note-marker\" href=\"#");
+            html.push_str(first_use_id);
+            html.push_str("\" role=\"doc-backlink\" aria-label=\"Back to footnote ");
+            html.push_str(&note_number);
+            html.push_str("\"><bdi>[");
+            html.push_str(&note_number);
+            html.push_str("]</bdi></a><span class=\"maki-reference-note-body\">");
+            html.push_str(&note.body_html);
+            html.push_str("</span></li>");
         }
-        self.html.push_str("</ol></section>");
+        html.push_str("</ol></section>");
     }
 
     fn prepare_reference_notes(&mut self, document: &Document<'_>) {

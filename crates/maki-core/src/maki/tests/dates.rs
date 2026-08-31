@@ -262,34 +262,63 @@ Body[^release][].
 }
 
 #[test]
-fn reference_definition_dates_follow_rendered_note_order_and_skip_unused_notes() {
+fn footnote_definition_dates_follow_rendered_note_order_and_skip_regular_references() {
     let project = temp_project("reference-date-render-order");
     write_note_with_content(
         &project,
         "start.maki",
-        r#"Second [second][], then first [first][].
+        r#"Second [^second][], then first [^first][]. Plain [plain][].
 
 [first]: First date [2026-08-24].
 [second]: Second date [2026-08-25].
-[unused]: Unused date [2026-08-26]."#,
+[unused]: Unused date [2026-08-26].
+[plain]: Plain reference date [2026-08-27]."#,
     );
 
     let maki = Maki::load(&project.root).unwrap();
     let first = Date::parse("2026-08-24").unwrap();
     let second = Date::parse("2026-08-25").unwrap();
     let unused = Date::parse("2026-08-26").unwrap();
+    let plain = Date::parse("2026-08-27").unwrap();
 
     let first_id = maki.date_index().backlinks_for(&first).unwrap()[0].occurrence_id();
     let second_id = maki.date_index().backlinks_for(&second).unwrap()[0].occurrence_id();
     assert_eq!(second_id, "date-inline-start-maki-1");
     assert_eq!(first_id, "date-inline-start-maki-2");
     assert!(maki.date_index().backlinks_for(&unused).is_none());
+    assert!(maki.date_index().backlinks_for(&plain).is_none());
 
     let html = maki.render_html(Path::new("start.maki")).unwrap();
     assert!(html.contains("id=\"date-inline-start-maki-1\""));
     assert!(html.contains("id=\"date-inline-start-maki-2\""));
     assert!(!html.contains("date-inline-start-maki-3"));
     assert!(!html.contains("Unused date"));
+    assert!(!html.contains("Plain reference date"));
+    assert!(html.contains("[plain][]"));
+}
+
+#[test]
+fn footnote_definition_dates_include_late_explicit_footnotes() {
+    let project = temp_project("late-footnote-date");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        r#"Body[^first][].
+
+[first]: First note cites [^second][].
+[second]: Second date [2026-08-28]."#,
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let date = Date::parse("2026-08-28").unwrap();
+    let backlinks = maki.date_index().backlinks_for(&date).unwrap();
+
+    assert_eq!(backlinks.len(), 1);
+    assert_eq!(backlinks[0].occurrence_id(), "date-inline-start-maki-1");
+
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+    assert_eq!(html.matches("<li id=\"maki-reference-note-").count(), 2);
+    assert!(html.contains("id=\"date-inline-start-maki-1\""));
 }
 
 #[test]
@@ -308,8 +337,9 @@ fn exact_date_reference_values_create_occurrences_at_their_uses() {
     assert_eq!(backlinks.len(), 1);
     assert_eq!(backlinks[0].occurrence_id(), "date-inline-start-maki-1");
     let html = maki.render_html(Path::new("start.maki")).unwrap();
-    assert!(html.contains("[2026-08-24]"));
+    assert!(html.contains(">release</a>"));
     assert!(html.contains("date-inline-start-maki-1"));
+    assert!(!html.contains("<section class=\"maki-reference-notes\""));
 }
 
 #[test]
@@ -353,10 +383,10 @@ fn nested_reference_date_ids_follow_each_render_scope() {
     write_note_with_content(
         &project,
         "start.maki",
-        r#"> [same][]
+        r#"> [^same][]
 > [same]: Nested date [2026-08-25].
 
-[same][]
+[^same][]
 
 [same]: Outer date [2026-08-24]."#,
     );

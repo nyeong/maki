@@ -1,5 +1,5 @@
 --^ title: Maki LSP
---^ updated: [2026-08-31]
+--^ updated: [2026-09-01]
 
 = 개요
 
@@ -70,7 +70,7 @@ Explicit ID의 canonical source selector는 `@`지만 HTML destination fragment�
 
 Active Reference Definition value가 정확히 하나의 유효한 HTTP/HTTPS Hyper Link면 일반 Reference Use인 `[key][]`와 `[title][key]` marker 전체를 `textDocument/documentLink`로 제공한다.
 URL 모양 text라도 angle-bracket Hyper Link가 아닌 Prose value면 document link를 만들지 않는다.
-같은 definition을 쓰는 Footnote, Prose term use와 definition line에는 document link를 만들지 않는다.
+같은 definition을 쓰는 Footnote, Prose Reference Use와 definition line에는 document link를 만들지 않는다.
 유효한 HTTP/HTTPS target을 가진 Direct Link는 marker 전체를 document link로 제공한다.
 Reference definition과 use range는 core의 Document reference graph를 사용한다.
 원본 source 좌표가 보존되는 list item child block은 explicit-ID definition, references, hover와 diagnostics 대상이다.

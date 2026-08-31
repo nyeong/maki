@@ -23,12 +23,12 @@ struct DateIndexCollector<'a> {
 }
 
 #[derive(Default)]
-struct ReferenceNoteOrder {
+struct FootnoteDefinitionOrder {
     keys: Vec<String>,
     seen: BTreeSet<String>,
 }
 
-impl ReferenceNoteOrder {
+impl FootnoteDefinitionOrder {
     fn register(&mut self, key: &str) {
         if self.seen.insert(key.to_string()) {
             self.keys.push(key.to_string());
@@ -146,24 +146,16 @@ fn collect_inline_dates(
     }
 }
 
-fn collect_reference_note_keys(
+fn collect_footnote_definition_keys(
     inlines: &[Inline<'_>],
-    references: &parser::ReferenceDefinitions<'_>,
-    notes: &mut ReferenceNoteOrder,
+    footnote_order: &mut FootnoteDefinitionOrder,
 ) {
     for inline in inlines {
         match inline {
-            Inline::Reference { key, .. }
-                if references.get(key).is_some_and(|definition| {
-                    definition.value_kind() == parser::ReferenceValueKind::Prose
-                }) =>
-            {
-                notes.register(key);
-            }
-            Inline::Footnote { key, .. } => notes.register(key),
+            Inline::Footnote { key, .. } => footnote_order.register(key),
             _ => {
                 if let Some(body) = inline.nested_inlines() {
-                    collect_reference_note_keys(body, references, notes);
+                    collect_footnote_definition_keys(body, footnote_order);
                 }
             }
         }
@@ -206,21 +198,21 @@ fn collect_list_item_dates(
     item: &parser::ListItem<'_>,
     context: &DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
-    reference_notes: &mut ReferenceNoteOrder,
+    footnote_order: &mut FootnoteDefinitionOrder,
 ) {
     let item_line_context = list_item_line_date_context(item);
     let mut item_context = context.with_top_list_item(item_line_context.clone());
     let occurrence_context = item_context.contextualize(&item_line_context);
 
     collect_inline_dates(collector, &item.body, &occurrence_context, references);
-    collect_reference_note_keys(&item.body, references, reference_notes);
+    collect_footnote_definition_keys(&item.body, footnote_order);
     for child in &item.children {
         collect_block_dates(
             collector,
             child,
             &mut item_context,
             references,
-            reference_notes,
+            footnote_order,
         );
     }
 }
@@ -230,7 +222,7 @@ fn collect_table_row_dates(
     row: &parser::TableRow<'_>,
     context: &str,
     references: &parser::ReferenceDefinitions<'_>,
-    reference_notes: &mut ReferenceNoteOrder,
+    footnote_order: &mut FootnoteDefinitionOrder,
 ) {
     if row.is_separator() {
         return;
@@ -238,7 +230,7 @@ fn collect_table_row_dates(
 
     for cell in &row.cells {
         collect_inline_dates(collector, &cell.body, context, references);
-        collect_reference_note_keys(&cell.body, references, reference_notes);
+        collect_footnote_definition_keys(&cell.body, footnote_order);
     }
 }
 
@@ -247,7 +239,7 @@ fn collect_block_dates(
     block: &parser::Block<'_>,
     context: &mut DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
-    reference_notes: &mut ReferenceNoteOrder,
+    footnote_order: &mut FootnoteDefinitionOrder,
 ) {
     let local_context = block_date_context(block);
     let block_context = match &block.kind {
@@ -259,7 +251,7 @@ fn collect_block_dates(
     match &block.kind {
         BlockKind::Paragraph { body } => {
             collect_inline_dates(collector, body, &block_context, references);
-            collect_reference_note_keys(body, references, reference_notes);
+            collect_footnote_definition_keys(body, footnote_order);
         }
         BlockKind::Heading {
             level,
@@ -267,12 +259,12 @@ fn collect_block_dates(
             raw_body,
         } => {
             collect_inline_dates(collector, body, &block_context, references);
-            collect_reference_note_keys(body, references, reference_notes);
+            collect_footnote_definition_keys(body, footnote_order);
             context.enter_heading(*level, raw_body);
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_list_item_dates(collector, item, context, references, reference_notes);
+                collect_list_item_dates(collector, item, context, references, footnote_order);
             }
         }
         BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
@@ -286,12 +278,12 @@ fn collect_block_dates(
                 header,
                 &header_context,
                 references,
-                reference_notes,
+                footnote_order,
             );
             for row in rows {
                 let row_context =
                     context.contextualize(&table_body_row_date_context(&table_header_context, row));
-                collect_table_row_dates(collector, row, &row_context, references, reference_notes);
+                collect_table_row_dates(collector, row, &row_context, references, footnote_order);
             }
         }
         BlockKind::Container { kind, lines, .. }
@@ -327,20 +319,20 @@ fn collect_document_dates_with_context(
         context.contextualize(&document_date_context(document, &collector.note_title));
 
     collect_property_dates(collector, document.properties(), &document_context);
-    let mut reference_notes = ReferenceNoteOrder::default();
+    let mut footnote_order = FootnoteDefinitionOrder::default();
     for block in &document.blocks {
         collect_block_dates(
             collector,
             block,
             context,
             document.reference_definitions(),
-            &mut reference_notes,
+            &mut footnote_order,
         );
     }
 
     let mut note_index = 0;
-    while note_index < reference_notes.keys.len() {
-        let key = reference_notes.keys[note_index].clone();
+    while note_index < footnote_order.keys.len() {
+        let key = footnote_order.keys[note_index].clone();
         note_index += 1;
         let Some(definition) = document.reference(&key) else {
             continue;
@@ -357,11 +349,7 @@ fn collect_document_dates_with_context(
             &reference_context,
             document.reference_definitions(),
         );
-        collect_reference_note_keys(
-            &definition.value,
-            document.reference_definitions(),
-            &mut reference_notes,
-        );
+        collect_footnote_definition_keys(&definition.value, &mut footnote_order);
     }
 }
 
