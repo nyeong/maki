@@ -44,19 +44,24 @@ impl<'a> Renderer<'a> {
             return;
         }
 
-        self.html
-            .push_str("<nav class=\"maki-document-navigation\" aria-label=\"Document hierarchy\">");
-        if let Some(parent) = navigation.parent() {
+        if !navigation.ancestors().is_empty() {
             self.html
-                .push_str("<div class=\"maki-document-navigation-parent\">");
-            self.html
-                .push_str("<span class=\"maki-document-navigation-label\">Parent</span>");
-            self.render_anchor(parent.path(), parent.title());
-            self.html.push_str("</div>");
+                .push_str("<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\"><ol>");
+            for (index, ancestor) in navigation.ancestors().iter().enumerate() {
+                self.html.push_str("<li>");
+                self.render_anchor(ancestor.path(), ancestor.title());
+                if index + 1 < navigation.ancestors().len() {
+                    self.html.push_str(
+                        "<span class=\"maki-document-breadcrumb-separator\" aria-hidden=\"true\">›</span>",
+                    );
+                }
+                self.html.push_str("</li>");
+            }
+            self.html.push_str("</ol></nav>");
         }
         if !navigation.children().is_empty() {
             self.html
-                .push_str("<div class=\"maki-document-navigation-children\">");
+                .push_str("<nav class=\"maki-document-navigation\" aria-label=\"Subdocuments\">");
             self.html
                 .push_str("<span class=\"maki-document-navigation-label\">Subdocuments</span><ul>");
             for child in navigation.children() {
@@ -64,9 +69,8 @@ impl<'a> Renderer<'a> {
                 self.render_anchor(child.path(), child.title());
                 self.html.push_str("</li>");
             }
-            self.html.push_str("</ul></div>");
+            self.html.push_str("</ul></nav>");
         }
-        self.html.push_str("</nav>");
     }
 
     fn render_project_navigation(&mut self) {

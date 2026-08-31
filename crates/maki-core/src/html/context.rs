@@ -31,20 +31,38 @@ impl DocumentNavigationItem {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DocumentNavigation {
-    parent: Option<DocumentNavigationItem>,
+    ancestors: Vec<DocumentNavigationItem>,
     children: Vec<DocumentNavigationItem>,
 }
 
 impl DocumentNavigation {
+    /// Builds navigation with at most one direct parent.
     pub fn new(
         parent: Option<DocumentNavigationItem>,
         children: Vec<DocumentNavigationItem>,
     ) -> Self {
-        Self { parent, children }
+        Self::from_ancestors(parent.into_iter().collect(), children)
     }
 
+    /// Builds navigation from ancestors ordered root-first through the direct parent.
+    pub fn from_ancestors(
+        ancestors: Vec<DocumentNavigationItem>,
+        children: Vec<DocumentNavigationItem>,
+    ) -> Self {
+        Self {
+            ancestors,
+            children,
+        }
+    }
+
+    /// Returns the direct parent, which is the last ancestor in the breadcrumb.
     pub fn parent(&self) -> Option<&DocumentNavigationItem> {
-        self.parent.as_ref()
+        self.ancestors.last()
+    }
+
+    /// Returns ancestors ordered root-first through the direct parent.
+    pub fn ancestors(&self) -> &[DocumentNavigationItem] {
+        &self.ancestors
     }
 
     pub fn children(&self) -> &[DocumentNavigationItem] {
@@ -52,7 +70,7 @@ impl DocumentNavigation {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.parent.is_none() && self.children.is_empty()
+        self.ancestors.is_empty() && self.children.is_empty()
     }
 }
 

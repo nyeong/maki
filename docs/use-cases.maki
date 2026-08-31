@@ -41,7 +41,7 @@ Child document는 `/`로 parent를 가리키고, 길어진 목록에는 document
 : [[@week-1]]은 같은 Document의 목록을 가리킨다.
 
 다른 Document에서는 `[[/제2차 미래 먹거리 계획/코딩 테스트@week-1]]`처럼 Document를 함께 적는다.
-HTML note page도 parent와 direct child 사이의 navigation을 본문 앞에 표시한다.
+HTML note page도 title 바로 아래의 ancestor breadcrumb와 본문 앞의 direct-child navigation으로 관계를 표시한다.
 
 = Metadata가 있는 문서
 

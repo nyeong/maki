@@ -292,14 +292,21 @@ fn project_rendering_can_suffix_browser_title_with_site_title() {
 }
 
 #[test]
-fn document_navigation_renders_after_title_and_before_authored_content() {
+fn document_hierarchy_renders_breadcrumb_and_subdocuments_after_title() {
     let parsed = parser::parse("--^ title: Topic\n\nAuthored content");
-    let navigation = DocumentNavigation::new(
-        Some(DocumentNavigationItem::new("Parent & overview", "/parent")),
+    let navigation = DocumentNavigation::from_ancestors(
+        vec![
+            DocumentNavigationItem::new("Root & home", "/root"),
+            DocumentNavigationItem::new("Parent <overview>", "/root/parent"),
+        ],
         vec![
             DocumentNavigationItem::new("Child <one>", "/topic/one"),
             DocumentNavigationItem::new("Child two", "/topic/two"),
         ],
+    );
+    assert_eq!(
+        navigation.parent().map(DocumentNavigationItem::title),
+        Some("Parent <overview>")
     );
 
     let html = render_document_with_context(
@@ -308,17 +315,51 @@ fn document_navigation_renders_after_title_and_before_authored_content() {
     );
 
     let title = html.find("<h1 id=\"Topic\">Topic</h1>").unwrap();
-    let hierarchy = html
-        .find("<nav class=\"maki-document-navigation\" aria-label=\"Document hierarchy\">")
+    let breadcrumb = html
+        .find("<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\">")
+        .unwrap();
+    let subdocuments = html
+        .find("<nav class=\"maki-document-navigation\" aria-label=\"Subdocuments\">")
         .unwrap();
     let authored = html.find("<p>Authored content</p>").unwrap();
-    assert!(title < hierarchy && hierarchy < authored);
+    assert!(title < breadcrumb && breadcrumb < subdocuments && subdocuments < authored);
     assert!(html.contains(
-        "<span class=\"maki-document-navigation-label\">Parent</span><a href=\"/parent\">Parent &amp; overview</a>"
+        "<ol><li><a href=\"/root\">Root &amp; home</a><span class=\"maki-document-breadcrumb-separator\" aria-hidden=\"true\">›</span></li><li><a href=\"/root/parent\">Parent &lt;overview&gt;</a></li></ol>"
     ));
     assert!(html.contains(
         "<span class=\"maki-document-navigation-label\">Subdocuments</span><ul><li><a href=\"/topic/one\">Child &lt;one&gt;</a></li><li><a href=\"/topic/two\">Child two</a></li></ul>"
     ));
+}
+
+#[test]
+fn document_hierarchy_renders_breadcrumb_and_subdocuments_independently() {
+    let parsed = parser::parse("--^ title: Topic\n\nAuthored content");
+    let resolve_note_link = |_target: &str| NoteLinkResolution::Broken;
+    let get_note_info = |_note_ref: &NoteRef| None;
+
+    let parent_only = render_document_with_context(
+        &parsed.document,
+        RenderContext::project(&resolve_note_link, &get_note_info).with_document_navigation(
+            DocumentNavigation::new(
+                Some(DocumentNavigationItem::new("Parent", "/parent")),
+                Vec::new(),
+            ),
+        ),
+    );
+    assert!(parent_only.contains("aria-label=\"Breadcrumb\""));
+    assert!(!parent_only.contains("aria-label=\"Subdocuments\""));
+
+    let children_only = render_document_with_context(
+        &parsed.document,
+        RenderContext::project(&resolve_note_link, &get_note_info).with_document_navigation(
+            DocumentNavigation::new(
+                None,
+                vec![DocumentNavigationItem::new("Child", "/topic/child")],
+            ),
+        ),
+    );
+    assert!(!children_only.contains("aria-label=\"Breadcrumb\""));
+    assert!(children_only.contains("aria-label=\"Subdocuments\""));
 }
 
 #[test]
@@ -333,6 +374,8 @@ fn empty_or_unspecified_document_navigation_is_not_rendered() {
 
     assert!(!standalone.contains("<nav class=\"maki-document-navigation\""));
     assert!(!explicitly_empty.contains("<nav class=\"maki-document-navigation\""));
+    assert!(!standalone.contains("<nav class=\"maki-document-breadcrumb\""));
+    assert!(!explicitly_empty.contains("<nav class=\"maki-document-breadcrumb\""));
 }
 
 #[test]
