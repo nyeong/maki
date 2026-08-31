@@ -180,6 +180,15 @@ class ReleaseMetadataTests(unittest.TestCase):
     def errors(self) -> list[str]:
         return CHECK_RELEASE_METADATA.metadata_errors(self.repository_root)
 
+    def assert_error_contains(
+        self, expected: str, errors: list[str] | None = None
+    ) -> None:
+        actual_errors = self.errors() if errors is None else errors
+        self.assertTrue(
+            any(expected in error for error in actual_errors),
+            f"expected an error containing {expected!r}, got {actual_errors!r}",
+        )
+
     def replace(self, relative_path: str, old: str, new: str) -> None:
         path = self.repository_root / relative_path
         contents = path.read_text(encoding="utf-8")
@@ -208,9 +217,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             '[dependencies]\nprivate = { git = "ssh://git@private.invalid/maki" }\n',
         )
 
-        self.assertTrue(
-            any("non-public Git source" in error for error in self.errors())
-        )
+        self.assert_error_contains("non-public Git source")
 
     def test_malformed_public_url_is_rejected_without_crashing(self) -> None:
         self.assertFalse(CHECK_RELEASE_METADATA.is_public_https_url("https://["))
@@ -222,9 +229,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             '[dependencies]\nremote = { git = "https://github.com/example/repo" }\n',
         )
 
-        self.assertTrue(
-            any("needs a full Git revision" in error for error in self.errors())
-        )
+        self.assert_error_contains("needs a full Git revision")
 
     def test_rejects_private_network_git_dependency(self) -> None:
         self.replace(
@@ -233,9 +238,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             '[dependencies]\nremote = { git = "https://127.0.0.1/repo", rev = "1111111111111111111111111111111111111111" }\n',
         )
 
-        self.assertTrue(
-            any("non-public Git source" in error for error in self.errors())
-        )
+        self.assert_error_contains("non-public Git source")
 
     def test_rejects_absolute_dependency_path(self) -> None:
         self.replace(
@@ -243,10 +246,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
 
         errors = self.errors()
-        self.assertTrue(any("uses an absolute path" in error for error in errors))
-        self.assertTrue(
-            any("does not resolve to its workspace member" in error for error in errors)
-        )
+        self.assert_error_contains("uses an absolute path", errors)
+        self.assert_error_contains("does not resolve to its workspace member", errors)
 
     def test_rejects_file_dependency_path(self) -> None:
         self.replace(
@@ -255,18 +256,14 @@ class ReleaseMetadataTests(unittest.TestCase):
             'path = "file:///home/user/maki-core"',
         )
 
-        self.assertTrue(
-            any("machine-local path source" in error for error in self.errors())
-        )
+        self.assert_error_contains("machine-local path source")
 
     def test_reports_internal_dependency_version_mismatch(self) -> None:
         self.replace(
             "Cargo.toml", f'version = "{VERSION}", path', 'version = "9.9.9", path'
         )
 
-        self.assertTrue(
-            any("must require version 0.1.0" in error for error in self.errors())
-        )
+        self.assert_error_contains("must require version 0.1.0")
 
     def test_discovers_implicit_path_workspace_member(self) -> None:
         self.replace(
@@ -286,8 +283,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
 
         errors = self.errors()
-        self.assertTrue(any("package helper must inherit version" in error for error in errors))
-        self.assertTrue(any("helper must require version 0.1.0" in error for error in errors))
+        self.assert_error_contains("package helper must inherit version", errors)
+        self.assert_error_contains("helper must require version 0.1.0", errors)
 
     def test_allows_features_on_inherited_workspace_dependency(self) -> None:
         self.replace(
@@ -314,8 +311,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
 
         errors = self.errors()
-        self.assertTrue(any("helper uses an absolute path" in error for error in errors))
-        self.assertTrue(any("patched escapes the repository" in error for error in errors))
+        self.assert_error_contains("helper uses an absolute path", errors)
+        self.assert_error_contains("patched escapes the repository", errors)
 
     def test_rejects_private_cargo_source_replacement(self) -> None:
         self.write(
@@ -329,7 +326,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             """,
         )
 
-        self.assertTrue(any("is machine-local" in error for error in self.errors()))
+        self.assert_error_contains("is machine-local")
 
     def test_rejects_private_and_floating_cargo_git_sources(self) -> None:
         self.write(
@@ -345,8 +342,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
 
         errors = self.errors()
-        self.assertTrue(any("non-public Git source" in error for error in errors))
-        self.assertTrue(any("needs a full Git revision" in error for error in errors))
+        self.assert_error_contains("non-public Git source", errors)
+        self.assert_error_contains("needs a full Git revision", errors)
 
     def test_reports_member_that_does_not_inherit_version(self) -> None:
         self.replace(
@@ -355,9 +352,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             'version = "0.1.0"',
         )
 
-        self.assertTrue(
-            any("must inherit version" in error for error in self.errors())
-        )
+        self.assert_error_contains("must inherit version")
 
     def test_rejects_absolute_workspace_member(self) -> None:
         self.replace(
@@ -366,8 +361,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             'members = ["/home/user/maki-core"]',
         )
 
+        errors = self.errors()
         self.assertTrue(
-            any("workspace member" in error and "absolute" in error for error in self.errors())
+            any("workspace member" in error and "absolute" in error for error in errors),
+            f"expected an absolute workspace member error, got {errors!r}",
         )
 
     def test_reports_lock_and_flake_version_mismatches(self) -> None:
@@ -375,7 +372,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.replace("flake.nix", 'version = "0.1.0"', 'version = "0.2.0"')
 
         errors = self.errors()
-        self.assertTrue(any("Cargo.lock package maki" in error for error in errors))
+        self.assert_error_contains("Cargo.lock package maki", errors)
         self.assertIn("flake package version must be 0.1.0", errors)
 
     def test_rejects_unapproved_flake_lock_source(self) -> None:
@@ -385,9 +382,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             '"owner": "private-owner"',
         )
 
-        self.assertTrue(
-            any("not an approved public source" in error for error in self.errors())
-        )
+        self.assert_error_contains("not an approved public source")
 
     def test_rejects_private_lock_source(self) -> None:
         self.replace(
@@ -396,9 +391,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             'name = "maki-core"\nversion = "0.1.0"\nsource = "git+ssh://private.invalid/maki-core"',
         )
 
-        self.assertTrue(
-            any("uses a non-public source" in error for error in self.errors())
-        )
+        self.assert_error_contains("uses a non-public source")
 
     def test_rejects_obsolete_repository_link(self) -> None:
         self.write(
@@ -414,8 +407,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         errors = CHECK_RELEASE_METADATA.metadata_errors(
             self.repository_root, release=True
         )
-        self.assertTrue(any("dated 0.1.0" in error for error in errors))
-        self.assertTrue(any("maki-v0.1.0" in error for error in errors))
+        self.assert_error_contains("dated 0.1.0", errors)
+        self.assert_error_contains("maki-v0.1.0", errors)
 
         self.write(
             "CHANGELOG.md",
@@ -446,13 +439,11 @@ class ReleaseMetadataTests(unittest.TestCase):
             """,
         )
 
-        self.assertTrue(
-            any(
-                "invalid 0.1.0 release date" in error
-                for error in CHECK_RELEASE_METADATA.metadata_errors(
-                    self.repository_root, release=True
-                )
-            )
+        self.assert_error_contains(
+            "invalid 0.1.0 release date",
+            CHECK_RELEASE_METADATA.metadata_errors(
+                self.repository_root, release=True
+            ),
         )
 
     def test_release_checkout_must_be_a_clean_commit(self) -> None:

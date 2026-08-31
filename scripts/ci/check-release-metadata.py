@@ -25,6 +25,17 @@ INHERITED_FIELDS = (
     "homepage",
     "publish",
 )
+DEPENDENCY_TABLE_NAMES = (
+    "dependencies",
+    "dev-dependencies",
+    "build-dependencies",
+)
+ALLOWED_WORKSPACE_DEPENDENCY_FIELDS = {
+    "default-features",
+    "features",
+    "optional",
+    "workspace",
+}
 SEMANTIC_VERSION = re.compile(
     r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
@@ -150,27 +161,32 @@ def is_public_locked_source(source: str) -> bool:
     return is_public_https_url(source)
 
 
-def source_tables(manifest: dict[str, Any]) -> Iterator[tuple[dict[str, Any], bool]]:
-    for name in ("dependencies", "dev-dependencies", "build-dependencies"):
+def dependency_tables(manifest: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    for name in DEPENDENCY_TABLE_NAMES:
         table = manifest.get(name)
         if isinstance(table, dict):
-            yield table, True
+            yield table
 
     workspace = manifest.get("workspace")
     if isinstance(workspace, dict):
         table = workspace.get("dependencies")
         if isinstance(table, dict):
-            yield table, True
+            yield table
 
     targets = manifest.get("target")
     if isinstance(targets, dict):
         for target in targets.values():
             if not isinstance(target, dict):
                 continue
-            for name in ("dependencies", "dev-dependencies", "build-dependencies"):
+            for name in DEPENDENCY_TABLE_NAMES:
                 table = target.get(name)
                 if isinstance(table, dict):
-                    yield table, True
+                    yield table
+
+
+def source_tables(manifest: dict[str, Any]) -> Iterator[tuple[dict[str, Any], bool]]:
+    for table in dependency_tables(manifest):
+        yield table, True
 
     patches = manifest.get("patch")
     if isinstance(patches, dict):
@@ -236,9 +252,7 @@ def discover_path_workspace_members(
     pending = list(manifests.items())
     while pending:
         manifest_path, manifest = pending.pop()
-        for table, is_dependency_table in source_tables(manifest):
-            if not is_dependency_table:
-                continue
+        for table in dependency_tables(manifest):
             for specification in table.values():
                 if not isinstance(specification, dict):
                     continue
@@ -258,6 +272,30 @@ def discover_path_workspace_members(
                 if dependency is not None:
                     manifests[dependency_manifest] = dependency
                     pending.append((dependency_manifest, dependency))
+
+
+def resolve_dependency_path(
+    repository_root: Path,
+    manifest_path: Path,
+    dependency_name: str,
+    path_source: Any,
+    errors: list[str],
+) -> Path | None:
+    if not isinstance(path_source, str):
+        return None
+
+    label = f"{manifest_path}: dependency {dependency_name}"
+    if path_source.startswith(("file:", "path:", "ssh:")):
+        errors.append(f"{label} uses a machine-local path source")
+        return None
+    if Path(path_source).is_absolute() or WINDOWS_ABSOLUTE_PATH.match(path_source):
+        errors.append(f"{label} uses an absolute path")
+        return None
+
+    resolved_path = (manifest_path.parent / path_source).resolve()
+    if not path_is_within(resolved_path, repository_root):
+        errors.append(f"{label} escapes the repository")
+    return resolved_path
 
 
 def check_dependency_sources(
@@ -280,12 +318,9 @@ def check_dependency_sources(
             if not isinstance(specification, dict):
                 continue
             if specification.get("workspace") is True:
-                unsupported_fields = set(specification) - {
-                    "default-features",
-                    "features",
-                    "optional",
-                    "workspace",
-                }
+                unsupported_fields = (
+                    set(specification) - ALLOWED_WORKSPACE_DEPENDENCY_FIELDS
+                )
                 if unsupported_fields:
                     errors.append(
                         f"{manifest_path}: dependency {dependency_name} has invalid "
@@ -299,29 +334,13 @@ def check_dependency_sources(
                 f"{manifest_path}: dependency {dependency_name}",
                 errors,
             )
-
-            path_source = specification.get("path")
-            resolved_path: Path | None = None
-            if isinstance(path_source, str):
-                if path_source.startswith(("file:", "path:", "ssh:")):
-                    errors.append(
-                        f"{manifest_path}: dependency {dependency_name} uses a "
-                        "machine-local path source"
-                    )
-                elif Path(path_source).is_absolute() or WINDOWS_ABSOLUTE_PATH.match(
-                    path_source
-                ):
-                    errors.append(
-                        f"{manifest_path}: dependency {dependency_name} uses an "
-                        "absolute path"
-                    )
-                else:
-                    resolved_path = (manifest_path.parent / path_source).resolve()
-                    if not path_is_within(resolved_path, repository_root):
-                        errors.append(
-                            f"{manifest_path}: dependency {dependency_name} "
-                            "escapes the repository"
-                        )
+            resolved_path = resolve_dependency_path(
+                repository_root,
+                manifest_path,
+                dependency_name,
+                specification.get("path"),
+                errors,
+            )
 
             if (
                 not is_dependency_table
