@@ -6,6 +6,11 @@ Maki is a line-first lightweight markup language and personal wiki runtime for
 It is built around a project directory, a small `maki.toml` manifest, and plain
 text notes that can be served as HTML.
 
+The canonical source is the anonymously readable
+[Forgejo repository](https://git.eska.nyeong.me/nyeong/maki). The CLI and LSP
+share one release version; see the [release contract](RELEASES.md) and
+[changelog](CHANGELOG.md) for provenance and release history.
+
 ## Quick Start
 
 From this repository:
@@ -75,8 +80,10 @@ HTML.
 `maki lsp` starts the stdio language server for editor integration.
 
 `maki --version --json` prints a stable machine-readable object containing the
-CLI name and package version. The LSP initialize response reports the same
-version through `serverInfo.version`.
+CLI name, package version, and source revision. Nix builds from a clean commit
+report its 40-character revision; direct or dirty development builds report a
+null revision. The LSP initialize response reports the same package version
+through `serverInfo.version`.
 
 ## Configuration
 
@@ -192,3 +199,7 @@ development use the same repository-owned entrypoint:
 ```bash
 bash scripts/ci/check-maki.sh
 ```
+
+## License
+
+Maki is available under the [MIT License](LICENSE).
