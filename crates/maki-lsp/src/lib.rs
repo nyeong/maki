@@ -6,19 +6,22 @@ use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
-    CompletionItem, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    CompletionItem, CompletionOptions, CompletionParams, CompletionResponse, CompletionTextEdit,
+    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
     DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
     GotoDefinitionResponse, Hover, HoverContents, HoverParams, InitializeParams, Location,
     MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams,
-    Range, ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Url, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    Range, ReferenceParams, ServerCapabilities, SymbolInformation, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use maki_core::analysis::{
-    AnalysisDiagnosticKind, DateOrigin, DefinitionTarget, DocumentAnalysis, HeadingOccurrence,
-    LinkResolution, ProjectAnalysis, SourceSnapshot, analyze_project, property_description,
+    AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin, DefinitionTarget, DefinitionTargetKind,
+    DocumentAnalysis, HeadingOccurrence, LinkResolution, ProjectAnalysis, SourceSnapshot,
+    analyze_project, property_description,
 };
+use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
 use maki_core::{Maki, MakiConfig, is_discoverable_maki_path, list_maki_files};
 
@@ -57,6 +60,7 @@ fn server_capabilities() -> ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         document_link_provider: Some(DocumentLinkOptions {
             resolve_provider: Some(false),
             work_done_progress_options: Default::default(),
@@ -86,6 +90,13 @@ struct Server {
     documents: BTreeMap<PathBuf, String>,
     open_documents: BTreeSet<PathBuf>,
     analysis: ProjectAnalysis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReferenceIdentity {
+    Document(PathBuf),
+    Heading { path: PathBuf, anchor: String },
+    Id { path: PathBuf, id: String },
 }
 
 impl Server {
@@ -125,6 +136,10 @@ impl Server {
             "textDocument/definition" => {
                 let params: GotoDefinitionParams = serde_json::from_value(request.params)?;
                 serde_json::to_value(self.definition(params))?
+            }
+            "textDocument/references" => {
+                let params: ReferenceParams = serde_json::from_value(request.params)?;
+                serde_json::to_value(self.references(params))?
             }
             "textDocument/documentLink" => {
                 let params: DocumentLinkParams = serde_json::from_value(request.params)?;
@@ -307,6 +322,164 @@ impl Server {
         self.symbol_location(&target.path, target.selection_span)
     }
 
+    fn references(&self, params: ReferenceParams) -> Option<Vec<Location>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let path = self.relative_path(uri)?;
+        let source = self.documents.get(&path)?;
+        let document = self.analysis.document(&path)?;
+        let offset = lsp_offset(source, params.text_document_position.position)?;
+        let identity = self.reference_identity_at(document, offset)?;
+
+        Some(self.reference_locations(&identity, params.context.include_declaration))
+    }
+
+    fn reference_identity_at(
+        &self,
+        document: &DocumentAnalysis,
+        offset: usize,
+    ) -> Option<ReferenceIdentity> {
+        if let Some(link) = document
+            .note_links
+            .iter()
+            .find(|link| span_touches(link.span, offset))
+        {
+            let LinkResolution::Found(target) = link.resolution.as_ref()? else {
+                return None;
+            };
+            return self.reference_identity_for_target(target);
+        }
+
+        if let Some(block_id) = document
+            .block_ids
+            .iter()
+            .find(|block_id| span_touches(block_id.value_span, offset))
+        {
+            return Some(ReferenceIdentity::Id {
+                path: document.path.clone(),
+                id: block_id.id.clone(),
+            });
+        }
+
+        if let Some(heading) = document
+            .headings
+            .iter()
+            .find(|heading| span_touches(heading.title_span, offset))
+        {
+            return Some(self.heading_reference_identity(document, heading));
+        }
+
+        if document.document_span.start < document.document_span.end
+            && span_touches(document.document_span, offset)
+        {
+            return Some(ReferenceIdentity::Document(document.path.clone()));
+        }
+
+        None
+    }
+
+    fn reference_identity_for_target(
+        &self,
+        target: &DefinitionTarget,
+    ) -> Option<ReferenceIdentity> {
+        match target.kind {
+            DefinitionTargetKind::Document => {
+                Some(ReferenceIdentity::Document(target.path.clone()))
+            }
+            DefinitionTargetKind::Heading => {
+                let anchor = target.fragment.as_ref()?;
+                let document = self.analysis.document(&target.path)?;
+                let heading = document
+                    .headings
+                    .iter()
+                    .find(|heading| heading.title_span == target.selection_span)?;
+                debug_assert_eq!(&heading.anchor, anchor);
+                Some(self.heading_reference_identity(document, heading))
+            }
+            DefinitionTargetKind::Id => Some(ReferenceIdentity::Id {
+                path: target.path.clone(),
+                id: target.fragment.clone()?,
+            }),
+        }
+    }
+
+    fn heading_reference_identity(
+        &self,
+        document: &DocumentAnalysis,
+        heading: &HeadingOccurrence,
+    ) -> ReferenceIdentity {
+        if document.block_ids.iter().any(|block_id| {
+            block_id.owner_kind == AnalysisBlockKind::Heading
+                && block_id.owner_span == heading.span
+                && block_id.id == heading.anchor
+        }) {
+            ReferenceIdentity::Id {
+                path: document.path.clone(),
+                id: heading.anchor.clone(),
+            }
+        } else {
+            ReferenceIdentity::Heading {
+                path: document.path.clone(),
+                anchor: heading.anchor.clone(),
+            }
+        }
+    }
+
+    fn reference_locations(
+        &self,
+        identity: &ReferenceIdentity,
+        include_declaration: bool,
+    ) -> Vec<Location> {
+        let mut locations = Vec::new();
+        if include_declaration {
+            locations.extend(self.declaration_locations(identity));
+        }
+
+        for document in self.analysis.documents.values() {
+            for link in &document.note_links {
+                let Some(LinkResolution::Found(target)) = link.resolution.as_ref() else {
+                    continue;
+                };
+                if self.reference_identity_for_target(target).as_ref() == Some(identity)
+                    && let Some(location) = self.symbol_location(&document.path, link.target_span)
+                {
+                    locations.push(location);
+                }
+            }
+        }
+        locations
+    }
+
+    fn declaration_locations(&self, identity: &ReferenceIdentity) -> Vec<Location> {
+        match identity {
+            ReferenceIdentity::Document(path) => self
+                .analysis
+                .document(path)
+                .and_then(|document| {
+                    (document.document_span.start < document.document_span.end)
+                        .then_some(document.document_span)
+                })
+                .and_then(|span| self.symbol_location(path, span))
+                .into_iter()
+                .collect(),
+            ReferenceIdentity::Heading { path, anchor } => self
+                .analysis
+                .document(path)
+                .into_iter()
+                .flat_map(|document| &document.headings)
+                .filter(|heading| heading.anchor == *anchor)
+                .filter_map(|heading| self.symbol_location(path, heading.title_span))
+                .collect(),
+            ReferenceIdentity::Id { path, id } => self
+                .analysis
+                .document(path)
+                .into_iter()
+                .flat_map(|document| &document.block_ids)
+                .filter(|block_id| block_id.id == *id)
+                .filter_map(|block_id| self.symbol_location(path, block_id.value_span))
+                .collect(),
+        }
+    }
+
     fn document_links(&self, params: DocumentLinkParams) -> Option<Vec<DocumentLink>> {
         let (source, document) = self.document_for_uri(&params.text_document.uri)?;
         Some(
@@ -328,10 +501,13 @@ impl Server {
 
     fn completion(&self, params: CompletionParams) -> Option<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        let (source, _) = self.document_for_uri(uri)?;
+        let path = self.relative_path(uri)?;
+        let source = self.documents.get(&path)?;
+        self.analysis.document(&path)?;
         let offset = lsp_offset(source, params.text_document_position.position)?;
         Some(CompletionResponse::Array(completion_items(
             &self.analysis,
+            &path,
             source,
             offset,
         )))
@@ -369,6 +545,21 @@ impl Server {
                     symbols.push(SymbolInformation {
                         name: heading.title.clone(),
                         kind: SymbolKind::NAMESPACE,
+                        tags: None,
+                        deprecated: None,
+                        location,
+                        container_name: Some(document.title.clone()),
+                    });
+                }
+            }
+            for block_id in &document.block_ids {
+                if (query.is_empty() || block_id.id.to_lowercase().contains(&query))
+                    && let Some(location) =
+                        self.symbol_location(&document.path, block_id.value_span)
+                {
+                    symbols.push(SymbolInformation {
+                        name: block_id.id.clone(),
+                        kind: SymbolKind::KEY,
                         tags: None,
                         deprecated: None,
                         location,
@@ -465,7 +656,12 @@ fn analyze_documents(documents: &BTreeMap<PathBuf, String>) -> ProjectAnalysis {
     analyze_project(&snapshots)
 }
 
-fn completion_items(project: &ProjectAnalysis, source: &str, offset: usize) -> Vec<CompletionItem> {
+fn completion_items(
+    project: &ProjectAnalysis,
+    current_path: &Path,
+    source: &str,
+    offset: usize,
+) -> Vec<CompletionItem> {
     let map = SourceMap::new(source);
     let position = match map.position(offset) {
         Some(position) => position,
@@ -481,31 +677,16 @@ fn completion_items(project: &ProjectAnalysis, source: &str, offset: usize) -> V
     if let Some(open) = before_cursor.rfind("[[")
         && before_cursor[open + 2..].rfind("]]").is_none()
     {
-        let target = &before_cursor[open + 2..];
-        if let Some((_, heading_prefix)) = target.split_once('#') {
-            return project
-                .documents
-                .values()
-                .flat_map(|document| document.headings.iter())
-                .filter(|heading| heading.anchor.starts_with(heading_prefix))
-                .map(|heading| CompletionItem {
-                    label: heading.anchor.clone(),
-                    detail: Some("Maki heading".to_string()),
-                    ..CompletionItem::default()
-                })
-                .collect();
-        }
-        return project
-            .note_candidates()
-            .filter(|document| {
-                document.canonical_path.starts_with(target) || document.title.starts_with(target)
-            })
-            .map(|document| CompletionItem {
-                label: document.canonical_path.clone(),
-                detail: Some(document.title.clone()),
-                ..CompletionItem::default()
-            })
-            .collect();
+        let target_start = line_span.start + open + 2;
+        let target = &source[target_start..offset];
+        return note_link_completion_items(
+            project,
+            current_path,
+            source,
+            target,
+            target_start,
+            offset,
+        );
     }
 
     let property_body = trimmed
@@ -536,6 +717,259 @@ fn completion_items(project: &ProjectAnalysis, source: &str, offset: usize) -> V
     }
 
     Vec::new()
+}
+
+fn note_link_completion_items(
+    project: &ProjectAnalysis,
+    current_path: &Path,
+    source: &str,
+    target: &str,
+    target_start: usize,
+    offset: usize,
+) -> Vec<CompletionItem> {
+    let parsed = NoteLinkTarget::parse(target);
+    let (prefix, replace_start) = match parsed.inner {
+        Some(inner) => {
+            let prefix = inner.target();
+            (
+                prefix,
+                target_start + target.len().saturating_sub(prefix.len()),
+            )
+        }
+        None => (parsed.document.target().unwrap_or_default(), target_start),
+    };
+    let Some(replace_range) = lsp_range(source, SourceSpan::new(replace_start, offset)) else {
+        return Vec::new();
+    };
+
+    match parsed.inner {
+        Some(InnerSelector::Heading(prefix)) => {
+            let Some(document) = selected_document(project, current_path, parsed.document) else {
+                return Vec::new();
+            };
+            document
+                .headings
+                .iter()
+                .filter(|heading| prefix_matches(&heading.anchor, prefix))
+                .map(|heading| {
+                    completion_item(
+                        heading.anchor.clone(),
+                        format!("Maki heading in {}", document.title),
+                        replace_range,
+                    )
+                })
+                .collect()
+        }
+        Some(InnerSelector::Id(prefix)) => {
+            let Some(document) = selected_document(project, current_path, parsed.document) else {
+                return Vec::new();
+            };
+            let mut seen = BTreeSet::new();
+            document
+                .block_ids
+                .iter()
+                .filter(|block_id| block_id.id.starts_with(prefix))
+                .filter(|block_id| seen.insert(block_id.id.clone()))
+                .map(|block_id| {
+                    completion_item(
+                        block_id.id.clone(),
+                        format!("Maki explicit ID in {}", document.title),
+                        replace_range,
+                    )
+                })
+                .collect()
+        }
+        None => document_completion_items(
+            project,
+            current_path,
+            parsed.document,
+            prefix,
+            replace_range,
+        ),
+    }
+}
+
+fn completion_item(label: String, detail: String, range: Range) -> CompletionItem {
+    CompletionItem {
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range,
+            new_text: label.clone(),
+        })),
+        label,
+        detail: Some(detail),
+        ..CompletionItem::default()
+    }
+}
+
+fn document_completion_items(
+    project: &ProjectAnalysis,
+    current_path: &Path,
+    selector: DocumentSelector<'_>,
+    prefix: &str,
+    replace_range: Range,
+) -> Vec<CompletionItem> {
+    match selector {
+        DocumentSelector::Root(_) => project
+            .note_candidates()
+            .filter(|document| prefix_matches(&document.canonical_path, prefix))
+            .map(|document| {
+                completion_item(
+                    format!("/{}", document.canonical_path),
+                    document.title.clone(),
+                    replace_range,
+                )
+            })
+            .collect(),
+        DocumentSelector::Child(_) => {
+            let Some(current) = project.document(current_path) else {
+                return Vec::new();
+            };
+            let child_root = format!("{}/", current.canonical_path);
+            let mut items = project
+                .note_candidates()
+                .filter_map(|document| {
+                    let relative = document.canonical_path.strip_prefix(&child_root)?;
+                    prefix_matches(relative, prefix).then_some((document, relative))
+                })
+                .map(|(document, relative)| {
+                    completion_item(
+                        format!("+{relative}"),
+                        document.title.clone(),
+                        replace_range,
+                    )
+                })
+                .collect::<Vec<_>>();
+            items.sort_by(|left, right| {
+                left.label
+                    .matches('/')
+                    .count()
+                    .cmp(&right.label.matches('/').count())
+                    .then_with(|| left.label.cmp(&right.label))
+            });
+            items
+        }
+        DocumentSelector::Legacy(_) => project
+            .note_candidates()
+            .filter(|document| {
+                prefix_matches(&document.canonical_path, prefix)
+                    || prefix_matches(&document.title, prefix)
+            })
+            .map(|document| {
+                completion_item(
+                    document.canonical_path.clone(),
+                    document.title.clone(),
+                    replace_range,
+                )
+            })
+            .collect(),
+        DocumentSelector::Current => Vec::new(),
+    }
+}
+
+fn selected_document<'a>(
+    project: &'a ProjectAnalysis,
+    current_path: &Path,
+    selector: DocumentSelector<'_>,
+) -> Option<&'a DocumentAnalysis> {
+    match selector {
+        DocumentSelector::Current => project.document(current_path),
+        DocumentSelector::Root(target) => coordinate_document(project, target),
+        DocumentSelector::Child(target) => {
+            let target = normalize_document_target(target);
+            if !is_normal_relative_target(target) {
+                return None;
+            }
+            let current = project.document(current_path)?;
+            coordinate_document(project, &format!("{}/{target}", current.canonical_path))
+        }
+        DocumentSelector::Legacy(target) => legacy_document(project, current_path, target),
+    }
+}
+
+fn coordinate_document<'a>(
+    project: &'a ProjectAnalysis,
+    target: &str,
+) -> Option<&'a DocumentAnalysis> {
+    let target = normalize_document_target(target);
+    project
+        .note_candidates()
+        .find(|document| document.canonical_path == target)
+        .or_else(|| {
+            let normalized = target.to_lowercase();
+            unique_document(
+                project
+                    .note_candidates()
+                    .filter(|document| document.canonical_path.to_lowercase() == normalized),
+            )
+        })
+}
+
+fn legacy_document<'a>(
+    project: &'a ProjectAnalysis,
+    current_path: &Path,
+    target: &str,
+) -> Option<&'a DocumentAnalysis> {
+    let target = normalize_document_target(target);
+    if target.is_empty() {
+        return None;
+    }
+    if let Some(exact) = project
+        .note_candidates()
+        .find(|document| document.canonical_path == target)
+    {
+        return Some(exact);
+    }
+    if target.contains('/') {
+        return coordinate_document(project, target);
+    }
+
+    let sibling = current_path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(format!("{target}.maki"));
+    let sibling = canonical_source_path(&sibling);
+    if let Some(document) = coordinate_document(project, &sibling) {
+        return Some(document);
+    }
+
+    let normalized = target.to_lowercase();
+    unique_document(project.note_candidates().filter(|document| {
+        document
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.to_lowercase() == normalized)
+    }))
+}
+
+fn unique_document<'a>(
+    mut candidates: impl Iterator<Item = &'a DocumentAnalysis>,
+) -> Option<&'a DocumentAnalysis> {
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate)
+}
+
+fn normalize_document_target(target: &str) -> &str {
+    target.strip_suffix(".maki").unwrap_or(target)
+}
+
+fn prefix_matches(value: &str, prefix: &str) -> bool {
+    value.to_lowercase().starts_with(&prefix.to_lowercase())
+}
+
+fn canonical_source_path(path: &Path) -> String {
+    let path = path.with_extension("");
+    path.strip_prefix(".")
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn is_normal_relative_target(target: &str) -> bool {
+    !target.is_empty()
+        && target
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
 fn heading_symbols(source: &str, headings: &[HeadingOccurrence]) -> Vec<DocumentSymbol> {
@@ -594,16 +1028,28 @@ fn heading_symbols(source: &str, headings: &[HeadingOccurrence]) -> Vec<Document
 fn link_hover(link: &maki_core::analysis::NoteLinkOccurrence) -> String {
     match link.resolution.as_ref() {
         Some(LinkResolution::Found(target)) => {
-            let fragment = target
-                .heading_anchor
-                .as_deref()
-                .map_or(String::new(), |anchor| format!("#{anchor}"));
-            format!("Resolves to `{}`{fragment}.", target.path.display())
+            let selector = match target.kind {
+                DefinitionTargetKind::Document => String::new(),
+                DefinitionTargetKind::Heading => target
+                    .fragment
+                    .as_deref()
+                    .map_or(String::new(), |anchor| format!("#{anchor}")),
+                DefinitionTargetKind::Id => target
+                    .fragment
+                    .as_deref()
+                    .map_or(String::new(), |id| format!("@{id}")),
+            };
+            format!(
+                "Resolves to `/{document}{selector}`.",
+                document = canonical_source_path(&target.path)
+            )
         }
         Some(LinkResolution::BrokenNote) => "Target note was not found.".to_string(),
         Some(LinkResolution::AmbiguousNote) => "Target note is ambiguous.".to_string(),
         Some(LinkResolution::BrokenHeading) => "Target heading was not found.".to_string(),
         Some(LinkResolution::AmbiguousHeading) => "Target heading is ambiguous.".to_string(),
+        Some(LinkResolution::BrokenId) => "Target explicit ID was not found.".to_string(),
+        Some(LinkResolution::AmbiguousId) => "Target explicit ID is ambiguous.".to_string(),
         None => "Link has not been resolved.".to_string(),
     }
 }
@@ -644,10 +1090,13 @@ fn span_touches(span: SourceSpan, offset: usize) -> bool {
 fn diagnostic_code(kind: AnalysisDiagnosticKind) -> &'static str {
     match kind {
         AnalysisDiagnosticKind::ParseWarning => "parse-warning",
+        AnalysisDiagnosticKind::DuplicateId => "duplicate-id",
         AnalysisDiagnosticKind::BrokenNoteLink => "broken-note-link",
         AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous-note-link",
         AnalysisDiagnosticKind::BrokenHeadingLink => "broken-heading-link",
         AnalysisDiagnosticKind::AmbiguousHeadingLink => "ambiguous-heading-link",
+        AnalysisDiagnosticKind::BrokenIdLink => "broken-id-link",
+        AnalysisDiagnosticKind::AmbiguousIdLink => "ambiguous-id-link",
     }
 }
 
@@ -697,6 +1146,7 @@ mod tests {
             result["capabilities"]["documentLinkProvider"]["resolveProvider"],
             false
         );
+        assert_eq!(result["capabilities"]["referencesProvider"], true);
     }
 
     #[test]
@@ -758,9 +1208,10 @@ mod tests {
             (PathBuf::from("other.maki"), "= Heading".to_string()),
         ]);
         let project = analyze_documents(&documents);
-        let notes = completion_items(&project, "[[ot", 4);
-        let headings = completion_items(&project, "[[other#H", 9);
-        let properties = completion_items(&project, "--v ti", 6);
+        let current_path = Path::new("index.maki");
+        let notes = completion_items(&project, current_path, "[[ot", 4);
+        let headings = completion_items(&project, current_path, "[[other#H", 9);
+        let properties = completion_items(&project, current_path, "--v ti", 6);
 
         assert!(notes.iter().any(|item| item.label == "other"));
         assert!(headings.iter().any(|item| item.label == "Heading"));
@@ -768,10 +1219,123 @@ mod tests {
     }
 
     #[test]
+    fn note_link_completion_respects_document_and_inner_selector_scope() {
+        let current_source = "--^ title: Current\n\n= Current heading\n--^ id: current-heading\n\ncurrent body\n--^ id: current-only\n";
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("plans/current.maki"),
+                current_source.to_string(),
+            ),
+            (
+                PathBuf::from("plans/current/child.maki"),
+                "--^ title: Child\n\n= Child heading\n--^ id: child-heading\n\nchild body\n--^ id: child-only\n"
+                    .to_string(),
+            ),
+            (
+                PathBuf::from("plans/current/child/deep.maki"),
+                "--^ title: Deep\n\ndeep".to_string(),
+            ),
+            (
+                PathBuf::from("plans/cousin.maki"),
+                "--^ title: Cousin\n\ncousin body\n--^ id: cousin-only\n".to_string(),
+            ),
+            (
+                PathBuf::from("root.maki"),
+                "--^ title: Root\n\n= Root heading\n\nroot body\n--^ id: root-only\n"
+                    .to_string(),
+            ),
+            (
+                PathBuf::from("unrelated.maki"),
+                "unrelated body\n--^ id: unrelated-only\n".to_string(),
+            ),
+        ]);
+        let project = analyze_documents(&documents);
+        let current = Path::new("plans/current.maki");
+
+        let labels = |source: &str| {
+            completion_items(&project, current, source, source.len())
+                .into_iter()
+                .map(|item| item.label)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(labels("[[#current-"), vec!["current-heading"]);
+        assert_eq!(
+            labels("[[@current-"),
+            vec!["current-heading", "current-only"]
+        );
+        assert_eq!(labels("[[/ROOT#root"), vec!["Root heading"]);
+        assert_eq!(labels("[[/root@root-"), vec!["root-only"]);
+        assert_eq!(labels("[[+CHILD#CHILD-"), vec!["child-heading"]);
+        assert_eq!(
+            labels("[[+child@child-"),
+            vec!["child-heading", "child-only"]
+        );
+        assert_eq!(labels("[[/RO"), vec!["/root"]);
+        assert_eq!(labels("[[+c"), vec!["+child", "+child/deep"]);
+        assert!(labels("[[@CURRENT-").is_empty());
+
+        let root_items = completion_items(&project, current, "[[/ro", "[[/ro".len());
+        let Some(CompletionTextEdit::Edit(edit)) = &root_items[0].text_edit else {
+            panic!("root completion should use a text edit");
+        };
+        assert_eq!(
+            edit.range,
+            Range::new(Position::new(0, 2), Position::new(0, 5))
+        );
+        assert_eq!(edit.new_text, "/root");
+
+        let id_source = "[[/root@ro";
+        let id_items = completion_items(&project, current, id_source, id_source.len());
+        let Some(CompletionTextEdit::Edit(edit)) = &id_items[0].text_edit else {
+            panic!("ID completion should use a text edit");
+        };
+        assert_eq!(
+            edit.range,
+            Range::new(Position::new(0, 8), Position::new(0, 10))
+        );
+        assert_eq!(edit.new_text, "root-only");
+
+        let child_items = completion_items(&project, current, "[[+c", "[[+c".len());
+        let Some(CompletionTextEdit::Edit(edit)) = &child_items[0].text_edit else {
+            panic!("child completion should use a text edit");
+        };
+        assert_eq!(
+            edit.range,
+            Range::new(Position::new(0, 2), Position::new(0, 4))
+        );
+        assert_eq!(edit.new_text, "+child");
+
+        let heading_source = "[[/ROOT#root";
+        let heading_items =
+            completion_items(&project, current, heading_source, heading_source.len());
+        let Some(CompletionTextEdit::Edit(edit)) = &heading_items[0].text_edit else {
+            panic!("qualified heading completion should use a text edit");
+        };
+        assert_eq!(
+            edit.range,
+            Range::new(Position::new(0, 8), Position::new(0, 12))
+        );
+        assert_eq!(edit.new_text, "Root heading");
+
+        let child_id_source = "[[+CHILD@child-";
+        let child_id_items =
+            completion_items(&project, current, child_id_source, child_id_source.len());
+        let Some(CompletionTextEdit::Edit(edit)) = &child_id_items[0].text_edit else {
+            panic!("qualified child ID completion should use a text edit");
+        };
+        assert_eq!(
+            edit.range,
+            Range::new(Position::new(0, 9), Position::new(0, 15))
+        );
+        assert_eq!(edit.new_text, "child-heading");
+    }
+
+    #[test]
     fn completion_offers_current_quote_modes() {
         let project = analyze_documents(&BTreeMap::new());
         let source = "--v mode: ";
-        let modes = completion_items(&project, source, source.len())
+        let modes = completion_items(&project, Path::new("index.maki"), source, source.len())
             .into_iter()
             .map(|item| item.label)
             .collect::<Vec<_>>();
@@ -822,6 +1386,141 @@ mod tests {
     }
 
     #[test]
+    fn id_definition_references_and_hover_use_document_local_identity() {
+        let plans = "--^ title: Plans\n\nplans body\n--^ id: local-id\n\n= Stable heading\n--^ id: heading-id\n\n[[@local-id]]\n[[#heading-id]]\n[[@heading-id]]\n";
+        let other = "--^ title: Other\n\nother body\n--^ id: local-id\n\n[[/plans@local-id]]\n[[/plans#heading-id]]\n[[/plans@heading-id]]\n[[@local-id]]\n";
+        let documents = BTreeMap::from([
+            (PathBuf::from("other.maki"), other.to_string()),
+            (PathBuf::from("plans.maki"), plans.to_string()),
+        ]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::new(),
+            documents,
+        };
+        let plans_uri = Url::parse("file:///workspace/plans.maki").unwrap();
+
+        let declaration_position = Position::new(3, 10);
+        let references = server
+            .references(ReferenceParams {
+                text_document_position: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(plans_uri.clone()),
+                    declaration_position,
+                ),
+                context: lsp_types::ReferenceContext {
+                    include_declaration: true,
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .unwrap();
+
+        assert_eq!(references.len(), 3);
+        assert_eq!(
+            references
+                .iter()
+                .filter(|location| location.uri.as_str() == "file:///workspace/plans.maki")
+                .count(),
+            2
+        );
+        assert_eq!(
+            references
+                .iter()
+                .filter(|location| location.uri.as_str() == "file:///workspace/other.maki")
+                .count(),
+            1
+        );
+        assert_eq!(
+            references[0].range,
+            Range::new(Position::new(3, 8), Position::new(3, 16))
+        );
+
+        let heading_references = server
+            .references(ReferenceParams {
+                text_document_position: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(plans_uri.clone()),
+                    Position::new(9, 4),
+                ),
+                context: lsp_types::ReferenceContext {
+                    include_declaration: false,
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .unwrap();
+        assert_eq!(heading_references.len(), 4);
+
+        let definition = server
+            .definition(GotoDefinitionParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(plans_uri.clone()),
+                    Position::new(8, 4),
+                ),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .unwrap();
+        let GotoDefinitionResponse::Scalar(definition) = definition else {
+            panic!("ID definition should be a scalar location");
+        };
+        assert_eq!(definition.uri, plans_uri);
+        assert_eq!(
+            definition.range,
+            Range::new(Position::new(3, 8), Position::new(3, 16))
+        );
+
+        let hover = server
+            .hover(HoverParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(plans_uri),
+                    Position::new(8, 4),
+                ),
+                work_done_progress_params: Default::default(),
+            })
+            .unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("link hover should use markup content");
+        };
+        assert_eq!(markup.value, "Resolves to `/plans@local-id`.");
+    }
+
+    #[test]
+    fn reference_identity_prefers_nested_links_and_matches_the_specific_heading_owner() {
+        let source = "= See [[/other]]\n\n= alpha\n\n= beta\n--^ id: alpha\n";
+        let documents = BTreeMap::from([
+            (PathBuf::from("current.maki"), source.to_string()),
+            (PathBuf::from("other.maki"), "other".to_string()),
+        ]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::new(),
+            documents,
+        };
+        let document = server.analysis.document(Path::new("current.maki")).unwrap();
+
+        assert_eq!(
+            server.reference_identity_at(document, source.find("/other").unwrap() + 1),
+            Some(ReferenceIdentity::Document(PathBuf::from("other.maki")))
+        );
+        assert_eq!(
+            server.reference_identity_at(document, source.find("alpha").unwrap()),
+            Some(ReferenceIdentity::Heading {
+                path: PathBuf::from("current.maki"),
+                anchor: "alpha".to_string(),
+            })
+        );
+        assert_eq!(
+            server.reference_identity_at(document, source.find("beta").unwrap()),
+            Some(ReferenceIdentity::Id {
+                path: PathBuf::from("current.maki"),
+                id: "alpha".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn diagnostics_are_published_only_for_open_documents() {
         let documents = BTreeMap::from([
             (PathBuf::from("open.maki"), "[[missing-open]]".to_string()),
@@ -854,6 +1553,44 @@ mod tests {
             Some(lsp_types::NumberOrString::String(
                 "broken-note-link".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn diagnostics_publish_duplicate_broken_and_ambiguous_id_codes() {
+        let source = "first\n--^ id: same\nsecond\n--^ id: same\n[[@same]] [[@missing]]\n";
+        let documents = BTreeMap::from([(PathBuf::from("open.maki"), source.to_string())]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
+            documents,
+        };
+        let (server_connection, client_connection) = Connection::memory();
+
+        server.publish_diagnostics(&server_connection).unwrap();
+
+        let Message::Notification(notification) = client_connection.receiver.recv().unwrap() else {
+            panic!("expected a diagnostics notification");
+        };
+        let params: PublishDiagnosticsParams = serde_json::from_value(notification.params).unwrap();
+        let codes = params
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| match diagnostic.code.as_ref()? {
+                lsp_types::NumberOrString::String(code) => Some(code.as_str()),
+                lsp_types::NumberOrString::Number(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            codes,
+            vec![
+                "duplicate-id",
+                "duplicate-id",
+                "ambiguous-id-link",
+                "broken-id-link"
+            ]
         );
     }
 
@@ -925,6 +1662,38 @@ mod tests {
         assert_eq!(
             symbols[0].location.range,
             Range::new(Position::new(3, 3), Position::new(3, 10))
+        );
+    }
+
+    #[test]
+    fn workspace_symbol_search_exposes_document_local_ids() {
+        let documents = BTreeMap::from([(
+            PathBuf::from("notes/alpha.maki"),
+            "--^ title: Alpha\n\nschedule\n--^ id: my-schedule\n".to_string(),
+        )]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::new(),
+            documents,
+        };
+        let params = WorkspaceSymbolParams {
+            query: "SCHEDULE".to_string(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let WorkspaceSymbolResponse::Flat(symbols) = server.workspace_symbols(params) else {
+            panic!("workspace symbols should use the flat response form");
+        };
+
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "my-schedule");
+        assert_eq!(symbols[0].kind, SymbolKind::KEY);
+        assert_eq!(symbols[0].container_name.as_deref(), Some("Alpha"));
+        assert_eq!(
+            symbols[0].location.range,
+            Range::new(Position::new(3, 8), Position::new(3, 19))
         );
     }
 }

@@ -63,6 +63,12 @@ body"#,
     assert!(results.iter().any(|entry| {
         entry.kind() == SearchEntryKind::Heading && entry.path() == "/alpha#stable-heading"
     }));
+    assert!(maki.search_entries().iter().any(|entry| {
+        entry.kind() == SearchEntryKind::Id
+            && entry.title() == "stable-heading"
+            && entry.path() == "/alpha#stable-heading"
+            && entry.source_path() == "alpha.maki@stable-heading"
+    }));
 }
 
 #[test]

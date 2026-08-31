@@ -292,6 +292,50 @@ fn project_rendering_can_suffix_browser_title_with_site_title() {
 }
 
 #[test]
+fn document_navigation_renders_after_title_and_before_authored_content() {
+    let parsed = parser::parse("--^ title: Topic\n\nAuthored content");
+    let navigation = DocumentNavigation::new(
+        Some(DocumentNavigationItem::new("Parent & overview", "/parent")),
+        vec![
+            DocumentNavigationItem::new("Child <one>", "/topic/one"),
+            DocumentNavigationItem::new("Child two", "/topic/two"),
+        ],
+    );
+
+    let html = render_document_with_context(
+        &parsed.document,
+        RenderContext::default().with_document_navigation(navigation),
+    );
+
+    let title = html.find("<h1 id=\"Topic\">Topic</h1>").unwrap();
+    let hierarchy = html
+        .find("<nav class=\"maki-document-navigation\" aria-label=\"Document hierarchy\">")
+        .unwrap();
+    let authored = html.find("<p>Authored content</p>").unwrap();
+    assert!(title < hierarchy && hierarchy < authored);
+    assert!(html.contains(
+        "<span class=\"maki-document-navigation-label\">Parent</span><a href=\"/parent\">Parent &amp; overview</a>"
+    ));
+    assert!(html.contains(
+        "<span class=\"maki-document-navigation-label\">Subdocuments</span><ul><li><a href=\"/topic/one\">Child &lt;one&gt;</a></li><li><a href=\"/topic/two\">Child two</a></li></ul>"
+    ));
+}
+
+#[test]
+fn empty_or_unspecified_document_navigation_is_not_rendered() {
+    let parsed = parser::parse("--^ title: Page\n\nbody");
+
+    let standalone = render_document(&parsed.document);
+    let explicitly_empty = render_document_with_context(
+        &parsed.document,
+        RenderContext::default().with_document_navigation(DocumentNavigation::default()),
+    );
+
+    assert!(!standalone.contains("<nav class=\"maki-document-navigation\""));
+    assert!(!explicitly_empty.contains("<nav class=\"maki-document-navigation\""));
+}
+
+#[test]
 fn format_unix_seconds_kst_formats_known_instants() {
     assert_eq!(format_unix_seconds_kst(0), "1970-01-01 09:00 KST");
     assert_eq!(format_unix_seconds_kst(951_782_400), "2000-02-29 09:00 KST");
@@ -343,6 +387,24 @@ fn quote_line_renders_inner_maki_blocks() {
     let expected = "<blockquote><h2 id=\"Quoted\">Quoted</h2><p>Body with <code>code</code></p><ul><li>item</li></ul><blockquote><p>nested</p></blockquote></blockquote>";
 
     assert!(html.contains(expected));
+}
+
+#[test]
+fn reparsed_quote_bodies_do_not_publish_unlocated_explicit_id_anchors() {
+    let parsed = parser::parse("> quoted block\n> --^ id: quote-local");
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<blockquote><p>quoted block</p></blockquote>"));
+    assert!(!html.contains("id=\"quote-local\""));
+}
+
+#[test]
+fn standalone_rendering_maps_current_document_id_links_to_html_fragments() {
+    let parsed = parser::parse("Addressable\n--^ id: local-id\n\n[[@local-id]]");
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("id=\"local-id\""));
+    assert!(html.contains("<a href=\"#local-id\">@local-id</a>"));
 }
 
 #[test]

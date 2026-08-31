@@ -19,6 +19,21 @@ fn note_ref() {
 }
 
 #[test]
+fn reference_note_hrefs_preserve_root_selection_without_accepting_note_link_selectors() {
+    assert_eq!(
+        note_link_target_for_href("/docs/page.maki"),
+        Some("/docs/page".to_string())
+    );
+    assert_eq!(
+        note_link_target_for_href("docs/page.maki"),
+        Some("docs/page".to_string())
+    );
+    assert_eq!(note_link_target_for_href("+child"), None);
+    assert_eq!(note_link_target_for_href("page@id"), None);
+    assert_eq!(note_link_target_for_href("page#heading"), None);
+}
+
+#[test]
 fn resolve_note_link() {
     let maki = Maki::load(repo_path("docs")).unwrap();
     assert_eq!(
@@ -67,6 +82,216 @@ fn resolve_note_link_supports_heading_anchors_and_stable_ids() {
     assert!(html.contains("<h2 id=\"intro\">소개</h2>"));
     assert!(html.contains("href=\"/start#intro\""));
     assert!(html.contains("href=\"/other#詳細\""));
+}
+
+#[test]
+fn resolve_note_link_supports_root_child_heading_and_document_local_id_selectors() {
+    let project = temp_project("nested-document-selectors");
+    write_note_with_content(
+        &project,
+        "plan.maki",
+        r#"--^ title: Plan
+
+Current paragraph
+--^ id: current-id
+
+[[#Current section]] [[@current-id]]
+
+= Current section"#,
+    );
+    write_note_with_content(
+        &project,
+        "plan/coding.maki",
+        r#"--^ title: Coding
+
+= Preparation
+
+- Solve problems
+--^ id: checklist"#,
+    );
+    let maki = Maki::load(&project.root).unwrap();
+    let current = NoteRef::new("plan");
+
+    assert_eq!(
+        maki.resolve_note_link(&current, "/plan/coding#Preparation"),
+        NoteLinkResolution::FoundHeading {
+            note: NoteRef::new("plan/coding"),
+            anchor: "Preparation".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "+coding#Preparation"),
+        NoteLinkResolution::FoundHeading {
+            note: NoteRef::new("plan/coding"),
+            anchor: "Preparation".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "/plan/coding@checklist"),
+        NoteLinkResolution::FoundId {
+            note: NoteRef::new("plan/coding"),
+            id: "checklist".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "+coding@checklist"),
+        NoteLinkResolution::FoundId {
+            note: NoteRef::new("plan/coding"),
+            id: "checklist".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "#Current section"),
+        NoteLinkResolution::FoundHeading {
+            note: current.clone(),
+            anchor: "Current section".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "@current-id"),
+        NoteLinkResolution::FoundId {
+            note: current,
+            id: "current-id".to_string(),
+        }
+    );
+}
+
+#[test]
+fn explicit_root_and_child_selectors_do_not_fall_back_to_project_wide_stems() {
+    let project = temp_project("explicit-document-coordinate");
+    write_note(&project, "plan.maki");
+    write_note(&project, "other/coding.maki");
+    let maki = Maki::load(&project.root).unwrap();
+    let current = NoteRef::new("plan");
+
+    assert_eq!(
+        maki.resolve_note_link(&current, "coding"),
+        NoteLinkResolution::Found(NoteRef::new("other/coding"))
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "/coding"),
+        NoteLinkResolution::Broken
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "+coding"),
+        NoteLinkResolution::Broken
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "+other/../coding"),
+        NoteLinkResolution::Broken
+    );
+}
+
+#[test]
+fn document_local_ids_can_repeat_across_documents_but_are_exact_within_one_document() {
+    let project = temp_project("document-local-ids");
+    write_note_with_content(
+        &project,
+        "alpha.maki",
+        "Alpha\n--^ id: schedule\n\nDuplicate\n--^ id: duplicate\n\nAgain\n--^ id: duplicate",
+    );
+    write_note_with_content(&project, "beta.maki", "Beta\n--^ id: schedule");
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("alpha"), "@schedule"),
+        NoteLinkResolution::FoundId {
+            note: NoteRef::new("alpha"),
+            id: "schedule".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("alpha"), "/beta@schedule"),
+        NoteLinkResolution::FoundId {
+            note: NoteRef::new("beta"),
+            id: "schedule".to_string(),
+        }
+    );
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("alpha"), "@Schedule"),
+        NoteLinkResolution::Broken
+    );
+    assert_eq!(
+        maki.resolve_note_link(&NoteRef::new("alpha"), "@duplicate"),
+        NoteLinkResolution::Ambiguous
+    );
+}
+
+#[test]
+fn heading_and_explicit_id_selectors_are_ambiguous_when_their_html_fragments_collide() {
+    let project = temp_project("fragment-collision");
+    write_note_with_content(
+        &project,
+        "index.maki",
+        "= shared\n\nTarget block\n--^ id: shared\n\n[[#shared]] [[@shared]]",
+    );
+    let maki = Maki::load(&project.root).unwrap();
+    let current = NoteRef::new("index");
+
+    assert_eq!(
+        maki.resolve_note_link(&current, "#shared"),
+        NoteLinkResolution::Ambiguous
+    );
+    assert_eq!(
+        maki.resolve_note_link(&current, "@shared"),
+        NoteLinkResolution::Ambiguous
+    );
+    assert!(
+        maki.diagnostics_without_external_links()
+            .iter()
+            .any(|diagnostic| {
+                matches!(
+                    diagnostic.kind(),
+                    ProjectDiagnosticKind::DuplicateId { id } if id == "shared"
+                )
+            })
+    );
+
+    let html = maki.render_html(Path::new("index.maki")).unwrap();
+    assert_eq!(html.matches("class=\"ambiguous-link\"").count(), 2);
+    assert!(!maki.search_entries().iter().any(|entry| {
+        matches!(entry.kind(), SearchEntryKind::Heading | SearchEntryKind::Id)
+            && entry.path() == "/index#shared"
+    }));
+}
+
+#[test]
+fn rendered_project_pages_expose_block_id_fragments_and_direct_document_relations() {
+    let project = temp_project("document-navigation");
+    write_note_with_content(&project, "plan.maki", "--^ title: Plan\n\nBody");
+    write_note_with_content(
+        &project,
+        "plan/coding.maki",
+        "--^ title: Coding\n\nTarget paragraph\n--^ id: target",
+    );
+    write_note_with_content(
+        &project,
+        "plan/interviews.maki",
+        "--^ title: Interviews\n\nBody",
+    );
+    write_note_with_content(
+        &project,
+        "plan/coding/week-one.maki",
+        "--^ title: Week One\n\nBody",
+    );
+    let maki = Maki::load(&project.root).unwrap();
+
+    let parent_html = maki.render_html(Path::new("plan.maki")).unwrap();
+    assert!(
+        parent_html.contains("<span class=\"maki-document-navigation-label\">Subdocuments</span>")
+    );
+    assert!(parent_html.contains("<a href=\"/plan/coding\">Coding</a>"));
+    assert!(parent_html.contains("<a href=\"/plan/interviews\">Interviews</a>"));
+    assert!(!parent_html.contains("href=\"/plan/coding/week-one\""));
+
+    let child_html = maki.render_html(Path::new("plan/coding.maki")).unwrap();
+    assert!(child_html.contains(
+        "<span class=\"maki-document-navigation-label\">Parent</span><a href=\"/plan\">Plan</a>"
+    ));
+    assert!(child_html.contains("<a href=\"/plan/coding/week-one\">Week One</a>"));
+    assert!(child_html.contains(
+        "<span class=\"maki-block-anchor\" id=\"target\" aria-hidden=\"true\"></span><p>Target paragraph</p>"
+    ));
 }
 
 #[test]

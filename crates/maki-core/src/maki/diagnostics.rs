@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::parser::{self, BlockKind, Inline};
+use crate::{
+    analysis::AnalysisDiagnosticKind,
+    parser::{self, BlockKind, Inline},
+    source::SourceMap,
+};
 
 use super::links::{ExternalLinkCheck, check_external_link, note_link_target_for_href};
 use super::{Maki, NoteLinkResolution, NoteRef, quote_mode_is_raw};
@@ -54,6 +58,36 @@ impl Maki {
                         message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
                     },
                 ));
+            }
+
+            if let Some(document) = self.snapshot.analysis().document(source_path) {
+                let source_map = SourceMap::new(source);
+                for diagnostic in document
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::DuplicateId)
+                {
+                    let id = document
+                        .block_ids
+                        .iter()
+                        .find(|block_id| block_id.value_span == diagnostic.span)
+                        .map(|block_id| block_id.id.clone())
+                        .unwrap_or_else(|| {
+                            diagnostic
+                                .message
+                                .strip_prefix("duplicate id: ")
+                                .unwrap_or(&diagnostic.message)
+                                .to_string()
+                        });
+                    let line = source_map
+                        .position(diagnostic.span.start)
+                        .map(|position| position.line + 1);
+                    diagnostics.push(ProjectDiagnostic::new(
+                        source_path,
+                        line,
+                        ProjectDiagnosticKind::DuplicateId { id },
+                    ));
+                }
             }
 
             let current = note.note_ref();
@@ -129,6 +163,7 @@ impl ProjectDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectDiagnosticKind {
     ParseWarning { message: String },
+    DuplicateId { id: String },
     BrokenLink { target: String },
     AmbiguousLink { target: String },
     BrokenExternalLink { target: String, reason: String },
@@ -139,6 +174,7 @@ impl ProjectDiagnosticKind {
     pub fn label(&self) -> &'static str {
         match self {
             Self::ParseWarning { .. } => "parser",
+            Self::DuplicateId { .. } => "duplicate id",
             Self::BrokenLink { .. } => "broken link",
             Self::AmbiguousLink { .. } => "ambiguous link",
             Self::BrokenExternalLink { .. } => "external link",
@@ -149,6 +185,7 @@ impl ProjectDiagnosticKind {
     fn message(&self) -> String {
         match self {
             Self::ParseWarning { message } => message.clone(),
+            Self::DuplicateId { id } => format!("duplicate id: {id}"),
             Self::BrokenLink { target } => format!("broken link: {target}"),
             Self::AmbiguousLink { target } => format!("ambiguous link: {target}"),
             Self::BrokenExternalLink { target, reason } => {
@@ -163,6 +200,7 @@ impl ProjectDiagnosticKind {
 pub struct ProjectDiagnosticSummary {
     total: usize,
     parse_warnings: usize,
+    duplicate_ids: usize,
     broken_links: usize,
     ambiguous_links: usize,
     broken_external_links: usize,
@@ -179,6 +217,7 @@ impl ProjectDiagnosticSummary {
         for diagnostic in diagnostics {
             match diagnostic.kind() {
                 ProjectDiagnosticKind::ParseWarning { .. } => summary.parse_warnings += 1,
+                ProjectDiagnosticKind::DuplicateId { .. } => summary.duplicate_ids += 1,
                 ProjectDiagnosticKind::BrokenLink { .. } => summary.broken_links += 1,
                 ProjectDiagnosticKind::AmbiguousLink { .. } => summary.ambiguous_links += 1,
                 ProjectDiagnosticKind::BrokenExternalLink { .. } => {
@@ -197,6 +236,10 @@ impl ProjectDiagnosticSummary {
 
     pub fn parse_warnings(&self) -> usize {
         self.parse_warnings
+    }
+
+    pub fn duplicate_ids(&self) -> usize {
+        self.duplicate_ids
     }
 
     pub fn broken_links(&self) -> usize {
@@ -384,7 +427,9 @@ fn push_link_diagnostic(
     target: &str,
 ) {
     match resolution {
-        NoteLinkResolution::Found(_) | NoteLinkResolution::FoundHeading { .. } => {}
+        NoteLinkResolution::Found(_)
+        | NoteLinkResolution::FoundHeading { .. }
+        | NoteLinkResolution::FoundId { .. } => {}
         NoteLinkResolution::Broken => diagnostics.push(ProjectDiagnostic::new(
             source_path,
             None,

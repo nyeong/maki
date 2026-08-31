@@ -54,7 +54,8 @@ test("returns each target path only once after ranking matches", () => {
   assert.equal(matches.filter((entry) => entry.path === "/notes/JLPT").length, 1);
 });
 
-test("prefixes heading result titles without changing other titles", () => {
+test("prefixes addressable result titles without changing other titles", () => {
   assert.equal(displayTitle({ kind: "heading", title: "JLPT N2" }), "#JLPT N2");
+  assert.equal(displayTitle({ kind: "id", title: "week-1" }), "@week-1");
   assert.equal(displayTitle({ kind: "note", title: "JLPT" }), "JLPT");
 });

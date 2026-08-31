@@ -1,4 +1,5 @@
 --^ title: Architecture
+--^ updated: [2026-08-31]
 
 = 코드 구조
 
@@ -84,8 +85,25 @@ crate 경계는 protocol·IO와 Maki 의미를 분리한다.
 = 분석
 
 기존 parser AST는 HTML renderer의 compatibility surface로 유지한다.
-`maki-core::analysis`는 AST가 빌린 원문 slice와 `SourceMap`을 사용해 block, heading, note link, property, date occurrence의 byte span을 계산한다.
-`analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 note/heading link를 resolve하고 semantic diagnostic을 만든다.
+`maki-core::analysis`는 AST가 빌린 원문 slice와 `SourceMap`을 사용해 block, heading, block ID, note link, property, date occurrence의 byte span을 계산한다.
+`analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 document/heading/explicit-ID link를 resolve하고 semantic diagnostic을 만든다.
+
+Internal link target은 renderer나 protocol adapter마다 제각각 문자열을 나누지 않는다.
+Core의 공통 target parser가 `/`·`+` document selector와 `#`·`@` internal selector를 구조화하고, runtime과 sans-IO analysis의 index adapter가 같은 selection contract로 target을 결정한다.
+Explicit ID index는 `(DocumentRef, LocalId)`를 key로 사용한다.
+Runtime rendering·diagnostics와 LSP는 각 adapter의 resolution result를 사용하고, search는 같은 document-qualified ID destination을 index한다.
 
 `maki-lsp`는 workspace의 source와 열린 editor buffer를 snapshot으로 구성한 뒤 이 analysis API를 호출한다.
 현재는 snapshot 전체를 다시 분석하며 incremental index는 아직 없다.
+
+List item child block은 원본 Document source 좌표를 유지하므로 top-level block과 같은 located analysis 대상이다.
+Quote와 quote container의 Maki body는 별도 source를 만들어 다시 파싱하므로 그 안의 occurrence를 원본 Document 위치 기반 기능에 합치지 않는다.
+
+= 표현
+
+HTML renderer는 resolved target identity를 browser URL로 바꾼다.
+Source의 `@id`는 선택한 Document URL의 `#id` fragment가 되고 `#heading`은 Heading의 effective anchor fragment가 된다.
+
+Document canonical path에서 parent와 direct child 관계를 계산한다.
+Project-aware HTML은 본문 앞의 document relation navigation에서 접근·공개 가능한 parent link와 direct child link를 노출한다.
+표현 계층은 이 관계를 다른 위치나 형태로 표시할 수 있지만 publish/access policy를 우회해서는 안 된다.

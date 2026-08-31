@@ -3,8 +3,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::{
-    analysis::{self, ProjectAnalysis, SourceSnapshot},
-    html::{self, AssetMode, NoteInfo, RenderContext},
+    analysis::{
+        self, AnalysisBlockKind, BlockIdOccurrence, HeadingOccurrence, ProjectAnalysis,
+        SourceSnapshot,
+    },
+    html::{self, AssetMode, DocumentNavigation, DocumentNavigationItem, NoteInfo, RenderContext},
+    link_target::{InnerSelector, NoteLinkTarget},
     parser,
 };
 
@@ -16,7 +20,6 @@ use super::{
     files::{get_relative_path, list_maki_files},
     links::{
         ExternalLinkRef, NoteIndex, NoteLinkResolution, collect_external_links, normalize_key,
-        normalize_note_link_target,
     },
     note::{
         Note, NoteMetadataEntry, NoteRef, RecentEntry, SearchEntry, collect_recent_entries,
@@ -125,49 +128,17 @@ impl Maki {
     }
 
     pub fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
-        let Some((note_target, heading_anchor)) = target.split_once('#') else {
-            return self.resolve_note_target(current, target);
-        };
-        if heading_anchor.is_empty() {
-            return NoteLinkResolution::Broken;
-        }
-
-        let note_resolution = if note_target.is_empty() {
-            NoteLinkResolution::Found(current.clone())
-        } else {
-            self.resolve_note_target(current, note_target)
-        };
+        let target = NoteLinkTarget::parse(target);
+        let note_resolution = self.index.resolve_document(current, target.document);
         let NoteLinkResolution::Found(note_ref) = note_resolution else {
             return note_resolution;
         };
 
-        self.resolve_heading_target(note_ref, heading_anchor)
-    }
-
-    fn resolve_note_target(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
-        let target = normalize_note_link_target(target);
-        let target = target.as_str();
-
-        if let Some(note_ref) = self.index.exact_path(Path::new(target)) {
-            return NoteLinkResolution::Found(note_ref);
+        match target.inner {
+            None => NoteLinkResolution::Found(note_ref),
+            Some(InnerSelector::Heading(heading)) => self.resolve_heading_target(note_ref, heading),
+            Some(InnerSelector::Id(id)) => self.resolve_id_target(note_ref, id),
         }
-
-        if target.contains('/')
-            && let Some(resolution) = self.index.resolve_normalized_path(Path::new(target))
-        {
-            return resolution;
-        }
-
-        if !target.contains('/') {
-            if let Some(resolution) = self.index.resolve_sibling_stem(current, target) {
-                return resolution;
-            }
-            if let Some(resolution) = self.index.resolve_project_stem(target) {
-                return resolution;
-            }
-        }
-
-        NoteLinkResolution::Broken
     }
 
     fn resolve_heading_target(
@@ -181,27 +152,66 @@ impl Maki {
         let Some(document) = self.snapshot.analysis().document(note.source_path()) else {
             return NoteLinkResolution::Broken;
         };
-        let headings = document
-            .headings
-            .iter()
-            .map(|heading| heading.anchor.as_str());
+        let headings = document.headings.iter();
         let exact = headings
             .clone()
-            .filter(|anchor| *anchor == heading_anchor)
+            .filter(|heading| heading.anchor == heading_anchor)
             .collect::<Vec<_>>();
         let matches = if exact.is_empty() {
             let normalized = normalize_key(heading_anchor);
             headings
-                .filter(|anchor| normalize_key(anchor) == normalized)
+                .filter(|heading| normalize_key(&heading.anchor) == normalized)
                 .collect::<Vec<_>>()
         } else {
             exact
         };
 
         match matches.as_slice() {
-            [anchor] => NoteLinkResolution::FoundHeading {
+            [heading]
+                if document
+                    .block_ids
+                    .iter()
+                    .any(|block_id| block_id_conflicts_with_heading(block_id, heading)) =>
+            {
+                NoteLinkResolution::Ambiguous
+            }
+            [heading] => NoteLinkResolution::FoundHeading {
                 note: note_ref,
-                anchor: (*anchor).to_string(),
+                anchor: heading.anchor.clone(),
+            },
+            [] => NoteLinkResolution::Broken,
+            _ => NoteLinkResolution::Ambiguous,
+        }
+    }
+
+    fn resolve_id_target(&self, note_ref: NoteRef, id: &str) -> NoteLinkResolution {
+        if id.is_empty() {
+            return NoteLinkResolution::Broken;
+        }
+        let Some(note) = self.note(&note_ref) else {
+            return NoteLinkResolution::Broken;
+        };
+        let Some(document) = self.snapshot.analysis().document(note.source_path()) else {
+            return NoteLinkResolution::Broken;
+        };
+        let matches = document
+            .block_ids
+            .iter()
+            .filter(|block_id| block_id.id == id)
+            .collect::<Vec<_>>();
+
+        match matches.as_slice() {
+            [block_id]
+                if document
+                    .headings
+                    .iter()
+                    .any(|heading| block_id_conflicts_with_heading(block_id, heading)) =>
+            {
+                NoteLinkResolution::Ambiguous
+            }
+            [block_id] => NoteLinkResolution::FoundId {
+                note: note_ref,
+                id: block_id.id.clone(),
             },
             [] => NoteLinkResolution::Broken,
             _ => NoteLinkResolution::Ambiguous,
@@ -471,6 +481,7 @@ impl Maki {
                 title: snapshot_note_title(&self.snapshot, note),
             })
         };
+        let document_navigation = self.document_navigation(&current);
 
         Ok(html::render_document_with_context(
             &parsed.document,
@@ -478,7 +489,33 @@ impl Maki {
                 .with_asset_mode(asset_mode)
                 .with_date_source_path(path)
                 .with_site_title(site_title)
-                .with_site_header(site_header),
+                .with_site_header(site_header)
+                .with_document_navigation(document_navigation),
+        ))
+    }
+
+    fn document_navigation(&self, current: &NoteRef) -> DocumentNavigation {
+        let (parent, children) = match self.config.publish_policy() {
+            PublishPolicy::PublishAll => (
+                self.index
+                    .direct_parent(current)
+                    .and_then(|parent| self.document_navigation_item(&parent)),
+                self.index
+                    .direct_children(current)
+                    .iter()
+                    .filter_map(|child| self.document_navigation_item(child))
+                    .collect(),
+            ),
+        };
+
+        DocumentNavigation::new(parent, children)
+    }
+
+    fn document_navigation_item(&self, note_ref: &NoteRef) -> Option<DocumentNavigationItem> {
+        let note = self.note(note_ref)?;
+        Some(DocumentNavigationItem::new(
+            snapshot_note_title(&self.snapshot, note),
+            note_ref.web_path(),
         ))
     }
 
@@ -554,7 +591,12 @@ fn collect_search_entries(
         let Some(document) = analysis.document(note.source_path()) else {
             continue;
         };
-        for heading in &document.headings {
+        for heading in document.headings.iter().filter(|heading| {
+            !document
+                .block_ids
+                .iter()
+                .any(|block_id| block_id_conflicts_with_heading(block_id, heading))
+        }) {
             entries.push(SearchEntry::new(
                 SearchEntryKind::Heading,
                 heading.title.clone(),
@@ -562,7 +604,35 @@ fn collect_search_entries(
                 format!("{source_path}#{}", heading.title),
             ));
         }
+        for block_id in document.block_ids.iter().filter(|block_id| {
+            document
+                .block_ids
+                .iter()
+                .filter(|candidate| candidate.id == block_id.id)
+                .count()
+                == 1
+                && !document
+                    .headings
+                    .iter()
+                    .any(|heading| block_id_conflicts_with_heading(block_id, heading))
+        }) {
+            entries.push(SearchEntry::new(
+                SearchEntryKind::Id,
+                block_id.id.clone(),
+                format!("{}#{}", note.note_ref().web_path(), block_id.id),
+                format!("{source_path}@{}", block_id.id),
+            ));
+        }
     }
 
     entries
+}
+
+fn block_id_conflicts_with_heading(
+    block_id: &BlockIdOccurrence,
+    heading: &HeadingOccurrence,
+) -> bool {
+    block_id.id == heading.anchor
+        && !(block_id.owner_kind == AnalysisBlockKind::Heading
+            && block_id.owner_span == heading.span)
 }

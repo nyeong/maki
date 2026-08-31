@@ -82,7 +82,30 @@ fn maki_build_reports_project_diagnostic_summary_to_stderr() {
     let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(stdout.contains("<title>Home</title>"));
-    assert!(stderr.contains("diagnostics: 2 issue(s): 2 broken link(s)"));
+    assert!(stderr.contains("diagnostics: 2 issue(s): 0 duplicate id(s), 2 broken link(s)"));
     assert!(stderr.contains("warning: home.maki: broken link: missing"));
     assert!(stderr.contains("warning: home.maki: broken link: ghost"));
+}
+
+#[test]
+fn maki_build_reports_duplicate_ids_in_project_diagnostic_summary() {
+    let project = temp_project("build-duplicate-id-diagnostics");
+    fs::write(project.root.join("maki.toml"), "[project]\n").unwrap();
+    fs::write(
+        project.root.join("home.maki"),
+        "First\n--^ id: repeated\n\nSecond\n--^ id: repeated\n",
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .arg("build")
+        .arg(project.root.join("home.maki"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("diagnostics: 2 issue(s): 2 duplicate id(s), 0 broken link(s)"));
+    assert!(stderr.contains("warning: home.maki:2: duplicate id: repeated"));
+    assert!(stderr.contains("warning: home.maki:5: duplicate id: repeated"));
 }

@@ -6,6 +6,56 @@ pub struct NoteInfo {
     pub title: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentNavigationItem {
+    title: String,
+    path: String,
+}
+
+impl DocumentNavigationItem {
+    pub fn new(title: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            path: path.into(),
+        }
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocumentNavigation {
+    parent: Option<DocumentNavigationItem>,
+    children: Vec<DocumentNavigationItem>,
+}
+
+impl DocumentNavigation {
+    pub fn new(
+        parent: Option<DocumentNavigationItem>,
+        children: Vec<DocumentNavigationItem>,
+    ) -> Self {
+        Self { parent, children }
+    }
+
+    pub fn parent(&self) -> Option<&DocumentNavigationItem> {
+        self.parent.as_ref()
+    }
+
+    pub fn children(&self) -> &[DocumentNavigationItem] {
+        &self.children
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.parent.is_none() && self.children.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AssetMode {
     #[default]
@@ -21,6 +71,7 @@ pub struct RenderContext<'a> {
     pub(in crate::html) date_source_path: Option<&'a Path>,
     pub(in crate::html) site_title: Option<&'a str>,
     pub(in crate::html) site_header: bool,
+    pub(in crate::html) document_navigation: Option<DocumentNavigation>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -35,6 +86,7 @@ impl<'a> RenderContext<'a> {
             date_source_path: None,
             site_title: None,
             site_header: false,
+            document_navigation: None,
         }
     }
 
@@ -60,6 +112,11 @@ impl<'a> RenderContext<'a> {
 
     pub fn with_site_header(mut self, enabled: bool) -> Self {
         self.site_header = enabled;
+        self
+    }
+
+    pub fn with_document_navigation(mut self, navigation: DocumentNavigation) -> Self {
+        self.document_navigation = Some(navigation);
         self
     }
 }

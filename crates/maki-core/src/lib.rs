@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod html;
+pub mod link_target;
 mod maki;
 pub mod parser;
 pub mod source;

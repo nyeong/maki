@@ -33,6 +33,7 @@ pub enum SearchEntryKind {
     Note,
     File,
     Heading,
+    Id,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +96,7 @@ impl SearchEntryKind {
             Self::Note => "note",
             Self::File => "file",
             Self::Heading => "heading",
+            Self::Id => "id",
         }
     }
 }

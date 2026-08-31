@@ -1,4 +1,5 @@
 --^ title: Use Cases
+--^ updated: [2026-08-31]
 
 Maki는 plain text source, project 단위 link resolution, metadata와 HTML server를 함께 사용하는 개인 문서 도구다.
 
@@ -16,6 +17,31 @@ Note Link는 project 안의 문서를 extension 없는 경로로 연결한다.
 
 `maki serve`는 note와 heading link를 resolve하고, 깨졌거나 모호한 link를 `/@/diagnostics`와 LSP diagnostic으로 표시한다.
 Title, heading과 file name은 web search와 LSP workspace symbol에서 찾을 수 있다.
+
+== 중첩 문서와 block ID
+
+`제2차 미래 먹거리 계획.maki`의 child document를 `제2차 미래 먹거리 계획/코딩 테스트.maki`로 두면 parent에서는 `+`로 child를 가리킬 수 있다.
+
+--v lang: maki
+: = 준비 항목
+:
+: - [[+코딩 테스트]]
+
+Child document는 `/`로 parent를 가리키고, 길어진 목록에는 document-local explicit ID를 붙일 수 있다.
+
+--v lang: maki
+: [[/제2차 미래 먹거리 계획]]으로 돌아가기
+:
+: = 첫 주
+:
+: - 문제 유형 정리
+: - 모의 테스트
+: --^ id: week-1
+:
+: [[@week-1]]은 같은 Document의 목록을 가리킨다.
+
+다른 Document에서는 `[[/제2차 미래 먹거리 계획/코딩 테스트@week-1]]`처럼 Document를 함께 적는다.
+HTML note page도 parent와 direct child 사이의 navigation을 본문 앞에 표시한다.
 
 = Metadata가 있는 문서
 

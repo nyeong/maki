@@ -223,7 +223,7 @@ fn test_search_index_returns_project_entries() {
 }
 
 #[test]
-fn test_search_index_includes_files_and_headings() {
+fn test_search_index_and_page_include_files_headings_and_ids() {
     let root = std::env::temp_dir().join(format!("maki-search-entries-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
@@ -233,7 +233,8 @@ fn test_search_index_includes_files_and_headings() {
 
 = Overview
 
-body"#,
+body
+--^ id: overview-body"#,
     )
     .unwrap();
 
@@ -241,12 +242,21 @@ body"#,
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/.maki/search-index.json")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
+    let page =
+        handle_request(&state, &http::Request::get("/.maki/search?q=overview-body")).unwrap();
+    let page_body = String::from_utf8(page.body().to_vec()).unwrap();
     fs::remove_dir_all(root).unwrap();
 
     assert!(body.contains("\"kind\":\"note\",\"title\":\"Alpha Note\""));
     assert!(body.contains("\"kind\":\"file\",\"title\":\"alpha.maki\""));
     assert!(body.contains("\"kind\":\"heading\",\"title\":\"Overview\""));
     assert!(body.contains("\"path\":\"/alpha#Overview\""));
+    assert!(body.contains("\"kind\":\"id\",\"title\":\"overview-body\""));
+    assert!(body.contains("\"path\":\"/alpha#overview-body\""));
+    assert!(body.contains("\"source_path\":\"alpha.maki@overview-body\""));
+    assert!(page_body.contains(
+        "<a href=\"/alpha#overview-body\">@overview-body</a><span>id: alpha.maki@overview-body</span>"
+    ));
 }
 
 #[test]
@@ -684,10 +694,58 @@ See [[other#Target]] on [2026-08-25]."#,
     assert!(body.contains("\"target\":\"other#Target\""));
     assert!(body.contains("\"target_span\":"));
     assert!(body.contains("\"resolution\":{\"status\":\"found\""));
+    assert!(body.contains("\"kind\":\"heading\",\"fragment\":\"Target\""));
     assert!(body.contains("\"dates\":["));
     assert!(body.contains("\"kind\":\"scheduled\""));
     assert!(body.contains("\"property_key\":\"scheduled\""));
     assert!(body.contains("\"kind\":\"reference\""));
+}
+
+#[test]
+fn test_project_index_json_exports_block_ids_id_resolution_and_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "maki-project-index-block-ids-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        r#"= Intro
+--^ id: intro-id
+
+unique body
+--^ id: unique-id
+first duplicate
+--^ id: repeated
+second duplicate
+--^ id: repeated
+
+[[@unique-id]] [[@missing-id]] [[@repeated]]"#,
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let response =
+        handle_request(&state, &http::Request::get("/.maki/project-index.json")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert!(body.contains("\"block_ids\":[{\"id\":\"intro-id\",\"owner_kind\":\"heading\""));
+    assert!(body.contains("\"id\":\"unique-id\",\"owner_kind\":\"paragraph\""));
+    assert!(body.contains("\"owner_span\":"));
+    assert!(body.contains("\"declaration_span\":"));
+    assert!(body.contains("\"value_span\":"));
+    assert!(body.contains("\"target\":\"@unique-id\""));
+    assert!(body.contains("\"kind\":\"id\",\"fragment\":\"unique-id\""));
+    assert!(body.contains("\"target\":\"@missing-id\""));
+    assert!(body.contains("\"status\":\"broken_id\""));
+    assert!(body.contains("\"target\":\"@repeated\""));
+    assert!(body.contains("\"status\":\"ambiguous_id\""));
+    assert_eq!(body.matches("\"kind\":\"duplicate_id\"").count(), 2);
+    assert!(body.contains("\"message\":\"duplicate id: repeated\""));
 }
 
 #[test]
@@ -1154,6 +1212,32 @@ fn test_diagnostics_page_lists_project_issues() {
     assert!(body.contains("broken link: missing"));
     assert!(body.contains("broken link: ghost"));
     assert!(!body.contains("maki-diagnostics-table"));
+}
+
+#[test]
+fn test_diagnostics_page_lists_duplicate_ids_with_declaration_lines() {
+    let root = std::env::temp_dir().join(format!(
+        "maki-diagnostics-duplicate-ids-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("home.maki"),
+        "first\n--^ id: repeated\nsecond\n--^ id: repeated\n",
+    )
+    .unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let response = handle_request(&state, &http::Request::get("/@/diagnostics")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert!(body.contains("2 issue(s) across 1 note(s): 2 duplicate id(s)"));
+    assert!(body.contains("duplicate id: line 2: repeated"));
+    assert!(body.contains("duplicate id: line 4: repeated"));
 }
 
 #[test]

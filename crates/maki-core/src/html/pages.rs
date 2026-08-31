@@ -8,7 +8,7 @@ use crate::{
     maki::{
         self, DateBacklink, DateIndex, DateMarker, DateOccurrence, DateOrigin, DatePeriod,
         DateRelation, ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary,
-        RecentEntry, SearchEntry, SitemapEntry,
+        RecentEntry, SearchEntry, SearchEntryKind, SitemapEntry,
     },
     parser::{Date, DateMonth, DateStampTarget, IsoWeek},
 };
@@ -62,6 +62,11 @@ pub fn render_search_page(
             renderer.push_raw("<li><a href=\"");
             renderer.escape_html_attr_into(entry.path());
             renderer.push_raw("\">");
+            if entry.kind() == SearchEntryKind::Heading {
+                renderer.push_raw("#");
+            } else if entry.kind() == SearchEntryKind::Id {
+                renderer.push_raw("@");
+            }
             renderer.escape_html_into(entry.title());
             renderer.push_raw("</a><span>");
             renderer.escape_html_into(entry.kind().as_str());
@@ -947,8 +952,9 @@ pub fn render_diagnostics_page(
 fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {
     let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
     let summary = format!(
-        "{} issue(s) across {total_notes} note(s): {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s).",
+        "{} issue(s) across {total_notes} note(s): {} duplicate id(s), {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s).",
         summary.total(),
+        summary.duplicate_ids(),
         summary.broken_links(),
         summary.ambiguous_links(),
         summary.broken_external_links(),
@@ -1006,6 +1012,9 @@ fn push_diagnostic_item(source: &mut String, diagnostic: &ProjectDiagnostic) {
     match diagnostic.kind() {
         ProjectDiagnosticKind::ParseWarning { message } => {
             push_maki_single_line(source, message);
+        }
+        ProjectDiagnosticKind::DuplicateId { id } => {
+            push_maki_single_line(source, id);
         }
         ProjectDiagnosticKind::BrokenLink { target } => {
             push_maki_single_line(source, target);
