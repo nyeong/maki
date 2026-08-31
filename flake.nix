@@ -48,9 +48,16 @@
             version = "0.1.0";
             src = source;
             cargoLock.lockFile = ./Cargo.lock;
+            MAKI_SOURCE_REVISION = self.rev or "";
+
+            postInstall = ''
+              install -Dm644 LICENSE $out/share/licenses/maki/LICENSE
+            '';
 
             meta = {
               description = "File based personal wiki runtime";
+              homepage = "https://git.eska.nyeong.me/nyeong/maki";
+              license = pkgs.lib.licenses.mit;
               mainProgram = "maki";
               platforms = systems;
             };
@@ -149,10 +156,20 @@
           maki = self.packages.${system}.maki;
 
           package-smoke =
-            pkgs.runCommand "maki-package-smoke" { nativeBuildInputs = [ self.packages.${system}.maki ]; }
+            pkgs.runCommand "maki-package-smoke"
+              {
+                nativeBuildInputs = [
+                  self.packages.${system}.maki
+                  pkgs.jq
+                ];
+              }
               ''
                 maki build ${./docs/index.maki} > page.html
                 grep -q '<!doctype html>' page.html
+                test "$(maki --version --json | jq -r '.source_revision // ""')" = ${
+                  lib.escapeShellArg (self.rev or "")
+                }
+                cmp ${./LICENSE} ${self.packages.${system}.maki}/share/licenses/maki/LICENSE
                 touch $out
               '';
 
@@ -164,6 +181,24 @@
               ''
                 bash ${source}/scripts/ci/test-check-stack.sh
                 PYTHONDONTWRITEBYTECODE=1 python3 ${source}/scripts/ci/test_check_stack_metadata.py
+                touch $out
+              '';
+
+          release-metadata-contract =
+            assert self.packages.${system}.maki.version == "0.1.0";
+            assert self.packages.${system}.maki.meta.homepage == "https://git.eska.nyeong.me/nyeong/maki";
+            assert self.packages.${system}.maki.meta.license.spdxId == "MIT";
+            assert self.packages.${system}.maki.MAKI_SOURCE_REVISION == (self.rev or "");
+            pkgs.runCommand "maki-release-metadata-contract"
+              {
+                nativeBuildInputs = [
+                  pkgs.git
+                  pkgs.python3
+                ];
+              }
+              ''
+                PYTHONDONTWRITEBYTECODE=1 python3 ${source}/scripts/ci/check-release-metadata.py ${source}
+                PYTHONDONTWRITEBYTECODE=1 python3 ${source}/scripts/ci/test_check_release_metadata.py
                 touch $out
               '';
 

@@ -1,9 +1,13 @@
 [package]
 name = "maki"
-version = "0.1.0"
-authors = ["An Nyeong <me@annyeong.me>"]
-edition = "2024"
-description = "File based markdown wiki"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "Line-first markup language and personal wiki runtime"
 readme = "README.md"
 
 [workspace]
@@ -14,8 +18,17 @@ members = [
     "crates/maki-serve",
 ]
 
+[workspace.package]
+version = "0.1.0"
+authors = ["An Nyeong <me@annyeong.me>"]
+edition = "2024"
+license = "MIT"
+repository = "https://git.eska.nyeong.me/nyeong/maki"
+homepage = "https://git.eska.nyeong.me/nyeong/maki"
+publish = false
+
 [dependencies]
-maki-core = { path = "crates/maki-core" }
-maki-lsp = { path = "crates/maki-lsp" }
-maki-serve = { path = "crates/maki-serve" }
+maki-core = { version = "0.1.0", path = "crates/maki-core" }
+maki-lsp = { version = "0.1.0", path = "crates/maki-lsp" }
+maki-serve = { version = "0.1.0", path = "crates/maki-serve" }
 serde_json = "1.0"

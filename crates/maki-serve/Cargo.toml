@@ -1,9 +1,15 @@
 [package]
 name = "maki-serve"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "Web serving and Git-backed project support for Maki"
 
 [dependencies]
-maki-core = { path = "../maki-core" }
-maki-http = { path = "../maki-http" }
+maki-core = { version = "0.1.0", path = "../maki-core" }
+maki-http = { version = "0.1.0", path = "../maki-http" }
 percent-encoding = "2.3.2"

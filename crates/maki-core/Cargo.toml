@@ -1,7 +1,13 @@
 [package]
 name = "maki-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "Core parsing and project analysis for Maki"
 
 [dependencies]
 ureq = { version = "2.12.1", default-features = false, features = ["tls"] }

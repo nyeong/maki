@@ -30,6 +30,6 @@ Maki는 line-first lightweight markup language이자 `.maki` 프로젝트를 HTM
 이 문서 모음은 현재 배포된 동작과 사용법만 설명한다.
 
 [Forgejo Issues]: https://git.eska.nyeong.me/nyeong/maki/issues
-[nyeong/maki]: https://github.com/nyeong/maki
+[nyeong/maki]: https://git.eska.nyeong.me/nyeong/maki
 [nyeong/maki-zed]: https://git.eska.nyeong.me/nyeong/maki-zed
 [nyeong/tree-sitter-maki]: https://git.eska.nyeong.me/nyeong/tree-sitter-maki

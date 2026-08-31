@@ -1,4 +1,10 @@
 [package]
 name = "maki-http"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "HTTP transport primitives for Maki"
