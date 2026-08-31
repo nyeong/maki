@@ -41,7 +41,15 @@ Child document는 `/`로 parent를 가리키고, 길어진 목록에는 document
 : [[@week-1]]은 같은 Document의 목록을 가리킨다.
 
 다른 Document에서는 `[[/제2차 미래 먹거리 계획/코딩 테스트@week-1]]`처럼 Document를 함께 적는다.
-HTML note page도 title 바로 아래의 ancestor breadcrumb와 본문 앞의 direct-child navigation으로 관계를 표시한다.
+HTML note page는 title 바로 아래의 `Parent documents` navigation으로 ancestor link의 역할을 밝힌다.
+Direct child가 있는 parent note에는 긴 목록 대신 `Subdocuments` link 하나가 생기며 이 link는 trailing-slash index로 이동한다.
+
+: /제2차 미래 먹거리 계획
+: /제2차 미래 먹거리 계획/
+
+첫 route는 note 본문이고 두 번째 route는 direct subdocument 목록이다.
+두 번째 route의 `Parent document` navigation은 parent title을 보여주며 첫 route로 돌아간다.
+두 번째 route는 child가 하나도 없을 때도 `No subdocuments.`라는 빈 상태를 표시한다.
 
 = Metadata가 있는 문서
 

@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    context::{AssetMode, RenderContext},
+    context::{AssetMode, DocumentNavigationItem, RenderContext},
     date_markup::date_marker_kind_label,
     render_maki_source_with_context,
     renderer::Renderer,
@@ -26,6 +26,43 @@ const DATES_INDEX_TEMPLATE: &str = include_str!("../../../../templates/dates-ind
 const DIAGNOSTICS_TEMPLATE: &str = include_str!("../../../../templates/diagnostics.maki");
 const SITEMAP_TEMPLATE: &str = include_str!("../../../../templates/sitemap.maki");
 const KST_OFFSET_SECONDS: u64 = 9 * 60 * 60;
+
+pub fn render_subdocuments_page(
+    parent: &DocumentNavigationItem,
+    children: &[DocumentNavigationItem],
+    asset_mode: AssetMode,
+    site_title: Option<&str>,
+    site_header: bool,
+) -> String {
+    let title = format!("Subdocuments of {}", parent.title());
+    let mut renderer = Renderer::new_with_context(
+        RenderContext::default()
+            .with_asset_mode(asset_mode)
+            .with_site_title(site_title)
+            .with_site_header(site_header),
+    );
+
+    renderer.begin_project_page(&title);
+    renderer.push_raw("<nav class=\"maki-subdocuments-parent\" aria-label=\"Parent document\">");
+    renderer.push_raw("<span class=\"maki-document-navigation-label\">Parent document</span>");
+    renderer.render_anchor(parent.path(), parent.title());
+    renderer.push_raw("</nav><main class=\"maki-subdocuments-page\">");
+
+    if children.is_empty() {
+        renderer.push_raw("<p class=\"maki-subdocuments-empty\">No subdocuments.</p>");
+    } else {
+        renderer.push_raw("<ul class=\"maki-subdocuments-list\">");
+        for child in children {
+            renderer.push_raw("<li>");
+            renderer.render_anchor(child.path(), child.title());
+            renderer.push_raw("</li>");
+        }
+        renderer.push_raw("</ul>");
+    }
+
+    renderer.push_raw("</main></body></html>");
+    renderer.into_html()
+}
 
 pub fn render_search_page(
     query: &str,

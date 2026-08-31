@@ -710,6 +710,17 @@ fn render_cacheable_response(
                 .set_header("Content-Type", "text/html; charset=utf-8")
                 .set_body(html))
         }
+        ResponseCacheKey::SubdocumentsPage(path) => {
+            let html = maki.render_subdocuments_html_with_site_header(
+                path,
+                AssetMode::External,
+                site_title,
+                site_header,
+            )?;
+            Ok(http::Response::new(http::StatusCode::Ok)
+                .set_header("Content-Type", "text/html; charset=utf-8")
+                .set_body(html))
+        }
     };
 
     state
@@ -828,6 +839,12 @@ fn handle_project_request(
         Ok(MakiRoute::NotePage(path)) => {
             cacheable_response(state, project, ResponseCacheKey::NotePage(path), true)
         }
+        Ok(MakiRoute::SubdocumentsPage(path)) => cacheable_response(
+            state,
+            project,
+            ResponseCacheKey::SubdocumentsPage(path),
+            true,
+        ),
         Ok(MakiRoute::NoteSource(path)) => Ok(http::Response::new(http::StatusCode::Ok)
             .set_header("Content-Type", "text/plain; charset=utf-8")
             .set_body(maki.get_raw_content(&path)?)),
@@ -884,6 +901,7 @@ pub(super) fn route_label_for_request(state: &AppState, request: &http::Request)
     match project.maki.resolve_route(&target.path) {
         Ok(MakiRoute::Home) => "home",
         Ok(MakiRoute::NotePage(_)) => "note",
+        Ok(MakiRoute::SubdocumentsPage(_)) => "subdocuments",
         Ok(MakiRoute::NoteSource(_)) => "source",
         Err(_) => "not_found",
     }

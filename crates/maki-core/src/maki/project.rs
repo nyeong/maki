@@ -95,6 +95,7 @@ fn snapshot_note_title(snapshot: &ProjectSnapshot, note: &Note) -> String {
 pub enum MakiRoute {
     Home,
     NotePage(PathBuf),
+    SubdocumentsPage(PathBuf),
     NoteSource(PathBuf),
 }
 
@@ -494,19 +495,70 @@ impl Maki {
         ))
     }
 
-    fn document_navigation(&self, current: &NoteRef) -> DocumentNavigation {
-        let (ancestors, children) = match self.config.publish_policy() {
-            PublishPolicy::PublishAll => (
-                self.document_navigation_ancestors(current),
-                self.index
-                    .direct_children(current)
-                    .iter()
-                    .filter_map(|child| self.document_navigation_item(child))
-                    .collect(),
-            ),
-        };
+    pub fn render_subdocuments_html(&self, path: &Path) -> Result<String, Error> {
+        self.render_subdocuments_html_with_asset_mode(path, AssetMode::Inline)
+    }
 
-        DocumentNavigation::from_ancestors(ancestors, children)
+    pub fn render_subdocuments_html_with_asset_mode(
+        &self,
+        path: &Path,
+        asset_mode: AssetMode,
+    ) -> Result<String, Error> {
+        self.render_subdocuments_html_with_site_header(path, asset_mode, None, false)
+    }
+
+    pub fn render_subdocuments_html_with_site_header(
+        &self,
+        path: &Path,
+        asset_mode: AssetMode,
+        site_title: Option<&str>,
+        site_header: bool,
+    ) -> Result<String, Error> {
+        let current = self
+            .note_by_source_path(path)
+            .ok_or_else(|| Error::NoteNotFound(self.root.join(path)))?
+            .note_ref();
+        let parent = self
+            .document_navigation_item(&current)
+            .ok_or_else(|| Error::NoteNotFound(self.root.join(path)))?;
+        let children = self.published_document_navigation_children(&current);
+
+        Ok(html::render_subdocuments_page(
+            &parent,
+            &children,
+            asset_mode,
+            site_title,
+            site_header,
+        ))
+    }
+
+    fn document_navigation(&self, current: &NoteRef) -> DocumentNavigation {
+        let ancestors = match self.config.publish_policy() {
+            PublishPolicy::PublishAll => self.document_navigation_ancestors(current),
+        };
+        let children = self.published_document_navigation_children(current);
+        let has_subdocuments = !children.is_empty();
+        let navigation = DocumentNavigation::from_ancestors(ancestors, children);
+
+        if has_subdocuments {
+            navigation.with_subdocuments_path(format!("{}/", current.web_path()))
+        } else {
+            navigation
+        }
+    }
+
+    fn published_document_navigation_children(
+        &self,
+        current: &NoteRef,
+    ) -> Vec<DocumentNavigationItem> {
+        match self.config.publish_policy() {
+            PublishPolicy::PublishAll => self
+                .index
+                .direct_children(current)
+                .iter()
+                .filter_map(|child| self.document_navigation_item(child))
+                .collect(),
+        }
     }
 
     fn document_navigation_ancestors(&self, current: &NoteRef) -> Vec<DocumentNavigationItem> {
@@ -570,12 +622,29 @@ impl Maki {
     /// # Example
     /// ```text
     /// maki.resolve_route("/maki"); // => MakiRoute::NotePage("maki.maki")
+    /// maki.resolve_route("/maki/"); // => MakiRoute::SubdocumentsPage("maki.maki")
     /// ```
     pub fn resolve_route(&self, target: &str) -> Result<MakiRoute, Error> {
         let target = target.strip_prefix('/').unwrap_or(target);
 
         if target.is_empty() {
             return Ok(MakiRoute::Home);
+        }
+
+        if let Some(note_target) = target.strip_suffix('/') {
+            if note_target.is_empty()
+                || note_target.ends_with('/')
+                || note_target.ends_with(MAKI_SOURCE_EXTENSION)
+            {
+                return Err(Error::NoteNotFound(PathBuf::from(target)));
+            }
+
+            return match self.resolve_note_route(note_target)? {
+                MakiRoute::NotePage(path) => Ok(MakiRoute::SubdocumentsPage(path)),
+                MakiRoute::Home | MakiRoute::SubdocumentsPage(_) | MakiRoute::NoteSource(_) => {
+                    unreachable!()
+                }
+            };
         }
 
         self.resolve_note_route(target)

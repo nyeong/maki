@@ -292,19 +292,24 @@ fn rendered_project_pages_expose_block_id_fragments_and_direct_document_relation
     let maki = Maki::load(&project.root).unwrap();
 
     let parent_html = maki.render_html(Path::new("plan.maki")).unwrap();
-    assert!(!parent_html.contains("aria-label=\"Breadcrumb\""));
+    assert!(!parent_html.contains("aria-label=\"Parent documents\""));
     assert!(
-        parent_html.contains("<span class=\"maki-document-navigation-label\">Subdocuments</span>")
+        parent_html.contains(
+            "<a class=\"maki-document-navigation-label\" href=\"/plan/\">Subdocuments</a>"
+        )
     );
-    assert!(parent_html.contains("<a href=\"/plan/coding\">Coding</a>"));
-    assert!(parent_html.contains("<a href=\"/plan/interviews\">Interviews</a>"));
+    assert!(!parent_html.contains(">Coding</a>"));
+    assert!(!parent_html.contains(">Interviews</a>"));
     assert!(!parent_html.contains("href=\"/plan/coding/week-one\""));
 
     let child_html = maki.render_html(Path::new("plan/coding.maki")).unwrap();
     assert!(child_html.contains(
-        "<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\"><ol><li><a href=\"/plan\">Plan</a></li></ol></nav>"
+        "<nav class=\"maki-document-breadcrumb\" aria-label=\"Parent documents\"><span class=\"maki-document-navigation-label\">Parent documents</span><ol><li><a href=\"/plan\">Plan</a></li></ol></nav>"
     ));
-    assert!(child_html.contains("<a href=\"/plan/coding/week-one\">Week One</a>"));
+    assert!(child_html.contains(
+        "<a class=\"maki-document-navigation-label\" href=\"/plan/coding/\">Subdocuments</a>"
+    ));
+    assert!(!child_html.contains(">Week One</a>"));
     assert!(child_html.contains(
         "<span class=\"maki-block-anchor\" id=\"target\" aria-hidden=\"true\"></span><p>Target paragraph</p>"
     ));
@@ -313,7 +318,7 @@ fn rendered_project_pages_expose_block_id_fragments_and_direct_document_relation
         .render_html(Path::new("plan/coding/week-one.maki"))
         .unwrap();
     assert!(grandchild_html.contains(
-        "<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\"><ol><li><a href=\"/plan\">Plan</a><span class=\"maki-document-breadcrumb-separator\" aria-hidden=\"true\">›</span></li><li><a href=\"/plan/coding\">Coding</a></li></ol></nav>"
+        "<nav class=\"maki-document-breadcrumb\" aria-label=\"Parent documents\"><span class=\"maki-document-navigation-label\">Parent documents</span><ol><li><a href=\"/plan\">Plan</a><span class=\"maki-document-breadcrumb-separator\" aria-hidden=\"true\">›</span></li><li><a href=\"/plan/coding\">Coding</a></li></ol></nav>"
     ));
     assert!(!grandchild_html.contains("aria-label=\"Subdocuments\""));
 
@@ -326,9 +331,63 @@ fn rendered_project_pages_expose_block_id_fragments_and_direct_document_relation
         .render_html(Path::new("partial/parent/deep.maki"))
         .unwrap();
     assert!(partial_ancestry_html.contains(
-        "<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\"><ol><li><a href=\"/partial/parent\">Partial Parent</a></li></ol></nav>"
+        "<nav class=\"maki-document-breadcrumb\" aria-label=\"Parent documents\"><span class=\"maki-document-navigation-label\">Parent documents</span><ol><li><a href=\"/partial/parent\">Partial Parent</a></li></ol></nav>"
     ));
     assert!(!partial_ancestry_html.contains("href=\"/partial\""));
+}
+
+#[test]
+fn subdocument_routes_and_pages_are_distinct_from_note_and_source_routes() {
+    let project = temp_project("subdocument-routes");
+    write_note_with_content(&project, "plan.maki", "--^ title: Plan <&>\n\nBody");
+    write_note_with_content(&project, "plan/a.maki", "--^ title: Zeta <child>\n\nBody");
+    write_note_with_content(&project, "plan/z.maki", "--^ title: Alpha & child\n\nBody");
+    write_note_with_content(
+        &project,
+        "plan/a/deep.maki",
+        "--^ title: Deep child\n\nBody",
+    );
+    write_note_with_content(&project, "leaf.maki", "--^ title: Leaf\n\nBody");
+    let maki = Maki::load(&project.root).unwrap();
+
+    assert_eq!(maki.resolve_route("/").unwrap(), MakiRoute::Home);
+    assert_eq!(
+        maki.resolve_route("/plan").unwrap(),
+        MakiRoute::NotePage(PathBuf::from("plan.maki"))
+    );
+    assert_eq!(
+        maki.resolve_route("/plan/").unwrap(),
+        MakiRoute::SubdocumentsPage(PathBuf::from("plan.maki"))
+    );
+    assert_eq!(
+        maki.resolve_route("/plan.maki").unwrap(),
+        MakiRoute::NoteSource(PathBuf::from("plan.maki"))
+    );
+    assert!(maki.resolve_route("/plan.maki/").is_err());
+    assert!(maki.resolve_route("/plan//").is_err());
+    assert!(maki.resolve_route("/missing/").is_err());
+
+    let html = maki
+        .render_subdocuments_html(Path::new("plan.maki"))
+        .unwrap();
+    assert!(html.contains("<title>Subdocuments of Plan &lt;&amp;&gt;</title>"));
+    assert!(html.contains(
+        "<nav class=\"maki-subdocuments-parent\" aria-label=\"Parent document\"><span class=\"maki-document-navigation-label\">Parent document</span><a href=\"/plan\">Plan &lt;&amp;&gt;</a></nav>"
+    ));
+    let first = html
+        .find("<a href=\"/plan/a\">Zeta &lt;child&gt;</a>")
+        .unwrap();
+    let second = html
+        .find("<a href=\"/plan/z\">Alpha &amp; child</a>")
+        .unwrap();
+    assert!(first < second);
+    assert!(!html.contains("Deep child"));
+
+    let empty_html = maki
+        .render_subdocuments_html(Path::new("leaf.maki"))
+        .unwrap();
+    assert!(empty_html.contains("No subdocuments."));
+    assert!(empty_html.contains("href=\"/leaf\">Leaf</a>"));
 }
 
 #[test]
