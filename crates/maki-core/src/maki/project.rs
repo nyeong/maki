@@ -495,11 +495,9 @@ impl Maki {
     }
 
     fn document_navigation(&self, current: &NoteRef) -> DocumentNavigation {
-        let (parent, children) = match self.config.publish_policy() {
+        let (ancestors, children) = match self.config.publish_policy() {
             PublishPolicy::PublishAll => (
-                self.index
-                    .direct_parent(current)
-                    .and_then(|parent| self.document_navigation_item(&parent)),
+                self.document_navigation_ancestors(current),
                 self.index
                     .direct_children(current)
                     .iter()
@@ -508,7 +506,23 @@ impl Maki {
             ),
         };
 
-        DocumentNavigation::new(parent, children)
+        DocumentNavigation::from_ancestors(ancestors, children)
+    }
+
+    fn document_navigation_ancestors(&self, current: &NoteRef) -> Vec<DocumentNavigationItem> {
+        let mut ancestors = Vec::new();
+        let mut descendant = current.clone();
+
+        while let Some(parent) = self.index.direct_parent(&descendant) {
+            let Some(item) = self.document_navigation_item(&parent) else {
+                break;
+            };
+            ancestors.push(item);
+            descendant = parent;
+        }
+
+        ancestors.reverse();
+        ancestors
     }
 
     fn document_navigation_item(&self, note_ref: &NoteRef) -> Option<DocumentNavigationItem> {

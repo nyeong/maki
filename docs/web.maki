@@ -54,16 +54,18 @@ Heading selector도 같은 URL fragment 형식을 사용한다.
 
 = Document hierarchy navigation
 
-Project-aware HTML note page는 rendered document title 바로 뒤, authored body 바로 앞에 document hierarchy navigation을 둔다.
+Project-aware HTML note page는 rendered document title이 있으면 바로 아래에 작은 ancestor breadcrumb를 두고, title이 없으면 authored body 앞에 둔다. Direct-child navigation도 authored body 앞에 둔다.
 
-- Child page에는 canonical path로 확인되는 direct parent Document link를 표시한다.
+- Child page의 breadcrumb에는 canonical path로 연속해서 확인되는 ancestor Document를 root 쪽부터 direct parent까지 표시한다.
+- Current Document title은 바로 위 heading에 있으므로 breadcrumb에서 반복하지 않는다.
 - Parent page에는 direct child Document link 목록을 표시한다.
 - Descendant는 자신의 direct parent를 통해 단계적으로 탐색하며 parent page의 direct child 목록에 한 번만 나타난다.
-- Parent나 child가 없으면 해당 항목을 표시하지 않고 둘 다 없으면 navigation 자체를 표시하지 않는다.
+- Direct parent Document가 없으면 더 높은 경로로 건너뛰지 않고 breadcrumb를 끝낸다.
+- Ancestor나 child가 없으면 해당 navigation을 표시하지 않는다.
 - Child 목록은 canonical path를 기준으로 결정적으로 정렬한다.
 - Navigation 후보는 현재 publish/access policy를 통과한 Document에서만 만들며 숨겨진 Document를 관계를 통해 노출하지 않는다.
 
-HTML은 이 관계를 `Document hierarchy`라는 accessible navigation으로 표현한다.
+HTML은 ancestor 경로를 `Breadcrumb`, child 목록을 `Subdocuments`라는 별도의 accessible navigation으로 표현한다.
 다른 표현 계층은 같은 양방향 탐색 관계를 별도 section, breadcrumb 또는 다른 navigation 형태로 배치할 수 있다.
 
 = Meta route

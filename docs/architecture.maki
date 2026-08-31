@@ -105,5 +105,5 @@ HTML renderer는 resolved target identity를 browser URL로 바꾼다.
 Source의 `@id`는 선택한 Document URL의 `#id` fragment가 되고 `#heading`은 Heading의 effective anchor fragment가 된다.
 
 Document canonical path에서 parent와 direct child 관계를 계산한다.
-Project-aware HTML은 본문 앞의 document relation navigation에서 접근·공개 가능한 parent link와 direct child link를 노출한다.
+Project-aware HTML은 title 아래의 breadcrumb에서 접근·공개 가능한 연속 ancestor link를, 본문 앞의 document relation navigation에서 direct child link를 노출한다.
 표현 계층은 이 관계를 다른 위치나 형태로 표시할 수 있지만 publish/access policy를 우회해서는 안 된다.

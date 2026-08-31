@@ -86,6 +86,14 @@
   };
 
   const insertToc = (toc) => {
+    const breadcrumb = document.querySelector(
+      "body > .maki-document-breadcrumb",
+    );
+    if (breadcrumb) {
+      breadcrumb.insertAdjacentElement("afterend", toc);
+      return;
+    }
+
     const title = document.querySelector("body > h1");
     if (title) {
       title.insertAdjacentElement("afterend", toc);
@@ -340,6 +348,7 @@
 
   if (globalThis.__makiTocUnitTestExports) {
     globalThis.__makiTocUnitTestExports({
+      insertToc,
       markerBoxOverlaps,
       overlappedMarkerIndexes,
     });
