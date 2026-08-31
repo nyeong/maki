@@ -119,30 +119,51 @@ fn collect_inline_dates(
     collector: &mut DateIndexCollector<'_>,
     inlines: &[Inline<'_>],
     context: &str,
+    references: &parser::ReferenceDefinitions<'_>,
 ) {
     for inline in inlines {
         match inline {
             Inline::DateStamp(stamp) => collector.push_inline_stamp(*stamp, context),
             Inline::DateRange(range) => collector.push_inline_range(*range, context),
+            Inline::Reference { raw, key, .. } => {
+                let Some(definition) = references.get(key) else {
+                    continue;
+                };
+                match definition.value.as_slice() {
+                    [Inline::DateStamp(stamp)] => collector.push_inline_stamp(*stamp, context),
+                    [Inline::DateRange(range)] if raw.ends_with("][]") => {
+                        collector.push_inline_range(*range, context)
+                    }
+                    _ => {}
+                }
+            }
             _ => {
                 if let Some(body) = inline.nested_inlines() {
-                    collect_inline_dates(collector, body, context);
+                    collect_inline_dates(collector, body, context, references);
                 }
             }
         }
     }
 }
 
-fn collect_reference_note_keys(inlines: &[Inline<'_>], notes: &mut ReferenceNoteOrder) {
+fn collect_reference_note_keys(
+    inlines: &[Inline<'_>],
+    references: &parser::ReferenceDefinitions<'_>,
+    notes: &mut ReferenceNoteOrder,
+) {
     for inline in inlines {
         match inline {
-            Inline::Link { title, target } if !parser::reference_value_is_link_shaped(target) => {
-                notes.register(title);
+            Inline::Reference { key, .. }
+                if references.get(key).is_some_and(|definition| {
+                    definition.value_kind() == parser::ReferenceValueKind::Prose
+                }) =>
+            {
+                notes.register(key);
             }
-            Inline::Footnote { label } => notes.register(label),
+            Inline::Footnote { key, .. } => notes.register(key),
             _ => {
                 if let Some(body) = inline.nested_inlines() {
-                    collect_reference_note_keys(body, notes);
+                    collect_reference_note_keys(body, references, notes);
                 }
             }
         }
@@ -191,8 +212,8 @@ fn collect_list_item_dates(
     let mut item_context = context.with_top_list_item(item_line_context.clone());
     let occurrence_context = item_context.contextualize(&item_line_context);
 
-    collect_inline_dates(collector, &item.body, &occurrence_context);
-    collect_reference_note_keys(&item.body, reference_notes);
+    collect_inline_dates(collector, &item.body, &occurrence_context, references);
+    collect_reference_note_keys(&item.body, references, reference_notes);
     for child in &item.children {
         collect_block_dates(
             collector,
@@ -208,6 +229,7 @@ fn collect_table_row_dates(
     collector: &mut DateIndexCollector<'_>,
     row: &parser::TableRow<'_>,
     context: &str,
+    references: &parser::ReferenceDefinitions<'_>,
     reference_notes: &mut ReferenceNoteOrder,
 ) {
     if row.is_separator() {
@@ -215,8 +237,8 @@ fn collect_table_row_dates(
     }
 
     for cell in &row.cells {
-        collect_inline_dates(collector, &cell.body, context);
-        collect_reference_note_keys(&cell.body, reference_notes);
+        collect_inline_dates(collector, &cell.body, context, references);
+        collect_reference_note_keys(&cell.body, references, reference_notes);
     }
 }
 
@@ -236,16 +258,16 @@ fn collect_block_dates(
 
     match &block.kind {
         BlockKind::Paragraph { body } => {
-            collect_inline_dates(collector, body, &block_context);
-            collect_reference_note_keys(body, reference_notes);
+            collect_inline_dates(collector, body, &block_context, references);
+            collect_reference_note_keys(body, references, reference_notes);
         }
         BlockKind::Heading {
             level,
             body,
             raw_body,
         } => {
-            collect_inline_dates(collector, body, &block_context);
-            collect_reference_note_keys(body, reference_notes);
+            collect_inline_dates(collector, body, &block_context, references);
+            collect_reference_note_keys(body, references, reference_notes);
             context.enter_heading(*level, raw_body);
         }
         BlockKind::List { items } => {
@@ -259,11 +281,17 @@ fn collect_block_dates(
         BlockKind::Table { header, rows, .. } => {
             let table_header_context = table_row_date_context(header);
             let header_context = context.contextualize(&table_header_context);
-            collect_table_row_dates(collector, header, &header_context, reference_notes);
+            collect_table_row_dates(
+                collector,
+                header,
+                &header_context,
+                references,
+                reference_notes,
+            );
             for row in rows {
                 let row_context =
                     context.contextualize(&table_body_row_date_context(&table_header_context, row));
-                collect_table_row_dates(collector, row, &row_context, reference_notes);
+                collect_table_row_dates(collector, row, &row_context, references, reference_notes);
             }
         }
         BlockKind::Container { kind, lines, .. }
@@ -317,19 +345,23 @@ fn collect_document_dates_with_context(
         let Some(definition) = document.reference(&key) else {
             continue;
         };
-        if parser::reference_value_is_link_shaped(definition.raw_value) {
+        if definition.value_kind() != parser::ReferenceValueKind::Prose {
             continue;
         }
-        let marker = match definition.spelling {
-            parser::ReferenceDefinitionSpelling::Canonical => format!("[{}]", definition.key),
-            parser::ReferenceDefinitionSpelling::FootnoteAlias => {
-                format!("[^{}]", definition.key)
-            }
-        };
+        let marker = format!("[{}]", definition.key);
         let reference_source = format!("{marker}: {}", definition.raw_value);
         let reference_context = context.contextualize(&reference_source);
-        collect_inline_dates(collector, &definition.value, &reference_context);
-        collect_reference_note_keys(&definition.value, &mut reference_notes);
+        collect_inline_dates(
+            collector,
+            &definition.value,
+            &reference_context,
+            document.reference_definitions(),
+        );
+        collect_reference_note_keys(
+            &definition.value,
+            document.reference_definitions(),
+            &mut reference_notes,
+        );
     }
 }
 

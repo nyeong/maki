@@ -19,10 +19,9 @@ use lsp_types::{
 use maki_core::analysis::{
     AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin, DefinitionTarget, DefinitionTargetKind,
     DocumentAnalysis, HeadingOccurrence, LinkResolution, ProjectAnalysis, ReferenceDefinitionId,
-    ReferencePresentation, SourceSnapshot, analyze_project, property_description,
+    SourceSnapshot, analyze_project, property_description,
 };
 use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
-use maki_core::parser::reference_value_is_link_shaped;
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
 use maki_core::{Maki, MakiConfig, is_discoverable_maki_path, list_maki_files};
 
@@ -550,20 +549,10 @@ impl Server {
         let (source, document) = self.document_for_uri(&params.text_document.uri)?;
         Some(
             document
-                .reference_graph
-                .uses
+                .reference_links
                 .iter()
                 .filter_map(|reference| {
-                    if reference.presentation != ReferencePresentation::Link {
-                        return None;
-                    }
-                    let definition = document
-                        .reference_graph
-                        .definition(reference.definition_id)?;
-                    if !reference_value_is_link_shaped(&definition.value) {
-                        return None;
-                    }
-                    let target = Url::parse(definition.value.trim()).ok()?;
+                    let target = Url::parse(&reference.target).ok()?;
                     matches!(target.scheme(), "http" | "https").then_some(DocumentLink {
                         range: lsp_range(source, reference.span)?,
                         target: Some(target),
@@ -708,7 +697,7 @@ fn reference_use_definition_id_at(
         .uses
         .iter()
         .find(|reference| span_touches(reference.span, offset))
-        .map(|reference| reference.definition_id)
+        .and_then(|reference| reference.definition_id)
 }
 
 fn reference_declaration_definition_id_at(
@@ -1191,6 +1180,7 @@ fn diagnostic_code(kind: AnalysisDiagnosticKind) -> &'static str {
     match kind {
         AnalysisDiagnosticKind::ParseWarning => "parse-warning",
         AnalysisDiagnosticKind::DuplicateId => "duplicate-id",
+        AnalysisDiagnosticKind::UnresolvedReference => "unresolved-reference",
         AnalysisDiagnosticKind::BrokenNoteLink => "broken-note-link",
         AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous-note-link",
         AnalysisDiagnosticKind::BrokenHeadingLink => "broken-heading-link",
@@ -1506,12 +1496,12 @@ mod tests {
 
     #[test]
     fn document_links_open_url_reference_markers() {
-        let source = r#"- [요카토 추천 리스트]
-  - [김치]
-- [로컬]
+        let source = r#"- [요카토 추천 리스트][]
+  - [김치][]
+- [로컬][]
 
-[요카토 추천 리스트]: https://docs.google.com/document/d/example/edit
-[김치]: https://hakkeido.com/
+[요카토 추천 리스트]: <https://docs.google.com/document/d/example/edit>
+[김치]: <https://hakkeido.com/>
 [로컬]: other
 "#;
         let documents = BTreeMap::from([(PathBuf::from("index.maki"), source.to_string())]);
@@ -1542,13 +1532,13 @@ mod tests {
         );
         assert_eq!(
             links[1].range,
-            Range::new(Position::new(1, 4), Position::new(1, 8))
+            Range::new(Position::new(1, 4), Position::new(1, 10))
         );
     }
 
     #[test]
     fn document_references_support_definition_and_both_presentations() {
-        let source = "[topic] [^topic]\n\n[topic]: https://example.com/topic\n";
+        let source = "[topic][] [^topic][]\n\n[topic]: <https://example.com/topic>\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1564,7 +1554,7 @@ mod tests {
             ),
             Location::new(
                 document_uri("index.maki"),
-                Range::new(Position::new(0, 10), Position::new(0, 15)),
+                Range::new(Position::new(0, 12), Position::new(0, 17)),
             ),
         ];
 
@@ -1573,7 +1563,7 @@ mod tests {
             definition
         );
         assert_eq!(
-            definition_at(&server, "index.maki", Position::new(0, 11)),
+            definition_at(&server, "index.maki", Position::new(0, 13)),
             definition
         );
         assert_eq!(
@@ -1589,7 +1579,7 @@ mod tests {
             uses
         );
         assert_eq!(
-            references_at(&server, "index.maki", Position::new(0, 11), true),
+            references_at(&server, "index.maki", Position::new(0, 13), true),
             std::iter::once(definition.clone())
                 .chain(uses.clone())
                 .collect::<Vec<_>>()
@@ -1609,11 +1599,11 @@ mod tests {
         let documents = BTreeMap::from([
             (
                 PathBuf::from("a.maki"),
-                "[shared] [^shared]\n\n[shared]: https://a.example/\n".to_string(),
+                "[shared][] [^shared][]\n\n[shared]: <https://a.example/>\n".to_string(),
             ),
             (
                 PathBuf::from("b.maki"),
-                "[shared] [^shared]\n\n[shared]: https://b.example/\n".to_string(),
+                "[shared][] [^shared][]\n\n[shared]: <https://b.example/>\n".to_string(),
             ),
         ]);
         let server = test_server(documents);
@@ -1630,9 +1620,8 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_definition_navigation_uses_the_cross_form_winner() {
-        let source =
-            "[dup] [^dup]\n\n[dup]: https://first.example/\n[^dup]: https://second.example/\n";
+    fn duplicate_definition_navigation_uses_the_canonical_winner() {
+        let source = "[dup][] [^dup][]\n\n[dup]: <https://first.example/>\n[dup]: <https://second.example/>\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1656,7 +1645,7 @@ mod tests {
                 ),
                 Location::new(
                     document_uri("index.maki"),
-                    Range::new(Position::new(0, 8), Position::new(0, 11)),
+                    Range::new(Position::new(0, 10), Position::new(0, 13)),
                 ),
             ]
         );
@@ -1670,7 +1659,8 @@ mod tests {
 
     #[test]
     fn document_links_open_only_link_presentation_markers() {
-        let source = "[url] [^url] *[url]* ::[^url]::\n\n[url]: https://example.com/path\n";
+        let source =
+            "[url][] [^url][] *[url][]* ::[^url][]::\n\n[url]: <https://example.com/path>\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1685,15 +1675,15 @@ mod tests {
         assert_eq!(
             links.iter().map(|link| link.range).collect::<Vec<_>>(),
             vec![
-                Range::new(Position::new(0, 0), Position::new(0, 5)),
-                Range::new(Position::new(0, 14), Position::new(0, 19)),
+                Range::new(Position::new(0, 0), Position::new(0, 7)),
+                Range::new(Position::new(0, 18), Position::new(0, 25)),
             ]
         );
     }
 
     #[test]
-    fn document_links_require_link_shaped_http_values() {
-        let source = "[url] [prose]\n\n[url]: https://example.com/path\n[prose]: https://example.com has details\n";
+    fn document_links_require_an_exact_hyperlink_value() {
+        let source = "[url][] [prose][]\n\n[url]: <https://example.com/path>\n[prose]: <https://example.com> has details\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1708,7 +1698,28 @@ mod tests {
         );
         assert_eq!(
             links[0].range,
-            Range::new(Position::new(0, 0), Position::new(0, 5))
+            Range::new(Position::new(0, 0), Position::new(0, 7))
+        );
+    }
+
+    #[test]
+    fn document_links_include_direct_http_links_with_the_full_construct_range() {
+        let source = "[site](https://example.com) [local](page)";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        let links = document_links_for(&server, "index.maki");
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().map(Url::as_str),
+            Some("https://example.com/")
+        );
+        assert_eq!(
+            links[0].range,
+            Range::new(Position::new(0, 0), Position::new(0, 27))
         );
     }
 
@@ -1763,6 +1774,55 @@ mod tests {
     }
 
     #[test]
+    fn exact_note_link_reference_targets_keep_project_navigation() {
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("index.maki"),
+                "[ref][]\n\n[ref]: [[target]]\n".to_string(),
+            ),
+            (
+                PathBuf::from("target.maki"),
+                "--^ title: Target\n\nbody\n".to_string(),
+            ),
+        ]);
+        let server = test_server(documents);
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(2, 10)),
+            Location::new(
+                document_uri("target.maki"),
+                Range::new(Position::new(0, 11), Position::new(0, 17)),
+            )
+        );
+    }
+
+    #[test]
+    fn date_reference_use_hover_reports_the_semantic_target_at_the_marker() {
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            "[deadline][]\n\n[deadline]: [2026-08-31]\n".to_string(),
+        )]));
+
+        let hover = server
+            .hover(HoverParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(document_uri("index.maki")),
+                    Position::new(0, 3),
+                ),
+                work_done_progress_params: Default::default(),
+            })
+            .unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("date hover should use markup content");
+        };
+        assert_eq!(markup.value, "Maki date: `2026-08-31` (visible inline)");
+        assert_eq!(
+            hover.range,
+            Some(Range::new(Position::new(0, 0), Position::new(0, 12)))
+        );
+    }
+
+    #[test]
     fn adjacent_reference_markers_use_half_open_utf16_spans() {
         let source = "😀[a][b] [^a][b]\n\n[a]: https://a.example/\n[b]: https://b.example/\n";
         let server = test_server(BTreeMap::from([(
@@ -1799,7 +1859,7 @@ mod tests {
 
     #[test]
     fn document_reference_locations_use_utf16_code_units() {
-        let source = "😀 [키😀] [^키😀]\n\n[키😀]: https://emoji.example/\n";
+        let source = "😀 [키😀][] [^키😀][]\n\n[키😀]: <https://emoji.example/>\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1823,7 +1883,7 @@ mod tests {
                 ),
                 Location::new(
                     document_uri("index.maki"),
-                    Range::new(Position::new(0, 11), Position::new(0, 14)),
+                    Range::new(Position::new(0, 13), Position::new(0, 16)),
                 ),
             ]
         );
@@ -1831,13 +1891,13 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].range,
-            Range::new(Position::new(0, 3), Position::new(0, 8))
+            Range::new(Position::new(0, 3), Position::new(0, 10))
         );
     }
 
     #[test]
     fn document_references_cover_list_table_and_nested_formatting() {
-        let source = "- [ctx]\n  - *[^ctx]*\n| reference |\n|---|\n| ::[ctx]:: [^ctx] |\n\n[ctx]: https://example.com/context\n";
+        let source = "- [ctx][]\n  - *[^ctx][]*\n| reference |\n|---|\n| ::[ctx][]:: [^ctx][] |\n\n[ctx]: <https://example.com/context>\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1857,7 +1917,7 @@ mod tests {
                 Range::new(Position::new(0, 3), Position::new(0, 6)),
                 Range::new(Position::new(1, 7), Position::new(1, 10)),
                 Range::new(Position::new(4, 5), Position::new(4, 8)),
-                Range::new(Position::new(4, 14), Position::new(4, 17)),
+                Range::new(Position::new(4, 16), Position::new(4, 19)),
             ]
         );
         assert_eq!(
@@ -1866,8 +1926,8 @@ mod tests {
                 .map(|link| link.range)
                 .collect::<Vec<_>>(),
             vec![
-                Range::new(Position::new(0, 2), Position::new(0, 7)),
-                Range::new(Position::new(4, 4), Position::new(4, 9)),
+                Range::new(Position::new(0, 2), Position::new(0, 9)),
+                Range::new(Position::new(4, 4), Position::new(4, 11)),
             ]
         );
     }
@@ -2040,6 +2100,44 @@ mod tests {
             Some(lsp_types::NumberOrString::String(
                 "broken-note-link".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn diagnostics_publish_unresolved_reference_key_ranges_in_utf16() {
+        let source = "😀 [ missing ][] [^][missing] [missing]\n";
+        let documents = BTreeMap::from([(PathBuf::from("open.maki"), source.to_string())]);
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            analysis: analyze_documents(&documents),
+            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
+            documents,
+        };
+        let (server_connection, client_connection) = Connection::memory();
+
+        server.publish_diagnostics(&server_connection).unwrap();
+
+        let Message::Notification(notification) = client_connection.receiver.recv().unwrap() else {
+            panic!("expected a diagnostics notification");
+        };
+        let params: PublishDiagnosticsParams = serde_json::from_value(notification.params).unwrap();
+        assert_eq!(params.diagnostics.len(), 2);
+        assert!(params.diagnostics.iter().all(|diagnostic| {
+            diagnostic.code
+                == Some(lsp_types::NumberOrString::String(
+                    "unresolved-reference".to_string(),
+                ))
+        }));
+        assert_eq!(
+            params
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.range)
+                .collect::<Vec<_>>(),
+            vec![
+                Range::new(Position::new(0, 5), Position::new(0, 12)),
+                Range::new(Position::new(0, 21), Position::new(0, 28)),
+            ]
         );
     }
 

@@ -50,7 +50,7 @@ pub use diagnostics::{ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosti
 pub use error::Error;
 pub use files::{is_discoverable_maki_path, list_maki_files};
 pub use links::NoteLinkResolution;
-pub(crate) use links::{is_external_href, note_link_target_for_href};
+pub(crate) use links::{is_external_href, is_safe_direct_href};
 pub use note::{Note, NoteRef, RecentEntry, SearchEntry, SearchEntryKind, SitemapEntry};
 pub use project::{Maki, MakiRoute};
 

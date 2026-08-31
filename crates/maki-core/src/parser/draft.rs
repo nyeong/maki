@@ -1,6 +1,6 @@
 use super::diagnostic::{ParseDiagnostic, ParseDiagnosticKind};
 use super::line::{LinePrefix, LineToken, scan_line, scan_line_at};
-use super::types::{ListKind, ReferenceDefinitionSpelling, TableRowKind, TodoState};
+use super::types::{ListKind, TableRowKind, TodoState};
 use crate::source::SourceSpan;
 use std::collections::BTreeSet;
 
@@ -23,7 +23,6 @@ pub(super) struct ReferenceDefinitionDraft<'a> {
     pub(super) raw_line: &'a str,
     pub(super) key: &'a str,
     pub(super) raw_value: &'a str,
-    pub(super) spelling: ReferenceDefinitionSpelling,
 }
 
 impl<'a> PropertyItemDraft<'a> {
@@ -374,24 +373,17 @@ fn parse_reference_definition_line<'a>(
     let after_open = raw_line.strip_prefix('[')?;
     let close = after_open.find(']')?;
     let identifier = &after_open[..close];
+    let key = identifier.trim();
     let value = after_open[close + 1..].strip_prefix(':')?;
     let value = value.trim_start();
 
-    let (key, raw_value, spelling) = if let Some(label) = identifier.strip_prefix('^') {
-        if !valid_reference_identifier(label) || label.chars().any(char::is_whitespace) {
-            return None;
-        }
-        (label, value, ReferenceDefinitionSpelling::FootnoteAlias)
-    } else {
-        if !valid_reference_identifier(identifier) || identifier.starts_with('^') {
-            return None;
-        }
-        let target = value.trim();
-        if target.is_empty() {
-            return None;
-        }
-        (identifier, target, ReferenceDefinitionSpelling::Canonical)
-    };
+    if !valid_reference_identifier(key) || key.starts_with('^') {
+        return None;
+    }
+    let raw_value = value.trim();
+    if raw_value.is_empty() {
+        return None;
+    }
 
     Some(ReferenceDefinitionDraft {
         line,
@@ -399,7 +391,6 @@ fn parse_reference_definition_line<'a>(
         raw_line,
         key,
         raw_value,
-        spelling,
     })
 }
 

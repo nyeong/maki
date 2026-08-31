@@ -1,23 +1,18 @@
+use std::collections::BTreeSet;
+
 use super::draft::{
     BlockDraft, ListItemDraft, PropertyKind, ReferenceDefinitionDraft, TableRowDraft,
 };
-use super::inline::{ReferenceLookup, parse_inline_with_references, parse_inlines_with_references};
+use super::inline::{parse_inline, parse_inlines};
 use super::types::{
     Block, BlockKind, Document, ListItem, Properties, ReferenceDefinition, ReferenceDefinitions,
     TableCell, TableColumnAlignment, TableRow, TableRowKind,
 };
 
-fn collect_document_references<'draft, 'source, 'parent>(
+fn collect_document_references<'draft, 'source>(
     drafts: &'draft [BlockDraft<'source>],
-    inherited: Option<&ReferenceDefinitions<'parent>>,
-) -> (
-    ReferenceLookup<'source>,
-    Vec<&'draft ReferenceDefinitionDraft<'source>>,
-)
-where
-    'parent: 'source,
-{
-    let mut lookup = ReferenceLookup::default();
+) -> Vec<&'draft ReferenceDefinitionDraft<'source>> {
+    let mut keys = BTreeSet::new();
     let mut unique_definitions = Vec::new();
 
     for draft in drafts {
@@ -29,44 +24,35 @@ where
         };
 
         for definition in block_definitions {
-            if lookup.insert(definition.key, definition.raw_value) {
+            if keys.insert(definition.key) {
                 unique_definitions.push(definition);
             }
         }
     }
 
-    if let Some(inherited) = inherited {
-        lookup.extend(inherited);
-    }
-
-    (lookup, unique_definitions)
+    unique_definitions
 }
 
-fn build_reference_definition<'a>(
-    draft: &ReferenceDefinitionDraft<'a>,
-    references: &ReferenceLookup<'a>,
-) -> ReferenceDefinition<'a> {
+fn build_reference_definition<'a>(draft: &ReferenceDefinitionDraft<'a>) -> ReferenceDefinition<'a> {
     ReferenceDefinition {
         key: draft.key,
         raw_value: draft.raw_value,
-        value: parse_inline_with_references(draft.raw_value, references),
-        spelling: draft.spelling,
+        value: parse_inline(draft.raw_value),
     }
 }
 
 fn build_reference_definitions<'a>(
     drafts: &[&ReferenceDefinitionDraft<'a>],
-    references: &ReferenceLookup<'a>,
 ) -> ReferenceDefinitions<'a> {
     let definitions = drafts
         .iter()
-        .map(|definition| build_reference_definition(definition, references))
+        .map(|definition| build_reference_definition(definition))
         .collect();
 
     ReferenceDefinitions::new(definitions)
 }
 
-fn build_blocks<'a>(drafts: &[BlockDraft<'a>], references: &ReferenceLookup<'a>) -> Vec<Block<'a>> {
+fn build_blocks<'a>(drafts: &[BlockDraft<'a>]) -> Vec<Block<'a>> {
     let mut blocks: Vec<Block> = vec![];
     let mut pending_props = Properties::new();
 
@@ -89,7 +75,7 @@ fn build_blocks<'a>(drafts: &[BlockDraft<'a>], references: &ReferenceLookup<'a>)
                 pending_props.extend(items);
             }
             draft => {
-                let block = build_block(draft, std::mem::take(&mut pending_props), references);
+                let block = build_block(draft, std::mem::take(&mut pending_props));
                 blocks.push(block);
             }
         }
@@ -109,8 +95,8 @@ pub(super) fn build_documents_with_references<'source, 'parent>(
 where
     'parent: 'source,
 {
-    let (reference_lookup, reference_drafts) = collect_document_references(drafts, inherited);
-    let local_references = build_reference_definitions(&reference_drafts, &reference_lookup);
+    let reference_drafts = collect_document_references(drafts);
+    let local_references = build_reference_definitions(&reference_drafts);
     let references = if let Some(inherited) = inherited {
         ReferenceDefinitions::with_inherited(local_references.iter().cloned().collect(), inherited)
     } else {
@@ -141,8 +127,7 @@ where
                 pending_props.extend(items);
             }
             draft => {
-                let block =
-                    build_block(draft, std::mem::take(&mut pending_props), &reference_lookup);
+                let block = build_block(draft, std::mem::take(&mut pending_props));
                 blocks.push(block);
             }
         }
@@ -155,29 +140,22 @@ where
     }
 }
 
-fn build_list_item<'a>(
-    draft: &ListItemDraft<'a>,
-    references: &ReferenceLookup<'a>,
-) -> ListItem<'a> {
+fn build_list_item<'a>(draft: &ListItemDraft<'a>) -> ListItem<'a> {
     ListItem {
-        body: parse_inline_with_references(draft.body, references),
+        body: parse_inline(draft.body),
         kind: draft.kind,
         todo: draft.todo,
-        children: build_blocks(&draft.children, references),
+        children: build_blocks(&draft.children),
     }
 }
 
-fn build_table_row<'a>(
-    kind: TableRowKind,
-    cells: &[&'a str],
-    references: &ReferenceLookup<'a>,
-) -> TableRow<'a> {
+fn build_table_row<'a>(kind: TableRowKind, cells: &[&'a str]) -> TableRow<'a> {
     TableRow {
         kind,
         cells: cells
             .iter()
             .map(|cell| TableCell {
-                body: parse_inline_with_references(cell, references),
+                body: parse_inline(cell),
             })
             .collect(),
     }
@@ -219,32 +197,27 @@ fn build_table_block<'a>(
     header: &[&'a str],
     rows: &[TableRowDraft<'a>],
     props: Properties<'a>,
-    references: &ReferenceLookup<'a>,
 ) -> Block<'a> {
     Block {
         kind: BlockKind::Table {
-            header: build_table_row(TableRowKind::Data, header, references),
+            header: build_table_row(TableRowKind::Data, header),
             alignments: table_column_alignments(rows, header.len()),
             rows: rows
                 .iter()
-                .map(|row| build_table_row(row.kind, &row.cells, references))
+                .map(|row| build_table_row(row.kind, &row.cells))
                 .collect(),
         },
         props,
     }
 }
 
-fn build_block<'a>(
-    draft: &BlockDraft<'a>,
-    props: Properties<'a>,
-    references: &ReferenceLookup<'a>,
-) -> Block<'a> {
+fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
     match draft {
         BlockDraft::Property { .. } => panic!("No Property Block!"),
         BlockDraft::Heading { level, body } => Block {
             kind: BlockKind::Heading {
                 level: *level,
-                body: parse_inline_with_references(body, references),
+                body: parse_inline(body),
                 raw_body: body,
             },
             props,
@@ -258,7 +231,7 @@ fn build_block<'a>(
         },
         BlockDraft::Paragraph { raw_lines } => Block {
             kind: BlockKind::Paragraph {
-                body: parse_inlines_with_references(raw_lines, references),
+                body: parse_inlines(raw_lines),
             },
             props,
         },
@@ -280,22 +253,16 @@ fn build_block<'a>(
             },
             props,
         },
-        BlockDraft::Table { header, rows } => build_table_block(header, rows, props, references),
+        BlockDraft::Table { header, rows } => build_table_block(header, rows, props),
         BlockDraft::List { items } => Block {
             kind: BlockKind::List {
-                items: items
-                    .iter()
-                    .map(|item| build_list_item(item, references))
-                    .collect(),
+                items: items.iter().map(build_list_item).collect(),
             },
             props,
         },
         BlockDraft::ReferenceDefinition { definitions } => Block {
             kind: BlockKind::ReferenceDefinition {
-                definitions: definitions
-                    .iter()
-                    .map(|definition| build_reference_definition(definition, references))
-                    .collect(),
+                definitions: definitions.iter().map(build_reference_definition).collect(),
             },
             props,
         },

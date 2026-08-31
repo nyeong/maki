@@ -74,7 +74,7 @@ HTML은 ancestor 경로를 `Breadcrumb`, child 목록을 `Subdocuments`라는 �
 - `/@/recents`: source modification time 기준 최근 note
 - `/@/sitemap`: 사람이 읽는 전체 note 목록
 - `/sitemap.xml`: XML sitemap
-- `/@/diagnostics`: parser와 project link diagnostic
+- `/@/diagnostics`: parser, project link와 unresolved explicit reference diagnostic
 - `/@/dates`: date index
 - `/@/dates/<period>`: year, month, ISO week 또는 day page
 

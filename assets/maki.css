@@ -612,23 +612,38 @@ a.maki-external-link-has-favicon::after {
   content: none;
 }
 
-.maki-reference-use,
-.maki-reference-use:visited {
+.maki-reference-term,
+.maki-reference-term:visited {
   color: inherit;
-  text-decoration: none;
-}
-
-.maki-reference-annotation {
   text-decoration-line: underline;
   text-decoration-style: dotted;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.18em;
 }
 
-.maki-reference-use:hover {
+.maki-reference-term:hover {
   color: var(--link);
   text-decoration-line: underline;
   text-decoration-style: solid;
+}
+
+.maki-reference-marker {
+  margin-inline-start: 0.08em;
+  font-size: 0.72em;
+  line-height: 0;
+  vertical-align: super;
+}
+
+.maki-reference-marker .maki-reference-use,
+.maki-reference-marker .maki-reference-use:visited {
+  padding: 0.08em;
+  color: var(--link);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.maki-reference-marker .maki-reference-use:hover {
+  text-decoration: underline;
 }
 
 .maki-reference-use:focus-visible,
@@ -638,11 +653,20 @@ a.maki-external-link-has-favicon::after {
   outline-offset: 2px;
 }
 
-.maki-reference-number {
-  margin-left: 0.08em;
+.maki-reference-target-location:focus,
+.maki-reference-target-location:target {
+  border-radius: 3px;
+  outline: 2px solid #c9dafc;
+  outline-offset: 2px;
+  scroll-margin-block-start: 1.5rem;
+}
+
+.maki-reference-note-marker {
+  display: inline-block;
+  margin-inline-end: 0.55em;
   color: var(--link);
-  font-size: 0.7em;
-  line-height: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .maki-reference-notes {
@@ -658,15 +682,18 @@ a.maki-external-link-has-favicon::after {
 
 .maki-reference-notes > ol {
   margin: 0;
-  padding-left: 1.75rem;
+  padding-inline-start: 0;
+  list-style: none;
 }
 
 .maki-reference-notes > ol > li {
   margin: 0.55rem 0;
-  scroll-margin-top: 1.5rem;
+  scroll-margin-block-start: 1.5rem;
+  overflow-wrap: anywhere;
 }
 
-.maki-reference-notes > ol > li:focus {
+.maki-reference-notes > ol > li:focus,
+.maki-reference-notes > ol > li:target {
   border-radius: 3px;
   outline: 2px solid #c9dafc;
   outline-offset: 3px;
@@ -674,8 +701,10 @@ a.maki-external-link-has-favicon::after {
 
 .maki-reference-backlinks {
   display: inline-flex;
+  max-width: 100%;
+  flex-wrap: wrap;
   gap: 0.2rem;
-  margin-left: 0.55em;
+  margin-inline-start: 0.55em;
   vertical-align: baseline;
 }
 

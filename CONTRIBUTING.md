@@ -53,6 +53,34 @@ changes may require coordinated pull requests in `tree-sitter-maki` and
 `maki-zed`; cross-link those pull requests and keep grammar pins and generated
 queries synchronized.
 
+## Releases
+
+Maki releases use the Nix package and do not publish the internal workspace
+crates to a Cargo registry. The package version is declared in
+`[workspace.package]` in `Cargo.toml` and duplicated in `flake.nix` so the
+release metadata check can detect drift. Update both values and the changelog
+in the same commit.
+
+Before tagging a release:
+
+1. Update the workspace and Nix versions and add a dated `CHANGELOG.md`
+   section for that version.
+2. Commit the release changes, then run `bash scripts/ci/check-maki.sh` and
+   `python3 scripts/ci/check-release-metadata.py --release .` from the clean
+   checkout.
+3. Create `maki-vMAJOR.MINOR.PATCH` at that checked commit.
+4. Record the tag and full 40-character commit in the release notes.
+5. Build the exact public revision and confirm its reported provenance:
+
+   ```bash
+   revision=<40-character-commit>
+   nix build "git+https://git.eska.nyeong.me/nyeong/maki.git?rev=${revision}#maki"
+   ./result/bin/maki --version --json
+   ```
+
+The JSON `version` must match the tag and `source_revision` must match the
+selected commit. See [RELEASES.md](RELEASES.md) for the complete contract.
+
 ## Cross-repository revision tuples
 
 Use `scripts/ci/check-stack.sh` to reproduce one immutable combination of Maki,

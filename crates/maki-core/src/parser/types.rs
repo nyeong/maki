@@ -4,10 +4,27 @@ use super::draft::PropertyItemDraft;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inline<'a> {
-    NoteLink { target: &'a str },
-    Link { title: &'a str, target: &'a str },
-    Footnote { label: &'a str },
-    HyperLink { target: &'a str },
+    NoteLink {
+        target: &'a str,
+    },
+    Reference {
+        raw: &'a str,
+        title: &'a str,
+        key: &'a str,
+    },
+    Footnote {
+        raw: &'a str,
+        title: Option<&'a str>,
+        key: &'a str,
+    },
+    DirectLink {
+        raw: &'a str,
+        title: &'a str,
+        target: &'a str,
+    },
+    HyperLink {
+        target: &'a str,
+    },
     Italic(Vec<Inline<'a>>),
     Strong(Vec<Inline<'a>>),
     Superscript(&'a str),
@@ -32,14 +49,12 @@ impl<'a> Inline<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReferenceDefinitionSpelling {
-    Canonical,
-    FootnoteAlias,
-}
-
-pub fn reference_value_is_link_shaped(value: &str) -> bool {
-    let value = value.trim();
-    !value.is_empty() && (value.starts_with('/') || !value.chars().any(char::is_whitespace))
+pub enum ReferenceValueKind {
+    HyperLink,
+    NoteLink,
+    DateStamp,
+    DateRange,
+    Prose,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,7 +62,18 @@ pub struct ReferenceDefinition<'a> {
     pub key: &'a str,
     pub raw_value: &'a str,
     pub value: Vec<Inline<'a>>,
-    pub spelling: ReferenceDefinitionSpelling,
+}
+
+impl ReferenceDefinition<'_> {
+    pub fn value_kind(&self) -> ReferenceValueKind {
+        match self.value.as_slice() {
+            [Inline::HyperLink { .. }] => ReferenceValueKind::HyperLink,
+            [Inline::NoteLink { .. }] => ReferenceValueKind::NoteLink,
+            [Inline::DateStamp(_)] => ReferenceValueKind::DateStamp,
+            [Inline::DateRange(_)] => ReferenceValueKind::DateRange,
+            _ => ReferenceValueKind::Prose,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -93,18 +119,10 @@ impl<'a> ReferenceDefinitions<'a> {
         self.definitions[..self.local_len].iter()
     }
 
-    pub(super) fn all(&self) -> impl Iterator<Item = &ReferenceDefinition<'a>> {
-        self.definitions.iter()
-    }
-
     pub fn get(&self, key: &str) -> Option<&ReferenceDefinition<'a>> {
         self.by_key
             .get(key)
             .and_then(|index| self.definitions.get(*index))
-    }
-
-    pub fn link_target(&self, key: &str) -> Option<&'a str> {
-        self.get(key).map(|definition| definition.raw_value.trim())
     }
 }
 
@@ -585,10 +603,6 @@ impl<'a> Document<'a> {
 
     pub fn reference(&self, key: &str) -> Option<&ReferenceDefinition<'a>> {
         self.references.get(key)
-    }
-
-    pub fn link_target(&self, title: &str) -> Option<&'a str> {
-        self.references.link_target(title)
     }
 }
 

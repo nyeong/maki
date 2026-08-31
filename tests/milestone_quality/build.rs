@@ -62,7 +62,7 @@ fn maki_build_reports_project_diagnostic_summary_to_stderr() {
     .unwrap();
     fs::write(
         project.root.join("home.maki"),
-        "--^ title: Home\n\nSee [[missing]] and [Ghost].\n\n[Ghost]: ghost\n",
+        "--^ title: Home\n\nSee [[missing]] and [Ghost][].\n",
     )
     .unwrap();
 
@@ -82,9 +82,11 @@ fn maki_build_reports_project_diagnostic_summary_to_stderr() {
     let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(stdout.contains("<title>Home</title>"));
-    assert!(stderr.contains("diagnostics: 2 issue(s): 0 duplicate id(s), 2 broken link(s)"));
+    assert!(stderr.contains(
+        "diagnostics: 2 issue(s): 0 duplicate id(s), 1 unresolved reference(s), 1 broken link(s)"
+    ));
     assert!(stderr.contains("warning: home.maki: broken link: missing"));
-    assert!(stderr.contains("warning: home.maki: broken link: ghost"));
+    assert!(stderr.contains("warning: home.maki:3: unresolved reference: Ghost"));
 }
 
 #[test]
@@ -105,7 +107,9 @@ fn maki_build_reports_duplicate_ids_in_project_diagnostic_summary() {
 
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("diagnostics: 2 issue(s): 2 duplicate id(s), 0 broken link(s)"));
+    assert!(stderr.contains(
+        "diagnostics: 2 issue(s): 2 duplicate id(s), 0 unresolved reference(s), 0 broken link(s)"
+    ));
     assert!(stderr.contains("warning: home.maki:2: duplicate id: repeated"));
     assert!(stderr.contains("warning: home.maki:5: duplicate id: repeated"));
 }

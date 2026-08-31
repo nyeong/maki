@@ -5,7 +5,7 @@ use crate::{
     maki::{self, NoteLinkResolution},
     parser::{
         self, BlockKind, DateRange, DateStamp, Document, Inline, ListItem, ListKind,
-        TableColumnAlignment, TableRow, TodoState,
+        ReferenceDefinition, TableColumnAlignment, TableRow, TodoState,
     },
 };
 
@@ -36,21 +36,6 @@ struct ReferenceNote {
     id: String,
     backlinks: Vec<String>,
     body_html: String,
-}
-
-#[derive(Clone, Copy)]
-enum ReferenceUsePresentation {
-    Annotation,
-    Footnote,
-}
-
-impl ReferenceUsePresentation {
-    fn class_name(self) -> &'static str {
-        match self {
-            Self::Annotation => "maki-reference-annotation",
-            Self::Footnote => "maki-reference-footnote",
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -295,24 +280,112 @@ impl<'a> Renderer<'a> {
         (note_number, note_id, use_id)
     }
 
-    fn render_reference_use(&mut self, key: &str, presentation: ReferenceUsePresentation) {
-        let (note_number, note_id, use_id) = self.register_reference_use(key);
+    fn render_reference_term(&mut self, key: &str, title: &str) {
+        let (_, note_id, use_id) = self.register_reference_use(key);
 
-        self.html.push_str("<a class=\"maki-reference-use ");
-        self.html.push_str(presentation.class_name());
+        self.html
+            .push_str("<a class=\"maki-reference-use maki-reference-term\" id=\"");
+        self.html.push_str(&use_id);
+        self.html.push_str("\" href=\"#");
+        self.html.push_str(&note_id);
+        self.html.push_str("\">");
+        self.escape_html_into(title);
+        self.html.push_str("</a>");
+    }
+
+    fn render_footnote_reference(&mut self, key: &str, title: Option<&str>) {
+        let (note_number, note_id, use_id) = self.register_reference_use(key);
+        let (class_name, marker) = match title {
+            Some(title) => ("maki-reference-footnote-named", title.to_string()),
+            None => ("maki-reference-footnote-numbered", note_number.to_string()),
+        };
+
+        self.html.push_str("<sup class=\"maki-reference-marker\"><a class=\"maki-reference-use maki-reference-footnote ");
+        self.html.push_str(class_name);
         self.html.push_str("\" id=\"");
         self.html.push_str(&use_id);
         self.html.push_str("\" href=\"#");
         self.html.push_str(&note_id);
-        self.html.push_str("\" role=\"doc-noteref\">");
-        self.escape_html_into(key);
-        self.html.push_str("<sup class=\"maki-reference-number\">");
-        self.html.push_str(&note_number.to_string());
-        self.html.push_str("</sup></a>");
+        self.html.push_str("\" role=\"doc-noteref\"><bdi>[");
+        self.escape_html_into(&marker);
+        self.html.push_str("]</bdi></a></sup>");
     }
 
-    fn render_footnote_reference(&mut self, label: &str) {
-        self.render_reference_use(label, ReferenceUsePresentation::Footnote);
+    fn render_reference_target_location(
+        &mut self,
+        key: &str,
+        render_target: impl FnOnce(&mut Self),
+    ) {
+        let (note_number, note_id, use_id) = self.register_reference_use(key);
+        let marker = note_number.to_string();
+        self.html
+            .push_str("<span class=\"maki-reference-target-location\" id=\"");
+        self.html.push_str(&use_id);
+        self.html.push_str("\" tabindex=\"-1\">");
+        render_target(self);
+        self.html.push_str("</span><sup class=\"maki-reference-marker maki-reference-target-marker\"><a class=\"maki-reference-use maki-reference-target-note\" href=\"#");
+        self.html.push_str(&note_id);
+        self.html
+            .push_str("\" role=\"doc-noteref\" aria-label=\"Reference note ");
+        self.html.push_str(&marker);
+        self.html.push_str("\"><bdi>[");
+        self.html.push_str(&marker);
+        self.html.push_str("]</bdi></a></sup>");
+    }
+
+    fn render_date_reference(&mut self, title: &str, stamp: DateStamp<'_>) {
+        let Some(occurrence_id) = self.next_inline_date_occurrence_id() else {
+            self.escape_html_into(title);
+            return;
+        };
+        let href = maki::date_occurrence_href(stamp.target(), &occurrence_id);
+
+        self.html.push_str("<a class=\"maki-date-location ");
+        self.html.push_str(date_stamp_class(stamp.kind()));
+        self.html.push_str("\" id=\"");
+        self.escape_html_attr_into(&occurrence_id);
+        self.html.push_str("\" href=\"");
+        self.escape_html_attr_into(&href);
+        self.html.push_str("\">");
+        self.escape_html_into(title);
+        self.html.push_str("</a>");
+    }
+
+    fn render_reference(
+        &mut self,
+        raw: &str,
+        title: &str,
+        key: &str,
+        definition: Option<&ReferenceDefinition<'_>>,
+    ) {
+        let Some(definition) = definition else {
+            self.escape_html_into(raw);
+            return;
+        };
+
+        match definition.value.as_slice() {
+            [Inline::HyperLink { target }] => {
+                self.render_reference_target_location(key, |renderer| {
+                    renderer.render_anchor(target, title);
+                });
+            }
+            [Inline::NoteLink { target }] => {
+                self.render_reference_target_location(key, |renderer| {
+                    renderer.render_note_link_with_title(target, Some(title));
+                });
+            }
+            [Inline::DateStamp(stamp)] => {
+                self.render_reference_target_location(key, |renderer| {
+                    renderer.render_date_reference(title, *stamp);
+                });
+            }
+            [Inline::DateRange(range)] if raw.ends_with("][]") => {
+                self.render_reference_target_location(key, |renderer| {
+                    renderer.render_date_range(*range);
+                });
+            }
+            _ => self.render_reference_term(key, title),
+        }
     }
 
     fn render_note_link_with_title(&mut self, target: &str, title: Option<&str>) {
@@ -361,15 +434,12 @@ impl<'a> Renderer<'a> {
         self.render_note_link_with_title(target, None);
     }
 
-    fn render_link(&mut self, title: &str, target: &str) {
-        if self.context.project.is_some()
-            && let Some(note_target) = maki::note_link_target_for_href(target)
-        {
-            self.render_note_link_with_title(&note_target, Some(title));
-            return;
+    fn render_direct_link(&mut self, raw: &str, title: &str, target: &str) {
+        if maki::is_safe_direct_href(target) {
+            self.render_anchor(target, title);
+        } else {
+            self.escape_html_into(raw);
         }
-
-        self.render_anchor(target, title);
     }
 
     fn render_hyper_link(&mut self, target: &str) {
@@ -486,17 +556,23 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_inline(&mut self, inline: &Inline<'_>) {
+    fn render_inline(
+        &mut self,
+        inline: &Inline<'_>,
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         match inline {
             Inline::NoteLink { target } => self.render_note_link(target),
-            Inline::Link { title, target } => {
-                if parser::reference_value_is_link_shaped(target) {
-                    self.render_link(title, target.trim());
-                } else {
-                    self.render_reference_use(title, ReferenceUsePresentation::Annotation);
-                }
+            Inline::Reference { raw, title, key } => {
+                self.render_reference(raw, title, key, references.get(key))
             }
-            Inline::Footnote { label } => self.render_footnote_reference(label),
+            Inline::Footnote { raw, title, key } => match references.get(key) {
+                Some(_) => self.render_footnote_reference(key, *title),
+                None => self.escape_html_into(raw),
+            },
+            Inline::DirectLink { raw, title, target } => {
+                self.render_direct_link(raw, title, target)
+            }
             Inline::HyperLink { target } => self.render_hyper_link(target),
             Inline::DateStamp(stamp) => self.render_date_stamp(*stamp),
             Inline::DateRange(range) => self.render_date_range(*range),
@@ -504,12 +580,12 @@ impl<'a> Renderer<'a> {
             Inline::Text(text) => self.escape_html_into(text),
             Inline::Italic(body) => {
                 self.html.push_str("<em>");
-                self.render_inlines(body);
+                self.render_inlines(body, references);
                 self.html.push_str("</em>");
             }
             Inline::Strong(body) => {
                 self.html.push_str("<strong>");
-                self.render_inlines(body);
+                self.render_inlines(body, references);
                 self.html.push_str("</strong>");
             }
             Inline::Superscript(text) => {
@@ -534,7 +610,7 @@ impl<'a> Renderer<'a> {
             }
             Inline::Highlight(body) => {
                 self.html.push_str("<mark>");
-                self.render_inlines(body);
+                self.render_inlines(body, references);
                 self.html.push_str("</mark>");
             }
             Inline::Code(text) => {
@@ -544,9 +620,13 @@ impl<'a> Renderer<'a> {
             }
         }
     }
-    fn render_inlines(&mut self, inlines: &[Inline<'_>]) {
+    fn render_inlines(
+        &mut self,
+        inlines: &[Inline<'_>],
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         for inline in inlines {
-            self.render_inline(inline);
+            self.render_inline(inline, references);
         }
     }
 
@@ -707,7 +787,7 @@ impl<'a> Renderer<'a> {
                     None
                 }
                 .unwrap_or(raw_body);
-                self.render_heading_with_inlines(level + 1, anchor, body);
+                self.render_heading_with_inlines(level + 1, anchor, body, references);
             }
             kind => self.render_block_kind(kind, references),
         }
@@ -721,7 +801,7 @@ impl<'a> Renderer<'a> {
         match block {
             BlockKind::Paragraph { body } => {
                 self.html.push_str("<p>");
-                self.render_inlines(body);
+                self.render_inlines(body, references);
                 self.html.push_str("</p>");
             }
             BlockKind::Code { lines, lang } => self.render_code(lines, *lang),
@@ -734,7 +814,7 @@ impl<'a> Renderer<'a> {
                 header,
                 alignments,
                 rows,
-            } => self.render_table(header, alignments, rows),
+            } => self.render_table(header, alignments, rows, references),
             BlockKind::ReferenceDefinition { .. } => {}
         }
     }
@@ -755,19 +835,29 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_table_header(&mut self, row: &TableRow<'_>, alignments: &[TableColumnAlignment]) {
+    fn render_table_header(
+        &mut self,
+        row: &TableRow<'_>,
+        alignments: &[TableColumnAlignment],
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         self.html.push_str("<thead><tr>");
         for (index, cell) in row.cells.iter().enumerate() {
             self.html.push_str("<th");
             self.render_table_alignment_attr(Self::table_cell_alignment(alignments, index));
             self.html.push_str(" scope=\"col\">");
-            self.render_inlines(&cell.body);
+            self.render_inlines(&cell.body, references);
             self.html.push_str("</th>");
         }
         self.html.push_str("</tr></thead>");
     }
 
-    fn render_table_body(&mut self, rows: &[TableRow<'_>], alignments: &[TableColumnAlignment]) {
+    fn render_table_body(
+        &mut self,
+        rows: &[TableRow<'_>],
+        alignments: &[TableColumnAlignment],
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         if rows.is_empty() {
             return;
         }
@@ -784,7 +874,7 @@ impl<'a> Renderer<'a> {
                 self.html.push_str("<td");
                 self.render_table_alignment_attr(Self::table_cell_alignment(alignments, index));
                 self.html.push('>');
-                self.render_inlines(&cell.body);
+                self.render_inlines(&cell.body, references);
                 self.html.push_str("</td>");
             }
             self.html.push_str("</tr>");
@@ -804,10 +894,11 @@ impl<'a> Renderer<'a> {
         header: &TableRow<'_>,
         alignments: &[TableColumnAlignment],
         rows: &[TableRow<'_>],
+        references: &parser::ReferenceDefinitions<'_>,
     ) {
         self.html.push_str("<table>");
-        self.render_table_header(header, alignments);
-        self.render_table_body(rows, alignments);
+        self.render_table_header(header, alignments, references);
+        self.render_table_body(rows, alignments, references);
         self.html.push_str("</table>");
     }
 
@@ -826,7 +917,7 @@ impl<'a> Renderer<'a> {
         self.html.push('>');
         for item in items {
             self.render_list_item_start(item.todo);
-            self.render_inlines(&item.body);
+            self.render_inlines(&item.body, references);
             if !item.children.is_empty() {
                 for block in &item.children {
                     self.render_block(block, references);
@@ -868,10 +959,16 @@ impl<'a> Renderer<'a> {
         self.end_heading(tag);
     }
 
-    fn render_heading_with_inlines(&mut self, level: usize, raw_body: &str, body: &[Inline<'_>]) {
+    fn render_heading_with_inlines(
+        &mut self,
+        level: usize,
+        raw_body: &str,
+        body: &[Inline<'_>],
+        references: &parser::ReferenceDefinitions<'_>,
+    ) {
         let tag = self.begin_heading(level, raw_body);
 
-        self.render_inlines(body);
+        self.render_inlines(body, references);
         self.end_heading(tag);
     }
 
@@ -892,19 +989,26 @@ impl<'a> Renderer<'a> {
 
         for note_index in 0..self.reference_note_scope.notes.len() {
             let note = &self.reference_note_scope.notes[note_index];
-            let key = note.key.clone();
             let note_id = note.id.clone();
             let body_html = note.body_html.clone();
             let backlinks = note.backlinks.clone();
+            let note_number = note_index + 1;
 
             self.html.push_str("<li id=\"");
             self.html.push_str(&note_id);
-            self.html.push_str("\" tabindex=\"-1\">");
+            self.html
+                .push_str("\" tabindex=\"-1\"><span class=\"maki-reference-note-marker\"><bdi>[");
+            self.html.push_str(&note_number.to_string());
+            self.html
+                .push_str("]</bdi></span><span class=\"maki-reference-note-body\">");
             self.html.push_str(&body_html);
             self.html
-                .push_str("<span class=\"maki-reference-backlinks\">");
+                .push_str("</span><span class=\"maki-reference-backlinks\">");
             for (occurrence_index, backlink) in backlinks.iter().enumerate() {
-                let accessible_label = format!("Back to {key} reference {}", occurrence_index + 1);
+                let accessible_label = format!(
+                    "Back to reference {note_number}, occurrence {}",
+                    occurrence_index + 1
+                );
                 self.html
                     .push_str("<a class=\"maki-reference-backlink\" href=\"#");
                 self.html.push_str(backlink);
@@ -924,11 +1028,14 @@ impl<'a> Renderer<'a> {
             let outer_html = std::mem::take(&mut self.html);
 
             if let Some(definition) = document.reference(&key) {
-                let raw_value = definition.raw_value.trim();
-                if parser::reference_value_is_link_shaped(raw_value) {
-                    self.render_link(raw_value, raw_value);
-                } else {
-                    self.render_inlines(&definition.value);
+                match definition.value.as_slice() {
+                    [Inline::DateStamp(stamp)] => self.render_date_stamp_text(*stamp),
+                    [Inline::DateRange(range)] => {
+                        self.render_date_stamp_text(range.start());
+                        self.html.push_str(DATE_RANGE_SEPARATOR_HTML);
+                        self.render_date_stamp_text(range.end());
+                    }
+                    _ => self.render_inlines(&definition.value, document.reference_definitions()),
                 }
             } else {
                 self.escape_html_into(&key);

@@ -14,9 +14,8 @@ pub use diagnostic::{ParseDiagnostic, ParseDiagnosticKind, format_parse_diagnost
 pub use inline::parse_inline;
 pub use types::{
     Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
-    Document, Inline, IsoWeek, ListItem, ListKind, ReferenceDefinition,
-    ReferenceDefinitionSpelling, ReferenceDefinitions, TableCell, TableColumnAlignment, TableRow,
-    TableRowKind, TodoState, reference_value_is_link_shaped,
+    Document, Inline, IsoWeek, ListItem, ListKind, ReferenceDefinition, ReferenceDefinitions,
+    ReferenceValueKind, TableCell, TableColumnAlignment, TableRow, TableRowKind, TodoState,
 };
 
 pub struct ParseResult<'a> {

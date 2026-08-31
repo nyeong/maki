@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, btree_map::Entry},
+    collections::BTreeMap,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -165,83 +165,35 @@ fn render_maki_template(template: &str, replacements: &[(&str, &str)]) -> String
     source
 }
 
-#[derive(Default)]
-struct MakiReferences {
-    definitions: BTreeMap<String, String>,
-    order: Vec<String>,
+fn push_maki_link(source: &mut String, title: &str, href: &str) {
+    source.push('[');
+    push_maki_single_line(source, &direct_link_safe_title(title));
+    source.push_str("](");
+    push_maki_direct_link_target(source, href);
+    source.push(')');
 }
 
-impl MakiReferences {
-    fn push_link(&mut self, source: &mut String, title: &str, href: &str) {
-        let base_title = reference_safe_title(title);
-        let mut reference_title = base_title.clone();
-        let mut suffix = 2;
-
-        loop {
-            match self.definitions.entry(reference_title.clone()) {
-                Entry::Vacant(entry) => {
-                    self.order.push(reference_title.clone());
-                    entry.insert(href.to_string());
-                    break;
-                }
-                Entry::Occupied(entry) if entry.get() == href => break,
-                Entry::Occupied(_) => {
-                    reference_title = format!("{base_title} ({suffix})");
-                    suffix += 1;
-                }
-            }
-        }
-
-        source.push('[');
-        push_maki_single_line(source, &reference_title);
-        source.push(']');
-    }
-
-    fn append_to(self, source: &mut String) {
-        if self.definitions.is_empty() {
-            return;
-        }
-
-        while source.ends_with('\n') {
-            source.pop();
-        }
-        source.push_str("\n\n");
-        for title in self.order {
-            let href = self
-                .definitions
-                .get(&title)
-                .expect("reference order should contain known titles");
-            source.push('[');
-            push_maki_single_line(source, &title);
-            source.push_str("]: ");
-            push_maki_single_line(source, href);
-            source.push('\n');
-        }
-    }
-}
-
-fn reference_safe_title(title: &str) -> String {
-    let date_marker_target = DateStampTarget::parse_prefix(title).and_then(|(target, len)| {
-        title
-            .get(len..)
-            .unwrap_or_default()
-            .chars()
-            .next()
-            .is_none_or(char::is_whitespace)
-            .then_some(target)
-    });
-
-    if let Some(target) = date_marker_target {
-        let prefix = match target {
-            DateStampTarget::Date(_) => "Date",
-            DateStampTarget::Month(_) => "Month",
-            DateStampTarget::IsoWeek(_) => "Week",
-        };
-        format!("{prefix} {title}")
+fn direct_link_safe_title(title: &str) -> String {
+    let title = title.replace(['[', ']'], "");
+    let title = title.trim();
+    if title.is_empty() {
+        "Link".to_string()
     } else if title.starts_with('^') {
         format!("Link {title}")
     } else {
-        title.replace(['[', ']'], "")
+        title.to_string()
+    }
+}
+
+fn push_maki_direct_link_target(source: &mut String, target: &str) {
+    for ch in target.chars() {
+        match ch {
+            '(' => source.push_str("%28"),
+            ')' => source.push_str("%29"),
+            '\\' => source.push_str("%5C"),
+            '\r' | '\n' => source.push(' '),
+            _ => source.push(ch),
+        }
     }
 }
 
@@ -263,7 +215,6 @@ fn render_project_maki_source(
 
 fn recents_page_body_source(entries: &[RecentEntry]) -> String {
     let mut source = String::new();
-    let mut references = MakiReferences::default();
 
     if entries.is_empty() {
         source.push_str("No notes.\n");
@@ -275,17 +226,15 @@ fn recents_page_body_source(entries: &[RecentEntry]) -> String {
         let modified = modified_time_kst_label(entry.modified());
         push_maki_single_line(&mut source, &modified);
         source.push(' ');
-        references.push_link(&mut source, entry.title(), entry.path());
+        push_maki_link(&mut source, entry.title(), entry.path());
         source.push('\n');
     }
 
-    references.append_to(&mut source);
     source
 }
 
 fn sitemap_page_body_source(entries: &[SitemapEntry]) -> String {
     let mut source = String::new();
-    let mut references = MakiReferences::default();
 
     if entries.is_empty() {
         source.push_str("No notes.\n");
@@ -294,7 +243,7 @@ fn sitemap_page_body_source(entries: &[SitemapEntry]) -> String {
 
     for entry in entries {
         source.push_str("- ");
-        references.push_link(&mut source, entry.title(), entry.path());
+        push_maki_link(&mut source, entry.title(), entry.path());
         source.push(' ');
         source.push('`');
         push_maki_single_line(&mut source, entry.source_path());
@@ -302,7 +251,6 @@ fn sitemap_page_body_source(entries: &[SitemapEntry]) -> String {
         source.push('\n');
     }
 
-    references.append_to(&mut source);
     source
 }
 
@@ -353,7 +301,6 @@ fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
 
 fn date_index_page_body_source(date_index: &DateIndex) -> String {
     let mut source = String::new();
-    let mut references = MakiReferences::default();
     let mut year_counts = BTreeMap::new();
     for (date, _backlinks) in date_index.dates() {
         *year_counts.entry(date.year()).or_insert(0) += 1;
@@ -368,14 +315,12 @@ fn date_index_page_body_source(date_index: &DateIndex) -> String {
     for (year, count) in &year_counts {
         push_maki_link_item_with_count(
             &mut source,
-            &mut references,
             &format!("{year:04}"),
             &maki::date_year_page_path(*year),
             *count,
         );
     }
 
-    references.append_to(&mut source);
     source
 }
 
@@ -881,15 +826,9 @@ fn push_date_empty(renderer: &mut Renderer<'_>) {
     renderer.push_raw("<p class=\"maki-date-empty\">No date markers.</p>");
 }
 
-fn push_maki_link_item_with_count(
-    source: &mut String,
-    references: &mut MakiReferences,
-    title: &str,
-    href: &str,
-    count: usize,
-) {
+fn push_maki_link_item_with_count(source: &mut String, title: &str, href: &str, count: usize) {
     source.push_str("- ");
-    references.push_link(source, title, href);
+    push_maki_link(source, title, href);
     source.push(' ');
     push_maki_inline_code(source, &count.to_string());
     source.push('\n');
@@ -952,9 +891,10 @@ pub fn render_diagnostics_page(
 fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize) -> String {
     let summary = ProjectDiagnosticSummary::from_diagnostics(diagnostics);
     let summary = format!(
-        "{} issue(s) across {total_notes} note(s): {} duplicate id(s), {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s).",
+        "{} issue(s) across {total_notes} note(s): {} duplicate id(s), {} unresolved reference(s), {} broken link(s), {} ambiguous link(s), {} broken external link(s), {} parser warning(s), {} read failure(s).",
         summary.total(),
         summary.duplicate_ids(),
+        summary.unresolved_references(),
         summary.broken_links(),
         summary.ambiguous_links(),
         summary.broken_external_links(),
@@ -966,7 +906,6 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
         "No diagnostics.".to_string()
     } else {
         let mut body = String::new();
-        let mut references = MakiReferences::default();
         let mut by_source: BTreeMap<PathBuf, Vec<&ProjectDiagnostic>> = BTreeMap::new();
         for diagnostic in diagnostics {
             by_source
@@ -978,7 +917,7 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
         for (source_path, diagnostics) in by_source {
             let source_href = format!("/{}", source_path.with_extension("").display());
             body.push_str("== ");
-            references.push_link(&mut body, &source_path.display().to_string(), &source_href);
+            push_maki_link(&mut body, &source_path.display().to_string(), &source_href);
             body.push_str("\n\n");
 
             for diagnostic in diagnostics {
@@ -989,9 +928,7 @@ fn diagnostics_page_source(diagnostics: &[ProjectDiagnostic], total_notes: usize
             body.push('\n');
         }
 
-        let mut body = body.trim_end().to_string();
-        references.append_to(&mut body);
-        body
+        body.trim_end().to_string()
     };
 
     render_maki_template(
@@ -1015,6 +952,9 @@ fn push_diagnostic_item(source: &mut String, diagnostic: &ProjectDiagnostic) {
         }
         ProjectDiagnosticKind::DuplicateId { id } => {
             push_maki_single_line(source, id);
+        }
+        ProjectDiagnosticKind::UnresolvedReference { key } => {
+            push_maki_single_line(source, key);
         }
         ProjectDiagnosticKind::BrokenLink { target } => {
             push_maki_single_line(source, target);
@@ -1040,5 +980,33 @@ fn push_maki_single_line(source: &mut String, input: &str) {
             '\r' | '\n' => source.push(' '),
             _ => source.push(ch),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_maki_links_encode_direct_link_delimiters() {
+        let mut source = String::new();
+        push_maki_link(&mut source, "[Draft]", "/notes/(draft)\\copy)");
+
+        assert_eq!(source, "[Draft](/notes/%28draft%29%5Ccopy%29)");
+        let html = render_project_maki_source(&source, AssetMode::Inline, None, false);
+        assert!(html.contains("<a href=\"/notes/%28draft%29%5Ccopy%29\">Draft</a>"));
+    }
+
+    #[test]
+    fn generated_maki_links_avoid_reserved_or_empty_titles() {
+        let mut source = String::new();
+        push_maki_link(&mut source, " [^Draft] ", "/draft");
+        source.push(' ');
+        push_maki_link(&mut source, "[]", "/fallback");
+
+        assert_eq!(source, "[Link ^Draft](/draft) [Link](/fallback)");
+        let html = render_project_maki_source(&source, AssetMode::Inline, None, false);
+        assert!(html.contains("<a href=\"/draft\">Link ^Draft</a>"));
+        assert!(html.contains("<a href=\"/fallback\">Link</a>"));
     }
 }

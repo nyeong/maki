@@ -19,4 +19,13 @@ fn maki_reports_text_and_machine_readable_versions() {
     let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(value["name"], "maki");
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+    let source_revision = option_env!("MAKI_SOURCE_REVISION").filter(|revision| {
+        revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    assert_eq!(
+        value["source_revision"],
+        source_revision
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null)
+    );
 }

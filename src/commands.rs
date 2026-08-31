@@ -192,6 +192,12 @@ fn is_project_source_path(path: &Path, source_root: &Path) -> Result<bool, RunEr
     Ok(path.starts_with(source_root))
 }
 
+fn source_revision() -> Option<&'static str> {
+    option_env!("MAKI_SOURCE_REVISION").filter(|revision| {
+        revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
 pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
     match command {
         Command::Version { format } => {
@@ -202,6 +208,7 @@ pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
                     "{}",
                     serde_json::json!({
                         "name": "maki",
+                        "source_revision": source_revision(),
                         "version": version,
                     })
                 ),

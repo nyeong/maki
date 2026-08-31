@@ -19,18 +19,32 @@ fn note_ref() {
 }
 
 #[test]
-fn reference_note_hrefs_preserve_root_selection_without_accepting_note_link_selectors() {
-    assert_eq!(
-        note_link_target_for_href("/docs/page.maki"),
-        Some("/docs/page".to_string())
-    );
-    assert_eq!(
-        note_link_target_for_href("docs/page.maki"),
-        Some("docs/page".to_string())
-    );
-    assert_eq!(note_link_target_for_href("+child"), None);
-    assert_eq!(note_link_target_for_href("page@id"), None);
-    assert_eq!(note_link_target_for_href("page#heading"), None);
+fn direct_href_safety_allows_web_and_local_links_but_rejects_active_content() {
+    for target in [
+        "https://example.com",
+        "HTTP://example.com",
+        "mailto:me@example.com",
+        "tel:+82000000000",
+        "/docs/page",
+        "docs/page",
+        "#heading",
+        "//cdn.example.com/file",
+    ] {
+        assert!(is_safe_direct_href(target), "expected safe href: {target}");
+    }
+    for target in [
+        "javascript:alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "data:text/html,unsafe",
+        "vbscript:unsafe",
+        "file:///etc/passwd",
+        "java\tscript:alert(1)",
+    ] {
+        assert!(
+            !is_safe_direct_href(target),
+            "expected unsafe href: {target}"
+        );
+    }
 }
 
 #[test]
@@ -410,7 +424,7 @@ fn reference_links_can_resolve_to_notes_with_custom_titles() {
     write_note_with_content(
         &project,
         "start.maki",
-        "See [the page].\n\n[the page]: page",
+        "See [the page][].\n\n[the page]: [[page]]",
     );
     write_note_with_content(&project, "page.maki", "--^ title: Page\n\nbody");
 
@@ -421,12 +435,29 @@ fn reference_links_can_resolve_to_notes_with_custom_titles() {
 }
 
 #[test]
+fn direct_links_preserve_local_hrefs_without_note_resolution() {
+    let project = temp_project("direct-local-href");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "[download](assets/archive) [section](#details)",
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let html = maki.render_html(Path::new("start.maki")).unwrap();
+
+    assert!(html.contains("<a href=\"assets/archive\">download</a>"));
+    assert!(html.contains("<a href=\"#details\">section</a>"));
+    assert!(maki.diagnostics_without_external_links().is_empty());
+}
+
+#[test]
 fn reference_external_links_render_as_plain_hrefs() {
     let project = temp_project("reference-external-link");
     write_note_with_content(
         &project,
         "start.maki",
-        "See [djot].\n\n[djot]: https://github.com/jgm/djot",
+        "See [djot][].\n\n[djot]: <https://github.com/jgm/djot>",
     );
 
     let maki = Maki::load(&project.root).unwrap();

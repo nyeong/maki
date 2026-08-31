@@ -26,10 +26,10 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 
 = 지원 기능
 
-- parser warning과 깨진/모호한 document·heading·explicit-ID link, duplicate ID diagnostics
+- parser warning과 깨진/모호한 document·heading·explicit-ID link, unresolved explicit reference, duplicate ID diagnostics
 - document, heading, explicit-ID link와 Document-local reference의 definition
 - document, heading, explicit-ID와 Document-local reference의 references
-- Link presentation인 HTTP/HTTPS reference marker의 document link
+- HTTP/HTTPS target인 일반 Reference Use와 Direct Link의 document link
 - document, heading, explicit ID, property key와 관습 value completion
 - heading document symbol
 - document title, heading과 explicit ID workspace symbol
@@ -54,20 +54,24 @@ Definition과 references는 core의 resolved target identity를 사용한다.
 Heading의 같은 explicit ID를 가리키는 `#id`와 `@id`는 같은 declaration의 references로 취급하고, 다른 Document에서 재사용한 같은 ID는 포함하지 않는다.
 `textDocument/references`는 client의 `includeDeclaration` 값을 따른다.
 
-Document-local reference는 `[key]`와 `[^key]`가 같은 active Reference Definition identity를 사용한다. 새 source의 canonical declaration은 `[key]: value`다.
-어느 use 또는 같은 key의 definition에서 Definition/References를 실행해도 현재 Document 안의 active key span과 두 presentation use만 대상으로 한다.
+Document-local reference는 `[key][]`, `[title][key]`, `[^key][]`, `[^title][key]`와 `[^][key]`가 같은 active Reference Definition identity를 사용한다. Declaration은 `[key]: value`다.
+어느 use 또는 같은 key의 definition에서 Definition/References를 실행해도 현재 Document 안의 active key span과 모든 Reference Use/Footnote presentation을 대상으로 한다.
 다른 Document의 같은 key는 결과에 포함하지 않는다.
 Duplicate definition 위치에서도 source-first active definition으로 이동하며 `includeDeclaration=true`일 때 active declaration 하나만 반환한다.
+Direct Link는 definition을 만들지 않으므로 Document-local reference의 Definition/References 대상이 아니다.
 
 Link hover는 resolved Document와 source selector를 표시한다.
+Reference Definition value가 exact Note Link면 그 target span도 같은 project resolution과 Definition navigation을 사용한다.
+Exact Date/Date Range target을 실제 날짜로 표현하는 일반 Reference Use marker에서는 semantic target 날짜 hover를 제공한다.
 Explicit ID의 canonical source selector는 `@`지만 HTML destination fragment는 `#id`다.
 `id` property hover는 그 값이 case-sensitive한 document-local block identifier임을 설명한다.
 
 모든 completion edit, definition, references, hover와 diagnostic range는 UTF-16 code unit 위치를 사용한다.
 
-Active Reference Definition value가 공통 value-shape 판정에서 Link이고 유효한 HTTP/HTTPS URL이면 Link presentation인 `[key]` marker 전체만 `textDocument/documentLink`로 제공한다.
-Whitespace를 포함해 Prose로 판정된 URL 모양 value는 URL parser가 받아들일 수 있어도 document link로 만들지 않는다.
-같은 definition을 쓰는 `[^key]`, prose annotation과 definition line에는 document link를 만들지 않는다.
+Active Reference Definition value가 정확히 하나의 유효한 HTTP/HTTPS Hyper Link면 일반 Reference Use인 `[key][]`와 `[title][key]` marker 전체를 `textDocument/documentLink`로 제공한다.
+URL 모양 text라도 angle-bracket Hyper Link가 아닌 Prose value면 document link를 만들지 않는다.
+같은 definition을 쓰는 Footnote, Prose term use와 definition line에는 document link를 만들지 않는다.
+유효한 HTTP/HTTPS target을 가진 Direct Link는 marker 전체를 document link로 제공한다.
 Reference definition과 use range는 core의 Document reference graph를 사용한다.
 원본 source 좌표가 보존되는 list item child block은 explicit-ID definition, references, hover와 diagnostics 대상이다.
 Quote와 quote container에서 별도 source로 다시 파싱한 Maki body의 위치 기반 기능은 지원하지 않는다.
@@ -129,8 +133,8 @@ Maki 쪽 실행 계약은 아래처럼 단순하게 유지한다.
 따라서 VS Code에서 쓰려면 extension 또는 generic LSP client extension이 이 계약을 `maki lsp`에 연결해야 한다.
 Maki 저장소는 VS Code extension package를 제공하지 않는다.
 
-- [Zed Developing Extensions]
-- [Zed Language Extensions]
+- [Zed Developing Extensions][]
+- [Zed Language Extensions][]
 
-[Zed Developing Extensions]: https://zed.dev/docs/extensions/developing-extensions
-[Zed Language Extensions]: https://zed.dev/docs/extensions/languages
+[Zed Developing Extensions]: <https://zed.dev/docs/extensions/developing-extensions>
+[Zed Language Extensions]: <https://zed.dev/docs/extensions/languages>

@@ -191,21 +191,34 @@ pub(super) fn normalize_key(key: &str) -> String {
     key.to_lowercase()
 }
 
-fn has_uri_scheme(target: &str) -> bool {
-    let Some((scheme, _rest)) = target.split_once(':') else {
-        return false;
-    };
-
-    !scheme.is_empty()
+fn uri_scheme(target: &str) -> Option<&str> {
+    let (scheme, _rest) = target.split_once(':')?;
+    (!scheme.is_empty()
         && scheme
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')))
+    .then_some(scheme)
 }
 
 pub fn is_external_href(target: &str) -> bool {
     let target = target.trim();
 
-    target.starts_with("//") || has_uri_scheme(target)
+    target.starts_with("//") || uri_scheme(target).is_some()
+}
+
+pub fn is_safe_direct_href(target: &str) -> bool {
+    let target = target.trim();
+    if target.is_empty() || target.chars().any(|ch| ch.is_ascii_control()) {
+        return false;
+    }
+
+    let Some(scheme) = uri_scheme(target) else {
+        return true;
+    };
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "mailto" | "tel"
+    )
 }
 
 fn is_checkable_external_href(target: &str) -> bool {
@@ -287,43 +300,6 @@ fn request_external_link(
     }
 }
 
-pub fn note_link_target_for_href(target: &str) -> Option<String> {
-    let target = target.trim();
-
-    if target.is_empty()
-        || target.contains('#')
-        || target.contains('@')
-        || target.contains('?')
-        || target.starts_with('+')
-        || target.starts_with("//")
-        || has_uri_scheme(target)
-    {
-        return None;
-    }
-
-    let path_part = target.strip_prefix('/').unwrap_or(target);
-    if path_part == "@" || path_part.starts_with("@/") || path_part.starts_with(".maki/") {
-        return None;
-    }
-
-    let extension = Path::new(path_part)
-        .extension()
-        .and_then(|ext| ext.to_str());
-
-    if !matches!(extension, Some("maki") | None) {
-        return None;
-    }
-
-    let normalized = path_part
-        .strip_suffix(MAKI_SOURCE_EXTENSION)
-        .unwrap_or(path_part);
-    Some(if target.starts_with('/') {
-        format!("/{normalized}")
-    } else {
-        normalized.to_string()
-    })
-}
-
 fn resolve_candidates(candidates: Option<&Vec<NoteRef>>) -> Option<NoteLinkResolution> {
     let candidates = candidates?;
 
@@ -350,6 +326,12 @@ fn collect_inline_external_links(
     for inline in inlines {
         match inline {
             Inline::HyperLink { target } => {
+                external_links.insert(ExternalLinkRef {
+                    source_path: source_path.to_path_buf(),
+                    target: target.trim().to_string(),
+                });
+            }
+            Inline::DirectLink { target, .. } if is_checkable_external_href(target) => {
                 external_links.insert(ExternalLinkRef {
                     source_path: source_path.to_path_buf(),
                     target: target.trim().to_string(),
@@ -438,17 +420,7 @@ fn collect_document_external_links(
     document: &parser::Document<'_>,
 ) {
     for definition in document.reference_definitions().iter() {
-        if parser::reference_value_is_link_shaped(definition.raw_value)
-            && is_checkable_external_href(definition.raw_value)
-        {
-            external_links.insert(ExternalLinkRef {
-                source_path: source_path.to_path_buf(),
-                target: definition.raw_value.trim().to_string(),
-            });
-        }
-        if !parser::reference_value_is_link_shaped(definition.raw_value) {
-            collect_inline_external_links(external_links, source_path, &definition.value);
-        }
+        collect_inline_external_links(external_links, source_path, &definition.value);
     }
 
     for block in &document.blocks {
