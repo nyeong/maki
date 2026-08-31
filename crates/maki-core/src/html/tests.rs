@@ -556,7 +556,7 @@ fn project_rendering_can_suffix_browser_title_with_site_title() {
 }
 
 #[test]
-fn document_hierarchy_renders_breadcrumb_and_subdocuments_after_title() {
+fn document_hierarchy_renders_labelled_ancestors_and_subdocuments_link_after_title() {
     let parsed = parser::parse("--^ title: Topic\n\nAuthored content");
     let navigation = DocumentNavigation::from_ancestors(
         vec![
@@ -567,7 +567,8 @@ fn document_hierarchy_renders_breadcrumb_and_subdocuments_after_title() {
             DocumentNavigationItem::new("Child <one>", "/topic/one"),
             DocumentNavigationItem::new("Child two", "/topic/two"),
         ],
-    );
+    )
+    .with_subdocuments_path("/topic/");
     assert_eq!(
         navigation.parent().map(DocumentNavigationItem::title),
         Some("Parent <overview>")
@@ -580,7 +581,7 @@ fn document_hierarchy_renders_breadcrumb_and_subdocuments_after_title() {
 
     let title = html.find("<h1 id=\"Topic\">Topic</h1>").unwrap();
     let breadcrumb = html
-        .find("<nav class=\"maki-document-breadcrumb\" aria-label=\"Breadcrumb\">")
+        .find("<nav class=\"maki-document-breadcrumb\" aria-label=\"Parent documents\">")
         .unwrap();
     let subdocuments = html
         .find("<nav class=\"maki-document-navigation\" aria-label=\"Subdocuments\">")
@@ -588,11 +589,15 @@ fn document_hierarchy_renders_breadcrumb_and_subdocuments_after_title() {
     let authored = html.find("<p>Authored content</p>").unwrap();
     assert!(title < breadcrumb && breadcrumb < subdocuments && subdocuments < authored);
     assert!(html.contains(
-        "<ol><li><a href=\"/root\">Root &amp; home</a><span class=\"maki-document-breadcrumb-separator\" aria-hidden=\"true\">›</span></li><li><a href=\"/root/parent\">Parent &lt;overview&gt;</a></li></ol>"
+        "<span class=\"maki-document-navigation-label\">Parent documents</span><ol><li><a href=\"/root\">Root &amp; home</a><span class=\"maki-document-breadcrumb-separator\" aria-hidden=\"true\">›</span></li><li><a href=\"/root/parent\">Parent &lt;overview&gt;</a></li></ol>"
     ));
-    assert!(html.contains(
-        "<span class=\"maki-document-navigation-label\">Subdocuments</span><ul><li><a href=\"/topic/one\">Child &lt;one&gt;</a></li><li><a href=\"/topic/two\">Child two</a></li></ul>"
-    ));
+    assert!(
+        html.contains(
+            "<a class=\"maki-document-navigation-label\" href=\"/topic/\">Subdocuments</a>"
+        )
+    );
+    assert!(!html.contains("Child &lt;one&gt;"));
+    assert!(!html.contains("Child two"));
 }
 
 #[test]
@@ -610,7 +615,7 @@ fn document_hierarchy_renders_breadcrumb_and_subdocuments_independently() {
             ),
         ),
     );
-    assert!(parent_only.contains("aria-label=\"Breadcrumb\""));
+    assert!(parent_only.contains("aria-label=\"Parent documents\""));
     assert!(!parent_only.contains("aria-label=\"Subdocuments\""));
 
     let children_only = render_document_with_context(
@@ -619,11 +624,14 @@ fn document_hierarchy_renders_breadcrumb_and_subdocuments_independently() {
             DocumentNavigation::new(
                 None,
                 vec![DocumentNavigationItem::new("Child", "/topic/child")],
-            ),
+            )
+            .with_subdocuments_path("/topic/"),
         ),
     );
-    assert!(!children_only.contains("aria-label=\"Breadcrumb\""));
+    assert!(!children_only.contains("aria-label=\"Parent documents\""));
     assert!(children_only.contains("aria-label=\"Subdocuments\""));
+    assert!(children_only.contains("href=\"/topic/\">Subdocuments</a>"));
+    assert!(!children_only.contains(">Child</a>"));
 }
 
 #[test]
@@ -640,6 +648,68 @@ fn empty_or_unspecified_document_navigation_is_not_rendered() {
     assert!(!explicitly_empty.contains("<nav class=\"maki-document-navigation\""));
     assert!(!standalone.contains("<nav class=\"maki-document-breadcrumb\""));
     assert!(!explicitly_empty.contains("<nav class=\"maki-document-breadcrumb\""));
+}
+
+#[test]
+fn explicit_subdocuments_path_renders_without_retaining_child_items() {
+    let parsed = parser::parse("--^ title: Page\n\nbody");
+    let html = render_document_with_context(
+        &parsed.document,
+        RenderContext::default().with_document_navigation(
+            DocumentNavigation::default().with_subdocuments_path("/page/"),
+        ),
+    );
+
+    assert!(
+        html.contains(
+            "<a class=\"maki-document-navigation-label\" href=\"/page/\">Subdocuments</a>"
+        )
+    );
+}
+
+#[test]
+fn subdocuments_page_renders_back_link_and_escaped_children_in_order() {
+    let parent = DocumentNavigationItem::new("Parent <&>", "/parent?value=\"&");
+    let children = vec![
+        DocumentNavigationItem::new("First <child>", "/parent/first?value=\"&"),
+        DocumentNavigationItem::new("Second & child", "/parent/second"),
+    ];
+
+    let html = render_subdocuments_page(
+        &parent,
+        &children,
+        AssetMode::Inline,
+        Some("Site & Co"),
+        false,
+    );
+
+    assert!(html.contains("<title>Subdocuments of Parent &lt;&amp;&gt; | Site &amp; Co</title>"));
+    assert!(html.contains(
+        "<h1 id=\"Subdocuments of Parent &lt;&amp;&gt;\">Subdocuments of Parent &lt;&amp;&gt;</h1>"
+    ));
+    assert!(html.contains(
+        "<nav class=\"maki-subdocuments-parent\" aria-label=\"Parent document\"><span class=\"maki-document-navigation-label\">Parent document</span><a href=\"/parent?value=&quot;&amp;\">Parent &lt;&amp;&gt;</a></nav>"
+    ));
+    assert!(html.contains(
+        "<main class=\"maki-subdocuments-page\"><ul class=\"maki-subdocuments-list\"><li><a href=\"/parent/first?value=&quot;&amp;\">First &lt;child&gt;</a></li><li><a href=\"/parent/second\">Second &amp; child</a></li></ul></main>"
+    ));
+    assert!(!html.contains("No subdocuments."));
+}
+
+#[test]
+fn subdocuments_page_renders_empty_state() {
+    let html = render_subdocuments_page(
+        &DocumentNavigationItem::new("Leaf", "/leaf"),
+        &[],
+        AssetMode::Inline,
+        None,
+        false,
+    );
+
+    assert!(html.contains(
+        "<main class=\"maki-subdocuments-page\"><p class=\"maki-subdocuments-empty\">No subdocuments.</p></main>"
+    ));
+    assert!(!html.contains("class=\"maki-subdocuments-list\""));
 }
 
 #[test]

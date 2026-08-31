@@ -130,6 +130,7 @@ truth.
 
 - `/`: redirect to the configured home note.
 - `/<note>`: rendered note page.
+- `/<note>/`: direct subdocument index for the note, including an empty state.
 - `/<note>.maki`: raw source text.
 - `/@/`: meta index.
 - `/@/recents`: recently modified notes.

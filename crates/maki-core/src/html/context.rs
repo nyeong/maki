@@ -33,6 +33,7 @@ impl DocumentNavigationItem {
 pub struct DocumentNavigation {
     ancestors: Vec<DocumentNavigationItem>,
     children: Vec<DocumentNavigationItem>,
+    subdocuments_path: Option<String>,
 }
 
 impl DocumentNavigation {
@@ -52,7 +53,13 @@ impl DocumentNavigation {
         Self {
             ancestors,
             children,
+            subdocuments_path: None,
         }
+    }
+
+    pub fn with_subdocuments_path(mut self, path: impl Into<String>) -> Self {
+        self.subdocuments_path = Some(path.into());
+        self
     }
 
     /// Returns the direct parent, which is the last ancestor in the breadcrumb.
@@ -69,8 +76,12 @@ impl DocumentNavigation {
         &self.children
     }
 
+    pub fn subdocuments_path(&self) -> Option<&str> {
+        self.subdocuments_path.as_deref()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.ancestors.is_empty() && self.children.is_empty()
+        self.ancestors.is_empty() && self.children.is_empty() && self.subdocuments_path.is_none()
     }
 }
 
