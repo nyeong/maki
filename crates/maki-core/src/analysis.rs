@@ -535,11 +535,9 @@ fn collect_properties(source: &str, source_map: &SourceMap<'_>) -> Vec<PropertyO
 
 fn trimmed_subspan(source: &str, absolute_start: usize) -> SourceSpan {
     let leading = source.len() - source.trim_start().len();
-    let trailing = source.len() - source.trim_end().len();
-    SourceSpan::new(
-        absolute_start + leading,
-        absolute_start + source.len() - trailing,
-    )
+    let trimmed = source.trim();
+    let start = absolute_start + leading;
+    SourceSpan::new(start, start + trimmed.len())
 }
 
 fn slice_span(source: &str, slice: &str) -> Option<SourceSpan> {
@@ -780,6 +778,21 @@ mod tests {
         assert_eq!(analysis.properties.len(), 2);
         assert_eq!(analysis.note_links[0].target, "다른문서#詳細");
         assert_eq!(analysis.dates[0].origin, DateOrigin::VisibleInline);
+    }
+
+    #[test]
+    fn document_analysis_handles_whitespace_only_property_fields() {
+        let source = "--^ title: \n--v   : value\n";
+
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.properties.len(), 2);
+        assert_eq!(analysis.properties[0].key, "title");
+        assert_eq!(analysis.properties[0].value, "");
+        assert_eq!(analysis.properties[0].value_span, SourceSpan::new(11, 11));
+        assert_eq!(analysis.properties[1].key, "");
+        assert_eq!(analysis.properties[1].key_span, SourceSpan::new(18, 18));
+        assert_eq!(analysis.properties[1].value, "value");
     }
 
     #[test]
