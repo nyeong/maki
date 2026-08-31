@@ -669,21 +669,6 @@ a.maki-external-link-has-favicon::after {
   content: none;
 }
 
-.maki-reference-term,
-.maki-reference-term:visited {
-  color: inherit;
-  text-decoration-line: underline;
-  text-decoration-style: dotted;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.18em;
-}
-
-.maki-reference-term:hover {
-  color: var(--link);
-  text-decoration-line: underline;
-  text-decoration-style: solid;
-}
-
 .maki-reference-marker {
   margin-inline-start: 0.08em;
   font-size: 0.72em;
@@ -699,22 +684,31 @@ a.maki-external-link-has-favicon::after {
   white-space: nowrap;
 }
 
-.maki-reference-marker .maki-reference-use:hover {
-  text-decoration: underline;
-}
-
-.maki-reference-use:focus-visible {
+.maki-reference-use:focus-visible,
+.maki-reference-note-marker:focus-visible,
+.maki-reference-footnote:target {
   border-radius: 3px;
   outline: 2px solid #c9dafc;
   outline-offset: 2px;
 }
 
-.maki-reference-note-marker {
+.maki-reference-footnote:target {
+  scroll-margin-block-start: 1.5rem;
+}
+
+.maki-reference-note-marker,
+.maki-reference-note-marker:visited {
   display: inline-block;
   margin-inline-end: 0.55em;
   color: var(--link);
   font-variant-numeric: tabular-nums;
+  text-decoration: none;
   white-space: nowrap;
+}
+
+.maki-reference-marker .maki-reference-use:hover,
+.maki-reference-note-marker:hover {
+  text-decoration: underline;
 }
 
 .maki-reference-notes {
