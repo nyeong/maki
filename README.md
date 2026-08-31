@@ -103,6 +103,11 @@ Paragraph with a [[note link]], [reference link], and <https://example.com>.
 : code line
 ```
 
+Internal links can select a root document (`[[/path]]`), a child document
+(`[[+child]]`), a heading (`[[#Heading]]`), or a document-local explicit ID
+(`[[@block-id]]`). These selectors can be combined, for example
+`[[/plans/job-search@checklist]]`.
+
 See [docs/maki-syntax.maki](docs/maki-syntax.maki) for the syntax source of
 truth.
 
@@ -124,7 +129,7 @@ truth.
 - `/@/sitemap`: human-readable sitemap.
 - `/@/diagnostics`: project diagnostics.
 - `/@/dates`: date index.
-- `/.maki/search`: note, heading, and file search.
+- `/.maki/search`: note, heading, explicit ID, and file search.
 - `/.maki/project-index.json`: versioned project analysis.
 - `/.maki/search-index.json`: search entries.
 

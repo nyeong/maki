@@ -1,5 +1,5 @@
 --^ title: Maki LSP
---^ updated: [2026-08-27]
+--^ updated: [2026-08-31]
 
 = 개요
 
@@ -26,18 +26,44 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 
 = 지원 기능
 
-- parser warning과 깨진/모호한 note·heading link diagnostics
-- note link와 heading link definition
+- parser warning과 깨진/모호한 document·heading·explicit-ID link, duplicate ID diagnostics
+- document, heading과 explicit-ID link definition
+- document, heading과 explicit-ID references
 - HTTP/HTTPS Reference Link marker의 document link
-- note, heading, property key와 관습 value completion
+- document, heading, explicit ID, property key와 관습 value completion
 - heading document symbol
-- note title과 heading workspace symbol
+- document title, heading과 explicit ID workspace symbol
 - property, link resolution, date marker hover
 
 Server는 문서 전체 동기화(`TextDocumentSyncKind::FULL`)를 사용하고 source snapshot 전체를 다시 분석한다.
-Completion은 cursor가 있는 line의 note link 또는 property 문맥을 기준으로 동작한다.
+Completion은 cursor가 있는 line의 Note Link 또는 property 문맥을 기준으로 동작한다.
+Note Link completion은 현재 Document path와 parsed target prefix를 함께 사용한다.
+
+- `[[/prefix`는 Project root canonical path 후보만 제공한다.
+- `[[+prefix`는 현재 Document canonical path 아래 direct·descendant child의 relative path 후보만 제공한다.
+- `[[#prefix`와 `[[@prefix`는 각각 현재 Document의 Heading과 explicit ID만 제공한다.
+- `[[/doc#prefix`, `[[+doc#prefix`는 선택된 Document의 Heading만 제공한다.
+- `[[/doc@prefix`, `[[+doc@prefix`는 선택된 Document의 explicit ID만 제공한다.
+- Heading의 explicit ID는 기존 `#id` completion과 canonical `@id` completion에 모두 나타난다.
+
+Bare `[[@id]]` completion과 resolution은 현재 Document 범위를 벗어나지 않는다.
+Workspace symbol 등 Project-wide ID discovery가 source link를 만들 때는 `/canonical/path@id`를 삽입하고, 현재 Document의 child 문맥을 의도한 경우에만 `+relative/path@id`를 삽입한다.
+Discovery 결과를 bare `@id`로 삽입하거나 project-wide resolution fallback으로 해석하지 않는다.
+
+Definition과 references는 core의 resolved target identity를 사용한다.
+Heading의 같은 explicit ID를 가리키는 `#id`와 `@id`는 같은 declaration의 references로 취급하고, 다른 Document에서 재사용한 같은 ID는 포함하지 않는다.
+`textDocument/references`는 client의 `includeDeclaration` 값을 따른다.
+
+Link hover는 resolved Document와 source selector를 표시한다.
+Explicit ID의 canonical source selector는 `@`지만 HTML destination fragment는 `#id`다.
+`id` property hover는 그 값이 case-sensitive한 document-local block identifier임을 설명한다.
+
+모든 completion edit, definition, references, hover와 diagnostic range는 UTF-16 code unit 위치를 사용한다.
+
 `[title]`의 Reference Definition target이 HTTP/HTTPS URL이면 marker 전체를 `textDocument/documentLink`로 제공한다.
-Reference Definition target source 자체의 definition/diagnostics와 nested Maki body의 위치 기반 기능은 지원하지 않는다.
+Reference Definition target source 자체의 definition/diagnostics는 지원하지 않는다.
+원본 source 좌표가 보존되는 list item child block은 explicit-ID definition, references, hover와 diagnostics 대상이다.
+Quote와 quote container에서 별도 source로 다시 파싱한 Maki body의 위치 기반 기능은 지원하지 않는다.
 
 = Editor 연결
 

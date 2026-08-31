@@ -1,4 +1,5 @@
 use crate::{
+    link_target::{DocumentSelector, InnerSelector, NoteLinkTarget},
     maki::{self, NoteLinkResolution},
     parser::{
         self, BlockKind, DateRange, DateStamp, Document, Inline, ListItem, ListKind,
@@ -17,6 +18,7 @@ pub(in crate::html) struct Renderer<'a> {
     context: RenderContext<'a>,
     inline_date_occurrence_index: usize,
     property_date_occurrence_index: usize,
+    block_id_anchors: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -32,6 +34,39 @@ impl<'a> Renderer<'a> {
         }
 
         self.render_project_navigation();
+    }
+
+    fn render_document_navigation(&mut self) {
+        let Some(navigation) = self.context.document_navigation.clone() else {
+            return;
+        };
+        if navigation.is_empty() {
+            return;
+        }
+
+        self.html
+            .push_str("<nav class=\"maki-document-navigation\" aria-label=\"Document hierarchy\">");
+        if let Some(parent) = navigation.parent() {
+            self.html
+                .push_str("<div class=\"maki-document-navigation-parent\">");
+            self.html
+                .push_str("<span class=\"maki-document-navigation-label\">Parent</span>");
+            self.render_anchor(parent.path(), parent.title());
+            self.html.push_str("</div>");
+        }
+        if !navigation.children().is_empty() {
+            self.html
+                .push_str("<div class=\"maki-document-navigation-children\">");
+            self.html
+                .push_str("<span class=\"maki-document-navigation-label\">Subdocuments</span><ul>");
+            for child in navigation.children() {
+                self.html.push_str("<li>");
+                self.render_anchor(child.path(), child.title());
+                self.html.push_str("</li>");
+            }
+            self.html.push_str("</ul></div>");
+        }
+        self.html.push_str("</nav>");
     }
 
     fn render_project_navigation(&mut self) {
@@ -115,6 +150,14 @@ impl<'a> Renderer<'a> {
 
     fn render_note_link_with_title(&mut self, target: &str, title: Option<&str>) {
         let Some(context) = &self.context.project else {
+            let parsed = NoteLinkTarget::parse(target);
+            if parsed.document == DocumentSelector::Current
+                && let Some(InnerSelector::Id(id)) = parsed.inner
+                && !id.is_empty()
+            {
+                self.render_anchor(&format!("#{id}"), title.unwrap_or(target));
+                return;
+            }
             self.render_anchor(target, title.unwrap_or(target));
             return;
         };
@@ -132,6 +175,10 @@ impl<'a> Renderer<'a> {
             }
             NoteLinkResolution::FoundHeading { note, anchor } => {
                 let href = format!("{}#{anchor}", note.web_path());
+                self.render_anchor(&href, title.unwrap_or(target));
+            }
+            NoteLinkResolution::FoundId { note, id } => {
+                let href = format!("{}#{id}", note.web_path());
                 self.render_anchor(&href, title.unwrap_or(target));
             }
             NoteLinkResolution::Broken => {
@@ -389,10 +436,13 @@ impl<'a> Renderer<'a> {
 
         self.html.push_str("<blockquote>");
         self.render_document_date_locations(&parsed.document);
+        let block_id_anchors = self.block_id_anchors;
+        self.block_id_anchors = false;
         self.render_blocks(
             &parsed.document.blocks,
             parsed.document.reference_definitions(),
         );
+        self.block_id_anchors = block_id_anchors;
         self.render_footnotes(&parsed.document);
         self.html.push_str("</blockquote>");
     }
@@ -445,6 +495,18 @@ impl<'a> Renderer<'a> {
         references: &parser::ReferenceDefinitions<'_>,
     ) {
         self.render_property_date_locations(block.properties());
+        if self.block_id_anchors
+            && !matches!(
+                &block.kind,
+                BlockKind::Heading { .. } | BlockKind::ReferenceDefinition { .. }
+            )
+            && let Some(id) = block.property("id").filter(|id| !id.is_empty())
+        {
+            self.html
+                .push_str("<span class=\"maki-block-anchor\" id=\"");
+            self.escape_html_attr_into(id);
+            self.html.push_str("\" aria-hidden=\"true\"></span>");
+        }
         match &block.kind {
             BlockKind::Quote { lines } => {
                 self.render_quote(lines, block.property("mode"), references)
@@ -462,10 +524,12 @@ impl<'a> Renderer<'a> {
                 body,
                 raw_body,
             } => {
-                let anchor = block
-                    .property("id")
-                    .filter(|id| !id.is_empty())
-                    .unwrap_or(raw_body);
+                let anchor = if self.block_id_anchors {
+                    block.property("id").filter(|id| !id.is_empty())
+                } else {
+                    None
+                }
+                .unwrap_or(raw_body);
                 self.render_heading_with_inlines(level + 1, anchor, body);
             }
             kind => self.render_block_kind(kind, references),
@@ -695,6 +759,7 @@ impl<'a> Renderer<'a> {
         if let Some(title) = title {
             self.render_heading(1, title);
         }
+        self.render_document_navigation();
         self.render_blocks(&document.blocks, document.reference_definitions());
         self.render_footnotes(document);
 
@@ -722,6 +787,7 @@ impl<'a> Renderer<'a> {
             context,
             inline_date_occurrence_index: 0,
             property_date_occurrence_index: 0,
+            block_id_anchors: true,
         }
     }
 

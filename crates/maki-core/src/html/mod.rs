@@ -13,7 +13,7 @@ pub use assets::{
     CSS_ASSET_PATH, EXTERNAL_LINKS_SCRIPT_ASSET_PATH, RuntimeAsset, SEARCH_SCRIPT_ASSET_PATH,
     TOC_SCRIPT_ASSET_PATH, runtime_asset_for_request_path, runtime_assets,
 };
-pub use context::{AssetMode, NoteInfo, RenderContext};
+pub use context::{AssetMode, DocumentNavigation, DocumentNavigationItem, NoteInfo, RenderContext};
 pub use pages::{
     render_date_index_page, render_date_period_page, render_diagnostics_page,
     render_meta_index_page, render_not_found_page, render_not_found_page_with_site_header,

@@ -4,7 +4,10 @@ use std::{
     time::Duration,
 };
 
-use crate::parser::{self, BlockKind, Inline};
+use crate::{
+    link_target::DocumentSelector,
+    parser::{self, BlockKind, Inline},
+};
 
 use super::{MAKI_SOURCE_EXTENSION, note::NoteRef, quote_mode_is_raw};
 
@@ -20,6 +23,7 @@ pub(super) struct NoteIndex {
     normalized_paths: BTreeMap<String, Vec<NoteRef>>,
     normalized_stems: BTreeMap<String, Vec<NoteRef>>,
     sibling_normalized_stems: BTreeMap<(PathBuf, String), Vec<NoteRef>>,
+    children_by_parent: BTreeMap<PathBuf, Vec<NoteRef>>,
 }
 
 impl NoteIndex {
@@ -58,7 +62,12 @@ impl NoteIndex {
             .parent()
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();
-        push_candidate(&mut self.sibling_normalized_stems, (parent, stem), note_ref);
+        push_candidate(
+            &mut self.sibling_normalized_stems,
+            (parent.clone(), stem),
+            note_ref,
+        );
+        push_candidate(&mut self.children_by_parent, parent, note_ref);
     }
 
     pub(super) fn exact_path(&self, target: &Path) -> Option<NoteRef> {
@@ -83,6 +92,88 @@ impl NoteIndex {
     pub(super) fn resolve_project_stem(&self, target: &str) -> Option<NoteLinkResolution> {
         resolve_candidates(self.normalized_stems.get(&normalize_key(target)))
     }
+
+    pub(super) fn resolve_document(
+        &self,
+        current: &NoteRef,
+        selector: DocumentSelector<'_>,
+    ) -> NoteLinkResolution {
+        match selector {
+            DocumentSelector::Current => NoteLinkResolution::Found(current.clone()),
+            DocumentSelector::Root(target) => self.resolve_coordinate(target),
+            DocumentSelector::Child(target) => {
+                let target = normalize_document_coordinate(target);
+                if !is_normal_relative_target(target) {
+                    return NoteLinkResolution::Broken;
+                }
+                self.resolve_path(&current.canonical_path().join(Path::new(target)))
+            }
+            DocumentSelector::Legacy(target) => self.resolve_legacy(current, target),
+        }
+    }
+
+    pub(super) fn direct_parent(&self, note_ref: &NoteRef) -> Option<NoteRef> {
+        self.exact_path(note_ref.canonical_path().parent()?)
+    }
+
+    pub(super) fn direct_children(&self, note_ref: &NoteRef) -> &[NoteRef] {
+        self.children_by_parent
+            .get(note_ref.canonical_path())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn resolve_coordinate(&self, target: &str) -> NoteLinkResolution {
+        let target = normalize_document_coordinate(target);
+        if target.is_empty() {
+            return NoteLinkResolution::Broken;
+        }
+        self.resolve_path(Path::new(target))
+    }
+
+    fn resolve_path(&self, target: &Path) -> NoteLinkResolution {
+        self.exact_path(target)
+            .map(NoteLinkResolution::Found)
+            .or_else(|| self.resolve_normalized_path(target))
+            .unwrap_or(NoteLinkResolution::Broken)
+    }
+
+    fn resolve_legacy(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
+        let target = normalize_document_coordinate(target);
+
+        if let Some(note_ref) = self.exact_path(Path::new(target)) {
+            return NoteLinkResolution::Found(note_ref);
+        }
+        if target.contains('/')
+            && let Some(resolution) = self.resolve_normalized_path(Path::new(target))
+        {
+            return resolution;
+        }
+        if !target.contains('/') {
+            if let Some(resolution) = self.resolve_sibling_stem(current, target) {
+                return resolution;
+            }
+            if let Some(resolution) = self.resolve_project_stem(target) {
+                return resolution;
+            }
+        }
+
+        NoteLinkResolution::Broken
+    }
+}
+
+fn normalize_document_coordinate(target: &str) -> &str {
+    target.strip_suffix(MAKI_SOURCE_EXTENSION).unwrap_or(target)
+}
+
+fn is_normal_relative_target(target: &str) -> bool {
+    !target.is_empty()
+        && target
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+        && Path::new(target)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 fn push_candidate<K>(map: &mut BTreeMap<K, Vec<NoteRef>>, key: K, note_ref: &NoteRef)
@@ -196,20 +287,14 @@ fn request_external_link(
     }
 }
 
-pub(super) fn normalize_note_link_target(target: &str) -> String {
-    let target = target.strip_prefix('/').unwrap_or(target);
-    target
-        .strip_suffix(MAKI_SOURCE_EXTENSION)
-        .unwrap_or(target)
-        .to_string()
-}
-
 pub fn note_link_target_for_href(target: &str) -> Option<String> {
     let target = target.trim();
 
     if target.is_empty()
         || target.contains('#')
+        || target.contains('@')
         || target.contains('?')
+        || target.starts_with('+')
         || target.starts_with("//")
         || has_uri_scheme(target)
     {
@@ -225,10 +310,18 @@ pub fn note_link_target_for_href(target: &str) -> Option<String> {
         .extension()
         .and_then(|ext| ext.to_str());
 
-    match extension {
-        Some("maki") | None => Some(normalize_note_link_target(path_part)),
-        Some(_) => None,
+    if !matches!(extension, Some("maki") | None) {
+        return None;
     }
+
+    let normalized = path_part
+        .strip_suffix(MAKI_SOURCE_EXTENSION)
+        .unwrap_or(path_part);
+    Some(if target.starts_with('/') {
+        format!("/{normalized}")
+    } else {
+        normalized.to_string()
+    })
 }
 
 fn resolve_candidates(candidates: Option<&Vec<NoteRef>>) -> Option<NoteLinkResolution> {
@@ -245,6 +338,7 @@ fn resolve_candidates(candidates: Option<&Vec<NoteRef>>) -> Option<NoteLinkResol
 pub enum NoteLinkResolution {
     Found(NoteRef),
     FoundHeading { note: NoteRef, anchor: String },
+    FoundId { note: NoteRef, id: String },
     Broken,
     Ambiguous,
 }

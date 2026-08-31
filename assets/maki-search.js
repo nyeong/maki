@@ -34,8 +34,11 @@
       .slice(0, MAX_RESULTS)
       .map((match) => match.entry);
   };
-  const displayTitle = (entry) =>
-    entry.kind === "heading" ? `#${entry.title}` : entry.title;
+  const displayTitle = (entry) => {
+    if (entry.kind === "heading") return `#${entry.title}`;
+    if (entry.kind === "id") return `@${entry.title}`;
+    return entry.title;
+  };
 
   if (typeof __makiSearchUnitTestExports === "function") {
     __makiSearchUnitTestExports({ displayTitle, findMatches });

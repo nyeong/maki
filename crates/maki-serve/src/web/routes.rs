@@ -9,7 +9,7 @@ use maki_core::{
     DatePeriod, Error as MakiError, HomeMode, Maki, MakiRoute, SearchEntry, SitemapEntry,
     analysis::{
         AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin as AnalysisDateOrigin,
-        LinkResolution, ProjectAnalysis, PropertyDirection,
+        DefinitionTargetKind, LinkResolution, ProjectAnalysis, PropertyDirection,
     },
 };
 
@@ -154,6 +154,25 @@ fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
         }
         json.push(']');
 
+        json.push_str(",\"block_ids\":[");
+        for (block_id_index, block_id) in document.block_ids.iter().enumerate() {
+            if block_id_index > 0 {
+                json.push(',');
+            }
+            json.push_str("{\"id\":");
+            push_json_string(&mut json, &block_id.id);
+            json.push_str(",\"owner_kind\":");
+            push_json_string(&mut json, block_kind_label(block_id.owner_kind));
+            json.push_str(",\"owner_span\":");
+            json.push_str(&source_span_json(block_id.owner_span));
+            json.push_str(",\"declaration_span\":");
+            json.push_str(&source_span_json(block_id.declaration_span));
+            json.push_str(",\"value_span\":");
+            json.push_str(&source_span_json(block_id.value_span));
+            json.push('}');
+        }
+        json.push(']');
+
         json.push_str(",\"headings\":[");
         for (heading_index, heading) in document.headings.iter().enumerate() {
             if heading_index > 0 {
@@ -267,7 +286,15 @@ fn push_link_resolution_json(output: &mut String, resolution: Option<&LinkResolu
             push_json_string(output, &target.path.display().to_string());
             output.push_str(",\"selection_span\":");
             output.push_str(&source_span_json(target.selection_span));
-            if let Some(anchor) = &target.heading_anchor {
+            output.push_str(",\"kind\":");
+            push_json_string(output, definition_target_kind_label(target.kind));
+            if let Some(fragment) = &target.fragment {
+                output.push_str(",\"fragment\":");
+                push_json_string(output, fragment);
+            }
+            if target.kind == DefinitionTargetKind::Heading
+                && let Some(anchor) = &target.fragment
+            {
                 output.push_str(",\"heading_anchor\":");
                 push_json_string(output, anchor);
             }
@@ -277,6 +304,16 @@ fn push_link_resolution_json(output: &mut String, resolution: Option<&LinkResolu
         LinkResolution::AmbiguousNote => output.push_str("{\"status\":\"ambiguous_note\"}"),
         LinkResolution::BrokenHeading => output.push_str("{\"status\":\"broken_heading\"}"),
         LinkResolution::AmbiguousHeading => output.push_str("{\"status\":\"ambiguous_heading\"}"),
+        LinkResolution::BrokenId => output.push_str("{\"status\":\"broken_id\"}"),
+        LinkResolution::AmbiguousId => output.push_str("{\"status\":\"ambiguous_id\"}"),
+    }
+}
+
+fn definition_target_kind_label(kind: DefinitionTargetKind) -> &'static str {
+    match kind {
+        DefinitionTargetKind::Document => "document",
+        DefinitionTargetKind::Heading => "heading",
+        DefinitionTargetKind::Id => "id",
     }
 }
 
@@ -331,10 +368,13 @@ fn analysis_date_kind_label(kind: DateStampKind, origin: &AnalysisDateOrigin) ->
 fn diagnostic_kind_label(kind: AnalysisDiagnosticKind) -> &'static str {
     match kind {
         AnalysisDiagnosticKind::ParseWarning => "parse_warning",
+        AnalysisDiagnosticKind::DuplicateId => "duplicate_id",
         AnalysisDiagnosticKind::BrokenNoteLink => "broken_note_link",
         AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous_note_link",
         AnalysisDiagnosticKind::BrokenHeadingLink => "broken_heading_link",
         AnalysisDiagnosticKind::AmbiguousHeadingLink => "ambiguous_heading_link",
+        AnalysisDiagnosticKind::BrokenIdLink => "broken_id_link",
+        AnalysisDiagnosticKind::AmbiguousIdLink => "ambiguous_id_link",
     }
 }
 fn runtime_asset_response(asset: html::RuntimeAsset) -> http::Response {

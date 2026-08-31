@@ -1,5 +1,5 @@
 --^ title: Core Analysis
---^ updated: [2026-08-27]
+--^ updated: [2026-08-31]
 
 = 개요
 
@@ -26,8 +26,9 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 
 - block occurrence: block kind, 전체 line span, body span 목록
 - heading occurrence: level, title, anchor, marker span, title span
+- block ID occurrence: document-local ID, owner block kind/span, property declaration/value span
 - property occurrence: direction, key/value, line/key/value span
-- note link occurrence: 전체 span, target span, resolution
+- note link occurrence: raw target, 전체 span, target span, resolution
 - reference link occurrence: title, target, marker 전체 span, title span
 - date occurrence: visible inline/property value origin, property key, kind, span
 - diagnostic: source path, span, kind, message
@@ -37,6 +38,7 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - Block span은 첫 source line 시작부터 마지막 source line body 끝까지다. Line ending은 제외한다.
 - Heading marker span은 `=` run만 포함하고 title span은 delimiter space 뒤의 text만 포함한다.
 - Note Link target span은 `[[`, `]]`를 제외한다.
+- Block ID owner span은 addressable block의 source span이고 declaration/value span은 ID를 정의한 property line과 trimmed value다.
 - Reference Link span은 `[`, `]`를 포함하고 title span은 delimiter를 제외한다.
 - Property key/value span은 prefix, `:`, 양끝 whitespace를 제외한다.
 - Parser warning은 문제가 있는 source line span을 우선 사용한다.
@@ -48,24 +50,37 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 `analyze_project(snapshots)`는 editor buffer를 포함한 immutable source snapshot 목록을 분석한다.
 
 두 함수는 filesystem과 network를 읽지 않는다.
-Project 분석은 note/heading link resolution과 semantic diagnostics를 계산한다.
+Project 분석은 document/heading/explicit-ID link resolution과 semantic diagnostics를 계산한다.
 현재 snapshot 전체를 다시 분석한다. API 사용자는 내부 index 전략에 의존하지 않는다.
+
+Note Link target parser는 `/`와 `+` document selector, `#`와 `@` internal selector를 protocol-neutral data로 보존한다.
+Runtime renderer, analysis와 LSP는 이 target parser의 selector 규칙을 공유한다.
+
+Explicit block ID index의 key는 `(DocumentRef, LocalId)`다.
+`LocalId` 비교와 중복 검사는 case-sensitive이며 다른 Document의 같은 문자열은 서로 다른 key다.
+Heading의 explicit ID도 block ID index에 들어간다.
+기존 `#id`와 canonical `@id`는 같은 Heading을 가리키며 LSP references와 HTML fragment처럼 identity가 필요한 소비 계층은 둘을 같은 대상으로 정규화할 수 있다.
 
 = Diagnostics
 
-`AnalysisDiagnostic`은 parser warning과 Project snapshot에서 계산한 note/heading semantic warning을 한 surface로 제공한다.
+`AnalysisDiagnostic`은 parser warning과 Project snapshot에서 계산한 document/heading/explicit-ID semantic warning을 한 surface로 제공한다.
 
 - broken/ambiguous note link
 - broken/ambiguous heading link
+- broken/ambiguous explicit ID link
+- 같은 Document 안의 duplicate explicit ID 또는 다른 Heading fragment와의 충돌
 
 External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이 sans IO surface에 포함하지 않는다.
 기존 project runtime의 diagnostics가 이 문제를 별도로 수집하며, IO adapter가 두 결과를 표시 단계에서 합성할 수 있다.
 
-= 현재 경계
+= Nested Located Boundary
 
-- Nested Maki body는 top-level document와 동일한 located occurrence surface를 제공하지 않는다.
+- List item의 child block은 원본 Document source를 빌리므로 top-level block과 같은 located occurrence 및 explicit ID surface를 제공한다.
+- Quote와 quote container에서 Maki로 다시 파싱하는 body는 원본 Document의 located occurrence surface에 포함하지 않는다.
+  그 body 안의 link, property와 ID에 원본 source span이 필요한 기능은 제공하지 않는다.
 - Reference Definition occurrence는 title과 resolved target을 제공하지만 target source span은 제공하지 않는다.
-- Property occurrence는 방향과 key/value span을 제공하며 owner block relation은 별도 field로 제공하지 않는다.
+- 일반 Property occurrence는 방향과 key/value span을 제공하며 owner block relation은 별도 field로 제공하지 않는다.
+  Addressable `id` property만 Block ID occurrence가 owner block relation을 별도로 제공한다.
 - Date Range의 두 endpoint는 각각의 date occurrence로 노출된다.
 
 이 항목은 API 소비자가 의존해야 할 현재 동작을 설명한다. 변경 제안과 작업 상태는 Forgejo issue에서 관리한다.

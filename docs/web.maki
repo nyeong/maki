@@ -1,4 +1,5 @@
 --^ title: Web Server and Routes
+--^ updated: [2026-08-31]
 
 = Local source serve
 
@@ -47,6 +48,24 @@ Load에 실패하면 기존 state를 계속 제공하고 오류를 기록한다.
 Note identity와 route는 configured source root 기준의 extension 없는 relative path다.
 예를 들어 `docs/notes/today.maki`는 `/notes/today`와 `/notes/today.maki`로 제공된다.
 
+Source Note Link의 `@id` internal selector는 별도 HTTP route가 아니다.
+`[[/notes/today@my-schedule]]`은 rendered HTML에서 `/notes/today#my-schedule` href가 되고 browser fragment가 해당 explicit-ID block을 선택한다.
+Heading selector도 같은 URL fragment 형식을 사용한다.
+
+= Document hierarchy navigation
+
+Project-aware HTML note page는 rendered document title 바로 뒤, authored body 바로 앞에 document hierarchy navigation을 둔다.
+
+- Child page에는 canonical path로 확인되는 direct parent Document link를 표시한다.
+- Parent page에는 direct child Document link 목록을 표시한다.
+- Descendant는 자신의 direct parent를 통해 단계적으로 탐색하며 parent page의 direct child 목록에 한 번만 나타난다.
+- Parent나 child가 없으면 해당 항목을 표시하지 않고 둘 다 없으면 navigation 자체를 표시하지 않는다.
+- Child 목록은 canonical path를 기준으로 결정적으로 정렬한다.
+- Navigation 후보는 현재 publish/access policy를 통과한 Document에서만 만들며 숨겨진 Document를 관계를 통해 노출하지 않는다.
+
+HTML은 이 관계를 `Document hierarchy`라는 accessible navigation으로 표현한다.
+다른 표현 계층은 같은 양방향 탐색 관계를 별도 section, breadcrumb 또는 다른 navigation 형태로 배치할 수 있다.
+
 = Meta route
 
 - `/@/`: meta index
@@ -70,11 +89,16 @@ range-only 날짜는 직접 언급으로 세지 않는다.
 = Search와 JSON
 
 - `/.maki/search?q=<query>`: HTML 검색 page
-- `/.maki/search-index.json`: note, heading과 file 검색 entry
+- `/.maki/search-index.json`: note, heading, explicit ID와 file 검색 entry
 - `/.maki/project-index.json`: `schema_version`이 있는 document analysis JSON
 
 Search box와 HTML page는 같은 search index를 사용한다.
-Project index에는 document, block, heading, note link, property, date occurrence와 diagnostic의 source span이 포함된다.
+Explicit ID search entry는 `@id`로 표시하며 destination은 document-qualified `/<canonical-path>#<id>`다.
+서로 다른 Document에서 같은 ID를 재사용해도 서로 다른 destination으로 index한다.
+같은 Document에서 중복되거나 Heading fragment와 충돌해 ambiguous인 ID는 navigation destination으로 index하지 않는다.
+Search나 다른 Project-wide discovery가 source Note Link를 생성할 때는 `/canonical/path@id`를 사용하고 bare `@id`를 생성하지 않는다.
+
+Project index에는 document, block, block ID owner/declaration, heading, raw note link target와 structured resolution, property, date occurrence와 diagnostic의 source span이 포함된다.
 
 = Runtime asset과 live reload
 

@@ -187,7 +187,7 @@ fn diagnostics_collect_links_inside_strong_inline() {
     assert!(diagnostics.iter().any(|diagnostic| {
         matches!(
             diagnostic.kind(),
-            ProjectDiagnosticKind::BrokenLink { target } if target == "missing-note"
+            ProjectDiagnosticKind::BrokenLink { target } if target == "/missing-note"
         )
     }));
     assert!(diagnostics.iter().any(|diagnostic| {
@@ -207,6 +207,30 @@ fn diagnostics_do_not_report_missing_footnote_definitions() {
     let maki = Maki::load(&project.root).unwrap();
 
     assert!(maki.diagnostics_without_external_links().is_empty());
+}
+
+#[test]
+fn diagnostics_report_every_duplicate_id_declaration_with_its_line() {
+    let project = temp_project("duplicate-id-diagnostics");
+    write_note_with_content(
+        &project,
+        "start.maki",
+        "First\n--^ id: shared\n\nSecond\n--^ id: shared",
+    );
+
+    let maki = Maki::load(&project.root).unwrap();
+    let diagnostics = maki.diagnostics_without_external_links();
+    let duplicate_lines = diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic.kind() {
+            ProjectDiagnosticKind::DuplicateId { id } if id == "shared" => diagnostic.line(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(duplicate_lines, vec![2, 5]);
+    let summary = ProjectDiagnosticSummary::from_diagnostics(&diagnostics);
+    assert_eq!(summary.duplicate_ids(), 2);
 }
 
 #[test]

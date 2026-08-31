@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
 use crate::parser::{self, Block, BlockKind, DateStamp, DateStampKind, Inline};
 use crate::source::{SourceMap, SourceSpan};
 
@@ -17,6 +18,7 @@ pub struct DocumentAnalysis {
     pub title: String,
     pub document_span: SourceSpan,
     pub blocks: Vec<BlockOccurrence>,
+    pub block_ids: Vec<BlockIdOccurrence>,
     pub headings: Vec<HeadingOccurrence>,
     pub note_links: Vec<NoteLinkOccurrence>,
     pub reference_links: Vec<ReferenceLinkOccurrence>,
@@ -51,6 +53,15 @@ pub struct BlockOccurrence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockIdOccurrence {
+    pub id: String,
+    pub owner_kind: AnalysisBlockKind,
+    pub owner_span: SourceSpan,
+    pub declaration_span: SourceSpan,
+    pub value_span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadingOccurrence {
     pub level: usize,
     pub title: String,
@@ -79,6 +90,7 @@ pub struct ReferenceLinkOccurrence {
 #[derive(Default)]
 struct DocumentOccurrences {
     blocks: Vec<BlockOccurrence>,
+    block_ids: Vec<BlockIdOccurrence>,
     headings: Vec<HeadingOccurrence>,
     note_links: Vec<NoteLinkOccurrence>,
     reference_links: Vec<ReferenceLinkOccurrence>,
@@ -126,10 +138,13 @@ pub struct AnalysisDiagnostic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisDiagnosticKind {
     ParseWarning,
+    DuplicateId,
     BrokenNoteLink,
     AmbiguousNoteLink,
     BrokenHeadingLink,
     AmbiguousHeadingLink,
+    BrokenIdLink,
+    AmbiguousIdLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,13 +154,23 @@ pub enum LinkResolution {
     AmbiguousNote,
     BrokenHeading,
     AmbiguousHeading,
+    BrokenId,
+    AmbiguousId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefinitionTargetKind {
+    Document,
+    Heading,
+    Id,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinitionTarget {
     pub path: PathBuf,
     pub selection_span: SourceSpan,
-    pub heading_anchor: Option<String>,
+    pub kind: DefinitionTargetKind,
+    pub fragment: Option<String>,
 }
 
 pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
@@ -185,8 +210,11 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         );
     }
     occurrences.blocks.sort_by_key(|block| block.span);
+    occurrences
+        .block_ids
+        .sort_by_key(|block_id| block_id.value_span);
 
-    let diagnostics = parsed
+    let mut diagnostics = parsed
         .diagnostics
         .iter()
         .map(|diagnostic| AnalysisDiagnostic {
@@ -195,7 +223,13 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
             kind: AnalysisDiagnosticKind::ParseWarning,
             message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    diagnostics.extend(duplicate_id_diagnostics(
+        path,
+        &occurrences.block_ids,
+        &occurrences.headings,
+    ));
+    diagnostics.sort_by_key(|diagnostic| diagnostic.span);
 
     DocumentAnalysis {
         path: path.to_path_buf(),
@@ -203,6 +237,7 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
         title,
         document_span,
         blocks: occurrences.blocks,
+        block_ids: occurrences.block_ids,
         headings: occurrences.headings,
         note_links: occurrences.note_links,
         reference_links: occurrences.reference_links,
@@ -293,7 +328,7 @@ pub fn conventional_property_keys() -> &'static [&'static str] {
 pub fn property_description(key: &str) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
         "title" => Some("Document title."),
-        "id" => Some("Stable heading anchor."),
+        "id" => Some("Case-sensitive, document-local explicit block identifier."),
         "lang" => Some("Code language."),
         "mode" => Some("Quote parsing mode: block, pre, or text."),
         "created" | "date" | "deadline" | "updated" => Some("Date metadata."),
@@ -395,11 +430,26 @@ fn collect_block(
         }
     };
 
-    if let Some(span) = covering_line_span(source_map, &body_spans) {
+    let owner_span = covering_line_span(source_map, &body_spans);
+    if let Some(span) = owner_span {
         occurrences.blocks.push(BlockOccurrence {
             kind,
             span,
             body_spans,
+        });
+    }
+
+    if kind != AnalysisBlockKind::ReferenceDefinition
+        && let Some(id) = block.property("id").filter(|id| !id.is_empty())
+        && let Some(value_span) = slice_span(source, id)
+    {
+        let declaration_span = whole_line_span(source_map, value_span);
+        occurrences.block_ids.push(BlockIdOccurrence {
+            id: id.to_string(),
+            owner_kind: kind,
+            owner_span: owner_span.unwrap_or(declaration_span),
+            declaration_span,
+            value_span,
         });
     }
 }
@@ -533,6 +583,53 @@ fn collect_properties(source: &str, source_map: &SourceMap<'_>) -> Vec<PropertyO
         .collect()
 }
 
+fn duplicate_id_diagnostics(
+    path: &Path,
+    block_ids: &[BlockIdOccurrence],
+    headings: &[HeadingOccurrence],
+) -> Vec<AnalysisDiagnostic> {
+    let mut by_id: BTreeMap<&str, Vec<&BlockIdOccurrence>> = BTreeMap::new();
+    for block_id in block_ids {
+        by_id.entry(&block_id.id).or_default().push(block_id);
+    }
+
+    let mut diagnostics = Vec::new();
+    for (id, occurrences) in &by_id {
+        if occurrences.len() > 1 {
+            diagnostics.extend(occurrences.iter().map(|occurrence| AnalysisDiagnostic {
+                path: path.to_path_buf(),
+                span: occurrence.value_span,
+                kind: AnalysisDiagnosticKind::DuplicateId,
+                message: format!("duplicate id: {id}"),
+            }));
+        }
+    }
+    for block_id in block_ids {
+        if by_id.get(block_id.id.as_str()).map(Vec::len) == Some(1)
+            && headings
+                .iter()
+                .any(|heading| block_id_conflicts_with_heading(block_id, heading))
+        {
+            diagnostics.push(AnalysisDiagnostic {
+                path: path.to_path_buf(),
+                span: block_id.value_span,
+                kind: AnalysisDiagnosticKind::DuplicateId,
+                message: format!("id conflicts with heading anchor: {}", block_id.id),
+            });
+        }
+    }
+    diagnostics
+}
+
+fn block_id_conflicts_with_heading(
+    block_id: &BlockIdOccurrence,
+    heading: &HeadingOccurrence,
+) -> bool {
+    block_id.id == heading.anchor
+        && !(block_id.owner_kind == AnalysisBlockKind::Heading
+            && block_id.owner_span == heading.span)
+}
+
 fn trimmed_subspan(source: &str, absolute_start: usize) -> SourceSpan {
     let leading = source.len() - source.trim_start().len();
     let trimmed = source.trim();
@@ -587,6 +684,7 @@ struct ProjectLookup {
     by_canonical: BTreeMap<String, Vec<PathBuf>>,
     by_stem: BTreeMap<String, Vec<PathBuf>>,
     headings: BTreeMap<PathBuf, Vec<HeadingOccurrence>>,
+    block_ids: BTreeMap<PathBuf, Vec<BlockIdOccurrence>>,
     document_spans: BTreeMap<PathBuf, SourceSpan>,
 }
 
@@ -596,6 +694,7 @@ impl ProjectLookup {
         let mut by_canonical: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         let mut by_stem: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         let mut headings = BTreeMap::new();
+        let mut block_ids = BTreeMap::new();
         let mut document_spans = BTreeMap::new();
 
         for document in documents.values() {
@@ -609,6 +708,7 @@ impl ProjectLookup {
                 .or_default()
                 .push(document.path.clone());
             headings.insert(document.path.clone(), document.headings.clone());
+            block_ids.insert(document.path.clone(), document.block_ids.clone());
             document_spans.insert(document.path.clone(), document.document_span);
         }
 
@@ -617,31 +717,45 @@ impl ProjectLookup {
             by_canonical,
             by_stem,
             headings,
+            block_ids,
             document_spans,
         }
     }
 
     fn resolve(&self, current_path: &Path, target: &str) -> LinkResolution {
-        let (note_target, heading_target) = target
-            .split_once('#')
-            .map_or((target, None), |(note, heading)| (note, Some(heading)));
-        let note = if note_target.is_empty() {
-            current_path.to_path_buf()
-        } else {
-            match self.resolve_note(current_path, note_target) {
-                CandidateResolution::Found(path) => path,
-                CandidateResolution::Broken => return LinkResolution::BrokenNote,
-                CandidateResolution::Ambiguous => return LinkResolution::AmbiguousNote,
-            }
+        let target = NoteLinkTarget::parse(target);
+        let note = match self.resolve_document(current_path, target.document) {
+            CandidateResolution::Found(path) => path,
+            CandidateResolution::Broken => return LinkResolution::BrokenNote,
+            CandidateResolution::Ambiguous => return LinkResolution::AmbiguousNote,
         };
 
-        let Some(heading_target) = heading_target else {
-            return LinkResolution::Found(DefinitionTarget {
+        match target.inner {
+            None => LinkResolution::Found(DefinitionTarget {
                 selection_span: self.document_spans.get(&note).copied().unwrap_or_default(),
                 path: note,
-                heading_anchor: None,
-            });
-        };
+                kind: DefinitionTargetKind::Document,
+                fragment: None,
+            }),
+            Some(InnerSelector::Heading(heading)) => self.resolve_heading(note, heading),
+            Some(InnerSelector::Id(id)) => self.resolve_id(note, id),
+        }
+    }
+
+    fn resolve_document(
+        &self,
+        current_path: &Path,
+        selector: DocumentSelector<'_>,
+    ) -> CandidateResolution {
+        match selector {
+            DocumentSelector::Current => CandidateResolution::Found(current_path.to_path_buf()),
+            DocumentSelector::Legacy(target) => self.resolve_legacy_note(current_path, target),
+            DocumentSelector::Root(target) => self.resolve_coordinate(target),
+            DocumentSelector::Child(target) => self.resolve_child(current_path, target),
+        }
+    }
+
+    fn resolve_heading(&self, note: PathBuf, heading_target: &str) -> LinkResolution {
         if heading_target.is_empty() {
             return LinkResolution::BrokenHeading;
         }
@@ -660,19 +774,73 @@ impl ProjectLookup {
         }
 
         match matches.as_slice() {
+            [heading]
+                if self.block_ids.get(&note).is_some_and(|block_ids| {
+                    block_ids
+                        .iter()
+                        .any(|block_id| block_id_conflicts_with_heading(block_id, heading))
+                }) =>
+            {
+                LinkResolution::AmbiguousHeading
+            }
             [heading] => LinkResolution::Found(DefinitionTarget {
                 path: note,
                 selection_span: heading.title_span,
-                heading_anchor: Some(heading.anchor.clone()),
+                kind: DefinitionTargetKind::Heading,
+                fragment: Some(heading.anchor.clone()),
             }),
             [] => LinkResolution::BrokenHeading,
             _ => LinkResolution::AmbiguousHeading,
         }
     }
 
-    fn resolve_note(&self, current_path: &Path, target: &str) -> CandidateResolution {
-        let normalized = target.strip_prefix('/').unwrap_or(target);
-        let normalized = normalized.strip_suffix(".maki").unwrap_or(normalized);
+    fn resolve_id(&self, note: PathBuf, id_target: &str) -> LinkResolution {
+        if id_target.is_empty() {
+            return LinkResolution::BrokenId;
+        }
+
+        let ids = self.block_ids.get(&note).map(Vec::as_slice).unwrap_or(&[]);
+        let matches = ids
+            .iter()
+            .filter(|block_id| block_id.id == id_target)
+            .collect::<Vec<_>>();
+
+        match matches.as_slice() {
+            [block_id]
+                if self.headings.get(&note).is_some_and(|headings| {
+                    headings
+                        .iter()
+                        .any(|heading| block_id_conflicts_with_heading(block_id, heading))
+                }) =>
+            {
+                LinkResolution::AmbiguousId
+            }
+            [block_id] => LinkResolution::Found(DefinitionTarget {
+                path: note,
+                selection_span: block_id.value_span,
+                kind: DefinitionTargetKind::Id,
+                fragment: Some(block_id.id.clone()),
+            }),
+            [] => LinkResolution::BrokenId,
+            _ => LinkResolution::AmbiguousId,
+        }
+    }
+
+    fn resolve_child(&self, current_path: &Path, target: &str) -> CandidateResolution {
+        let normalized = normalize_document_target(target);
+        if !is_normal_relative_target(normalized) {
+            return CandidateResolution::Broken;
+        }
+
+        let child = Path::new(&canonical_path(current_path)).join(normalized);
+        self.resolve_coordinate(&child.to_string_lossy())
+    }
+
+    fn resolve_coordinate(&self, target: &str) -> CandidateResolution {
+        let normalized = normalize_document_target(target);
+        if normalized.is_empty() {
+            return CandidateResolution::Broken;
+        }
 
         if let Some(path) = self.by_exact.get(normalized) {
             return CandidateResolution::Found(path.clone());
@@ -680,8 +848,21 @@ impl ProjectLookup {
         if let Some(paths) = self.by_canonical.get(&normalize_key(normalized)) {
             return resolve_paths(paths);
         }
+
+        CandidateResolution::Broken
+    }
+
+    fn resolve_legacy_note(&self, current_path: &Path, target: &str) -> CandidateResolution {
+        let normalized = normalize_document_target(target);
+
+        if let Some(path) = self.by_exact.get(normalized) {
+            return CandidateResolution::Found(path.clone());
+        }
         if normalized.contains('/') {
-            return CandidateResolution::Broken;
+            return self
+                .by_canonical
+                .get(&normalize_key(normalized))
+                .map_or(CandidateResolution::Broken, |paths| resolve_paths(paths));
         }
 
         let sibling = current_path
@@ -698,6 +879,20 @@ impl ProjectLookup {
             .get(&normalize_key(normalized))
             .map_or(CandidateResolution::Broken, |paths| resolve_paths(paths))
     }
+}
+
+fn normalize_document_target(target: &str) -> &str {
+    target.strip_suffix(".maki").unwrap_or(target)
+}
+
+fn is_normal_relative_target(target: &str) -> bool {
+    !target.is_empty()
+        && target
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+        && Path::new(target)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -738,6 +933,10 @@ fn diagnostic_for_resolution(
             AnalysisDiagnosticKind::AmbiguousHeadingLink,
             "ambiguous heading link",
         ),
+        LinkResolution::BrokenId => (AnalysisDiagnosticKind::BrokenIdLink, "broken id link"),
+        LinkResolution::AmbiguousId => {
+            (AnalysisDiagnosticKind::AmbiguousIdLink, "ambiguous id link")
+        }
     };
 
     Some((kind, format!("{label}: {target}")))
@@ -812,6 +1011,79 @@ mod tests {
     }
 
     #[test]
+    fn document_analysis_collects_addressable_block_ids_with_owner_spans() {
+        let source = "--^ id: document-id\n\n= Heading\n--^ id: heading-id\n\n- parent\n  nested paragraph\n  --^ id: nested-id\n--^ id: list-id\n\n[target]: https://example.com\n--^ id: hidden-id\n\nempty\n--^ id:\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(
+            analysis
+                .block_ids
+                .iter()
+                .map(|block_id| (block_id.id.as_str(), block_id.owner_kind))
+                .collect::<Vec<_>>(),
+            vec![
+                ("heading-id", AnalysisBlockKind::Heading),
+                ("nested-id", AnalysisBlockKind::Paragraph),
+                ("list-id", AnalysisBlockKind::List),
+            ]
+        );
+
+        let nested = &analysis.block_ids[1];
+        assert_eq!(
+            &source[nested.owner_span.start..nested.owner_span.end],
+            "  nested paragraph"
+        );
+        assert_eq!(
+            &source[nested.declaration_span.start..nested.declaration_span.end],
+            "  --^ id: nested-id"
+        );
+        assert_eq!(
+            &source[nested.value_span.start..nested.value_span.end],
+            "nested-id"
+        );
+    }
+
+    #[test]
+    fn document_analysis_diagnoses_every_exact_duplicate_id_declaration() {
+        let source = "first\n--^ id: same\nsecond\n--^ id: same\nthird\n--^ id: Same\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+        let duplicates = analysis
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::DuplicateId)
+            .collect::<Vec<_>>();
+
+        assert_eq!(duplicates.len(), 2);
+        assert!(duplicates.iter().all(|diagnostic| {
+            &source[diagnostic.span.start..diagnostic.span.end] == "same"
+                && diagnostic.message == "duplicate id: same"
+        }));
+    }
+
+    #[test]
+    fn project_analysis_rejects_explicit_ids_that_collide_with_other_heading_fragments() {
+        let source = "= shared\n\nbody\n--^ id: shared\n\n[[#shared]] [[@shared]]\n";
+        let analysis = analyze_project(&[SourceSnapshot {
+            path: Path::new("index.maki"),
+            source,
+        }]);
+        let document = analysis.document(Path::new("index.maki")).unwrap();
+
+        assert!(document.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == AnalysisDiagnosticKind::DuplicateId
+                && diagnostic.message == "id conflicts with heading anchor: shared"
+        }));
+        assert_eq!(
+            document.note_links[0].resolution,
+            Some(LinkResolution::AmbiguousHeading)
+        );
+        assert_eq!(
+            document.note_links[1].resolution,
+            Some(LinkResolution::AmbiguousId)
+        );
+    }
+
+    #[test]
     fn project_analysis_resolves_notes_before_heading_lookup() {
         let current = "= Current\n[[other#詳細]]\n[[missing#Heading]]\n";
         let other = "= 詳細\n";
@@ -832,7 +1104,7 @@ mod tests {
         assert!(matches!(
             current.note_links[0].resolution,
             Some(LinkResolution::Found(DefinitionTarget {
-                heading_anchor: Some(_),
+                fragment: Some(_),
                 ..
             }))
         ));
@@ -865,5 +1137,181 @@ mod tests {
             Some(LinkResolution::Found(DefinitionTarget { ref path, .. }))
                 if path == Path::new("nix.maki")
         ));
+    }
+
+    #[test]
+    fn project_analysis_resolves_document_and_inner_selector_matrix() {
+        let current = "= Coding\n--^ id: coding-id\n[[#coding-id]]\n[[@coding-id]]\n[[+child#Problems]]\n[[+child@week-1]]\n[[/root#Root]]\n[[/root@root-id]]\n[[@only-other]]\n";
+        let child = "= Problems\ndetails\n--^ id: week-1\n";
+        let root = "= Root\nroot details\n--^ id: root-id\n";
+        let other = "other details\n--^ id: only-other\n";
+        let analysis = analyze_project(&[
+            SourceSnapshot {
+                path: Path::new("plans/future.maki"),
+                source: current,
+            },
+            SourceSnapshot {
+                path: Path::new("plans/future/child.maki"),
+                source: child,
+            },
+            SourceSnapshot {
+                path: Path::new("root.maki"),
+                source: root,
+            },
+            SourceSnapshot {
+                path: Path::new("other.maki"),
+                source: other,
+            },
+        ]);
+        let current = analysis.document(Path::new("plans/future.maki")).unwrap();
+
+        for (index, kind, path, fragment) in [
+            (
+                0,
+                DefinitionTargetKind::Heading,
+                "plans/future.maki",
+                "coding-id",
+            ),
+            (
+                1,
+                DefinitionTargetKind::Id,
+                "plans/future.maki",
+                "coding-id",
+            ),
+            (
+                2,
+                DefinitionTargetKind::Heading,
+                "plans/future/child.maki",
+                "Problems",
+            ),
+            (
+                3,
+                DefinitionTargetKind::Id,
+                "plans/future/child.maki",
+                "week-1",
+            ),
+            (4, DefinitionTargetKind::Heading, "root.maki", "Root"),
+            (5, DefinitionTargetKind::Id, "root.maki", "root-id"),
+        ] {
+            assert!(matches!(
+                &current.note_links[index].resolution,
+                Some(LinkResolution::Found(DefinitionTarget {
+                    path: target_path,
+                    kind: target_kind,
+                    fragment: Some(target_fragment),
+                    ..
+                })) if target_path == Path::new(path)
+                    && *target_kind == kind
+                    && target_fragment == fragment
+            ));
+        }
+        assert_eq!(
+            current.note_links[6].resolution,
+            Some(LinkResolution::BrokenId)
+        );
+    }
+
+    #[test]
+    fn project_analysis_keeps_root_and_child_coordinates_deterministic() {
+        let current = "[[/only]] [[+only]] [[+../root]] [[only]]";
+        let analysis = analyze_project(&[
+            SourceSnapshot {
+                path: Path::new("plans/future.maki"),
+                source: current,
+            },
+            SourceSnapshot {
+                path: Path::new("elsewhere/only.maki"),
+                source: "only",
+            },
+        ]);
+        let current = analysis.document(Path::new("plans/future.maki")).unwrap();
+
+        assert_eq!(
+            current.note_links[0].resolution,
+            Some(LinkResolution::BrokenNote)
+        );
+        assert_eq!(
+            current.note_links[1].resolution,
+            Some(LinkResolution::BrokenNote)
+        );
+        assert_eq!(
+            current.note_links[2].resolution,
+            Some(LinkResolution::BrokenNote)
+        );
+        assert!(matches!(
+            &current.note_links[3].resolution,
+            Some(LinkResolution::Found(DefinitionTarget { path, .. }))
+                if path == Path::new("elsewhere/only.maki")
+        ));
+    }
+
+    #[test]
+    fn project_analysis_resolves_ids_exactly_and_only_inside_the_selected_document() {
+        let current = "local\n--^ id: Shared\n[[@Shared]] [[@shared]] [[/other@Shared]]";
+        let other = "other\n--^ id: Shared\n";
+        let analysis = analyze_project(&[
+            SourceSnapshot {
+                path: Path::new("current.maki"),
+                source: current,
+            },
+            SourceSnapshot {
+                path: Path::new("other.maki"),
+                source: other,
+            },
+        ]);
+        let current = analysis.document(Path::new("current.maki")).unwrap();
+
+        assert!(matches!(
+            &current.note_links[0].resolution,
+            Some(LinkResolution::Found(DefinitionTarget { path, .. }))
+                if path == Path::new("current.maki")
+        ));
+        assert_eq!(
+            current.note_links[1].resolution,
+            Some(LinkResolution::BrokenId)
+        );
+        assert!(matches!(
+            &current.note_links[2].resolution,
+            Some(LinkResolution::Found(DefinitionTarget { path, .. }))
+                if path == Path::new("other.maki")
+        ));
+    }
+
+    #[test]
+    fn project_analysis_reports_ambiguous_and_broken_id_links_with_target_spans() {
+        let source = "first\n--^ id: same\nsecond\n--^ id: same\n[[@same]] [[@missing]]";
+        let analysis = analyze_project(&[SourceSnapshot {
+            path: Path::new("index.maki"),
+            source,
+        }]);
+        let index = analysis.document(Path::new("index.maki")).unwrap();
+
+        assert_eq!(
+            index.note_links[0].resolution,
+            Some(LinkResolution::AmbiguousId)
+        );
+        assert_eq!(
+            index.note_links[1].resolution,
+            Some(LinkResolution::BrokenId)
+        );
+        let semantic = analysis
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                matches!(
+                    diagnostic.kind,
+                    AnalysisDiagnosticKind::AmbiguousIdLink | AnalysisDiagnosticKind::BrokenIdLink
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(semantic.len(), 2);
+        assert_eq!(
+            &source[semantic[0].span.start..semantic[0].span.end],
+            "@same"
+        );
+        assert_eq!(
+            &source[semantic[1].span.start..semantic[1].span.end],
+            "@missing"
+        );
     }
 }
