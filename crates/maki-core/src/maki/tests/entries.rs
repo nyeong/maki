@@ -77,24 +77,28 @@ fn recent_entries_sort_by_modified_descending_then_source_path() {
     let entries = collect_recent_entries(vec![
         NoteMetadataEntry {
             title: "Older".to_string(),
+            title_is_file_stem: false,
             path: "/older".to_string(),
             source_path: "older.maki".to_string(),
             modified: Some(base),
         },
         NoteMetadataEntry {
             title: "Tie B".to_string(),
+            title_is_file_stem: false,
             path: "/tie-b".to_string(),
             source_path: "b.maki".to_string(),
             modified: Some(base + Duration::from_secs(10)),
         },
         NoteMetadataEntry {
             title: "Tie A".to_string(),
+            title_is_file_stem: false,
             path: "/tie-a".to_string(),
             source_path: "a.maki".to_string(),
             modified: Some(base + Duration::from_secs(10)),
         },
         NoteMetadataEntry {
             title: "Unknown".to_string(),
+            title_is_file_stem: false,
             path: "/unknown".to_string(),
             source_path: "unknown.maki".to_string(),
             modified: None,
@@ -106,6 +110,117 @@ fn recent_entries_sort_by_modified_descending_then_source_path() {
         .map(|entry| entry.title())
         .collect::<Vec<_>>();
     assert_eq!(titles, vec!["Tie A", "Tie B", "Older", "Unknown"]);
+}
+
+#[test]
+fn recent_entry_disambiguation_preserves_modified_and_source_path_sorting() {
+    let base = UNIX_EPOCH + Duration::from_secs(1_000);
+    let entries = collect_recent_entries(vec![
+        NoteMetadataEntry {
+            title: "same".to_string(),
+            title_is_file_stem: true,
+            path: "/older".to_string(),
+            source_path: "c/same.maki".to_string(),
+            modified: Some(base),
+        },
+        NoteMetadataEntry {
+            title: "same".to_string(),
+            title_is_file_stem: true,
+            path: "/tie-b".to_string(),
+            source_path: "b/same.maki".to_string(),
+            modified: Some(base + Duration::from_secs(10)),
+        },
+        NoteMetadataEntry {
+            title: "same".to_string(),
+            title_is_file_stem: true,
+            path: "/tie-a".to_string(),
+            source_path: "a/same.maki".to_string(),
+            modified: Some(base + Duration::from_secs(10)),
+        },
+    ]);
+
+    let actual = entries
+        .iter()
+        .map(|entry| (entry.path(), entry.title(), entry.modified()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            ("/tie-a", "a/same", Some(base + Duration::from_secs(10))),
+            ("/tie-b", "b/same", Some(base + Duration::from_secs(10))),
+            ("/older", "c/same", Some(base)),
+        ]
+    );
+}
+
+#[test]
+fn recent_entries_disambiguate_duplicate_file_stems_with_minimal_path_suffixes() {
+    let project = temp_project("recents-duplicate-file-stems");
+    write_note(&project, "notes/코딩 테스트.maki");
+    write_note(&project, "notes/제2차 미래 먹거리 계획/코딩 테스트.maki");
+    write_note(&project, "notes/A/개발 & 계획.maki");
+    write_note(&project, "archive/A/개발 & 계획.maki");
+    write_note(&project, "notes/로드맵.maki");
+    write_note(&project, "notes/A/로드맵.maki");
+    write_note(&project, "notes/B/A/로드맵.maki");
+    write_note(&project, "notes/안내서.v2.maki");
+    write_note(&project, "archive/안내서.v2.maki");
+    write_note(&project, "notes/고유 문서.maki");
+    write_note_with_content(&project, "authored/one.maki", "--^ title: 같은 제목\n");
+    write_note_with_content(&project, "authored/two.maki", "--^ title: 같은 제목\n");
+    write_note_with_content(
+        &project,
+        "authored/같은 제목.maki",
+        "--^ title: 같은 제목\n",
+    );
+    write_note(&project, "fallback/같은 제목.maki");
+
+    let mut maki = Maki::load(&project.root).unwrap();
+    let titles_by_path = maki
+        .recent_entries()
+        .iter()
+        .map(|entry| (entry.path().to_string(), entry.title().to_string()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(titles_by_path["/notes/코딩 테스트"], "코딩 테스트");
+    assert_eq!(
+        titles_by_path["/notes/제2차 미래 먹거리 계획/코딩 테스트"],
+        "제2차 미래 먹거리 계획/코딩 테스트"
+    );
+    assert_eq!(
+        titles_by_path["/notes/A/개발 & 계획"],
+        "notes/A/개발 & 계획"
+    );
+    assert_eq!(
+        titles_by_path["/archive/A/개발 & 계획"],
+        "archive/A/개발 & 계획"
+    );
+    assert_eq!(titles_by_path["/notes/로드맵"], "로드맵");
+    assert_eq!(titles_by_path["/notes/A/로드맵"], "A/로드맵");
+    assert_eq!(titles_by_path["/notes/B/A/로드맵"], "B/A/로드맵");
+    assert_eq!(titles_by_path["/notes/안내서.v2"], "notes/안내서.v2");
+    assert_eq!(titles_by_path["/archive/안내서.v2"], "archive/안내서.v2");
+    assert_eq!(titles_by_path["/notes/고유 문서"], "고유 문서");
+    assert_eq!(titles_by_path["/authored/one"], "같은 제목");
+    assert_eq!(titles_by_path["/authored/two"], "같은 제목");
+    assert_eq!(titles_by_path["/authored/같은 제목"], "같은 제목");
+    assert_eq!(titles_by_path["/fallback/같은 제목"], "같은 제목");
+    assert!(
+        titles_by_path
+            .values()
+            .all(|title| !title.ends_with(".maki"))
+    );
+
+    maki.apply_recent_modified_times(&std::collections::BTreeMap::from([(
+        PathBuf::from("notes/코딩 테스트.maki"),
+        UNIX_EPOCH + Duration::from_secs(1_000),
+    )]));
+    let titles_after_modified_times = maki
+        .recent_entries()
+        .iter()
+        .map(|entry| (entry.path().to_string(), entry.title().to_string()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(titles_after_modified_times, titles_by_path);
 }
 
 #[test]

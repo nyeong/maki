@@ -937,6 +937,64 @@ fn test_recents_page_lists_recent_notes() {
 }
 
 #[test]
+fn test_recents_page_disambiguates_duplicate_file_stems() {
+    let root = std::env::temp_dir().join(format!("maki-recents-duplicates-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("notes/제2차 미래 먹거리 계획")).unwrap();
+    fs::create_dir_all(root.join("notes/A")).unwrap();
+    fs::create_dir_all(root.join("archive/A")).unwrap();
+    fs::create_dir_all(root.join("notes/A[1]")).unwrap();
+    fs::create_dir_all(root.join("notes/A1")).unwrap();
+    fs::create_dir_all(root.join("notes/^A")).unwrap();
+    fs::create_dir_all(root.join("notes/Link ^A")).unwrap();
+    fs::write(root.join("notes/코딩 테스트.maki"), "").unwrap();
+    fs::write(
+        root.join("notes/제2차 미래 먹거리 계획/코딩 테스트.maki"),
+        "",
+    )
+    .unwrap();
+    fs::write(root.join("notes/A/개발 <검토> \"계획\" & 일정.maki"), "").unwrap();
+    fs::write(root.join("archive/A/개발 <검토> \"계획\" & 일정.maki"), "").unwrap();
+    fs::write(root.join("notes/A[1]/구분.maki"), "").unwrap();
+    fs::write(root.join("notes/A1/구분.maki"), "").unwrap();
+    fs::write(root.join("notes/^A/머리.maki"), "").unwrap();
+    fs::write(root.join("notes/Link ^A/머리.maki"), "").unwrap();
+    fs::write(root.join("authored.maki"), "--^ title: [Draft]\n").unwrap();
+    fs::write(root.join("(초안)\\복사.maki"), "").unwrap();
+    fs::write(root.join("끝공백 .maki"), "").unwrap();
+    fs::write(root.join("탭\t문서.maki"), "").unwrap();
+
+    let maki = Maki::load(&root).unwrap();
+    let state = AppState::new(maki);
+    let response = handle_request(&state, &http::Request::get("/@/recents")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::Ok);
+    assert!(body.contains("<a href=\"/notes/코딩 테스트\">코딩 테스트</a>"));
+    assert!(body.contains(
+        "<a href=\"/notes/제2차 미래 먹거리 계획/코딩 테스트\">제2차 미래 먹거리 계획/코딩 테스트</a>"
+    ));
+    assert!(body.contains(
+        "<a href=\"/notes/A/개발 &lt;검토&gt; &quot;계획&quot; &amp; 일정\">notes/A/개발 &lt;검토&gt; &quot;계획&quot; &amp; 일정</a>"
+    ));
+    assert!(body.contains(
+        "<a href=\"/archive/A/개발 &lt;검토&gt; &quot;계획&quot; &amp; 일정\">archive/A/개발 &lt;검토&gt; &quot;계획&quot; &amp; 일정</a>"
+    ));
+    assert!(body.contains("<a href=\"/notes/A[1]/구분\">A[1]/구분</a>"));
+    assert!(body.contains("<a href=\"/notes/A1/구분\">A1/구분</a>"));
+    assert!(body.contains("<a href=\"/notes/^A/머리\">^A/머리</a>"));
+    assert!(body.contains("<a href=\"/notes/Link ^A/머리\">Link ^A/머리</a>"));
+    assert!(body.contains("<a href=\"/authored\">Draft</a>"));
+    assert!(body.contains("<a href=\"/%28초안%29%5C복사\">(초안)\\복사</a>"));
+    assert!(body.contains("<a href=\"/끝공백\">끝공백 </a>"));
+    assert!(body.contains("KST 탭\t문서</li>"));
+    assert!(!body.contains("href=\"/탭\t문서\""));
+    assert!(!body.contains("코딩 테스트.maki</a>"));
+    assert!(!body.contains("일정.maki</a>"));
+}
+
+#[test]
 fn test_dates_pages_list_dates_and_backlinks() {
     let root = std::env::temp_dir().join(format!("maki-dates-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);

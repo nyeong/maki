@@ -4,8 +4,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::{
     analysis::{
-        self, AnalysisBlockKind, BlockIdOccurrence, HeadingOccurrence, ProjectAnalysis,
-        SourceSnapshot,
+        self, AnalysisBlockKind, BlockIdOccurrence, DocumentTitleOrigin, HeadingOccurrence,
+        ProjectAnalysis, SourceSnapshot,
     },
     html::{self, AssetMode, DocumentNavigation, DocumentNavigationItem, NoteInfo, RenderContext},
     link_target::{InnerSelector, NoteLinkTarget},
@@ -46,6 +46,7 @@ pub(super) struct ProjectSnapshot {
     sources: BTreeMap<PathBuf, String>,
     read_failures: Vec<PathBuf>,
     analysis: ProjectAnalysis,
+    title_origins: BTreeMap<PathBuf, DocumentTitleOrigin>,
 }
 
 impl ProjectSnapshot {
@@ -57,12 +58,13 @@ impl ProjectSnapshot {
                 source,
             })
             .collect::<Vec<_>>();
-        let analysis = analysis::analyze_project(&snapshots);
+        let (analysis, title_origins) = analysis::analyze_project_with_title_origins(&snapshots);
 
         Self {
             sources,
             read_failures,
             analysis,
+            title_origins,
         }
     }
 
@@ -78,6 +80,13 @@ impl ProjectSnapshot {
         &self.analysis
     }
 
+    fn title_origin(&self, path: &Path) -> DocumentTitleOrigin {
+        self.title_origins
+            .get(path)
+            .copied()
+            .unwrap_or(DocumentTitleOrigin::FileStem)
+    }
+
     fn first_read_failure(&self) -> Option<&Path> {
         self.read_failures.first().map(PathBuf::as_path)
     }
@@ -89,6 +98,16 @@ fn snapshot_note_title(snapshot: &ProjectSnapshot, note: &Note) -> String {
         .document(note.source_path())
         .map(|document| document.title.clone())
         .unwrap_or_else(|| note.file_stem().to_string())
+}
+
+fn snapshot_note_metadata_entry(snapshot: &ProjectSnapshot, note: &Note) -> NoteMetadataEntry {
+    let Some(document) = snapshot.analysis().document(note.source_path()) else {
+        return note.metadata_entry_with_title(note.file_stem().to_string(), true);
+    };
+
+    let title_is_file_stem =
+        snapshot.title_origin(note.source_path()) == DocumentTitleOrigin::FileStem;
+    note.metadata_entry_with_title(document.title.clone(), title_is_file_stem)
 }
 
 #[derive(Debug, PartialEq)]
@@ -279,10 +298,7 @@ impl Maki {
         let note_metadata_entries = self
             .notes
             .values()
-            .map(|note| {
-                let title = snapshot_note_title(&self.snapshot, note);
-                note.metadata_entry_with_title(title)
-            })
+            .map(|note| snapshot_note_metadata_entry(&self.snapshot, note))
             .collect();
         self.recent_entries = collect_recent_entries(note_metadata_entries);
     }
@@ -403,10 +419,7 @@ impl Maki {
         let external_links = collect_external_links(snapshot.sources());
         let note_metadata_entries = notes
             .values()
-            .map(|note| {
-                let title = snapshot_note_title(&snapshot, note);
-                note.metadata_entry_with_title(title)
-            })
+            .map(|note| snapshot_note_metadata_entry(&snapshot, note))
             .collect::<Vec<_>>();
         let search_entries =
             collect_search_entries(&notes, &note_metadata_entries, snapshot.analysis());
