@@ -105,9 +105,16 @@ fn snapshot_note_metadata_entry(snapshot: &ProjectSnapshot, note: &Note) -> Note
         return note.metadata_entry_with_title(note.file_stem().to_string(), true);
     };
 
-    let title_is_file_stem =
-        snapshot.title_origin(note.source_path()) == DocumentTitleOrigin::FileStem;
-    note.metadata_entry_with_title(document.title.clone(), title_is_file_stem)
+    let title_matches_file_stem = note
+        .source_path()
+        .file_stem()
+        .and_then(|file_stem| file_stem.to_str())
+        == Some(document.title.as_str());
+    // Exact authored file-stem titles use the same lossless Recents label policy as fallbacks.
+    let uses_path_label = snapshot.title_origin(note.source_path())
+        == DocumentTitleOrigin::FileStem
+        || title_matches_file_stem;
+    note.metadata_entry_with_title(document.title.clone(), uses_path_label)
 }
 
 #[derive(Debug, PartialEq)]

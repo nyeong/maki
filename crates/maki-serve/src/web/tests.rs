@@ -947,19 +947,24 @@ fn test_recents_page_disambiguates_duplicate_file_stems() {
     fs::create_dir_all(root.join("notes/A1")).unwrap();
     fs::create_dir_all(root.join("notes/^A")).unwrap();
     fs::create_dir_all(root.join("notes/Link ^A")).unwrap();
-    fs::write(root.join("notes/코딩 테스트.maki"), "").unwrap();
+    fs::write(
+        root.join("notes/코딩 테스트.maki"),
+        "--^ title: 코딩 테스트\n",
+    )
+    .unwrap();
     fs::write(
         root.join("notes/제2차 미래 먹거리 계획/코딩 테스트.maki"),
-        "",
+        "--^ title: 코딩 테스트\n",
     )
     .unwrap();
     fs::write(root.join("notes/A/개발 <검토> \"계획\" & 일정.maki"), "").unwrap();
     fs::write(root.join("archive/A/개발 <검토> \"계획\" & 일정.maki"), "").unwrap();
-    fs::write(root.join("notes/A[1]/구분.maki"), "").unwrap();
-    fs::write(root.join("notes/A1/구분.maki"), "").unwrap();
+    fs::write(root.join("notes/A[1]/구분.maki"), "--^ title: 구분\n").unwrap();
+    fs::write(root.join("notes/A1/구분.maki"), "--^ title: 구분\n").unwrap();
     fs::write(root.join("notes/^A/머리.maki"), "").unwrap();
     fs::write(root.join("notes/Link ^A/머리.maki"), "").unwrap();
     fs::write(root.join("authored.maki"), "--^ title: [Draft]\n").unwrap();
+    fs::write(root.join("[Unique].maki"), "--^ title: [Unique]\n").unwrap();
     fs::write(root.join("(초안)\\복사.maki"), "").unwrap();
     fs::write(root.join("끝공백 .maki"), "").unwrap();
     fs::write(root.join("탭\t문서.maki"), "").unwrap();
@@ -986,6 +991,7 @@ fn test_recents_page_disambiguates_duplicate_file_stems() {
     assert!(body.contains("<a href=\"/notes/^A/머리\">^A/머리</a>"));
     assert!(body.contains("<a href=\"/notes/Link ^A/머리\">Link ^A/머리</a>"));
     assert!(body.contains("<a href=\"/authored\">Draft</a>"));
+    assert!(body.contains("<a href=\"/[Unique]\">[Unique]</a>"));
     assert!(body.contains("<a href=\"/%28초안%29%5C복사\">(초안)\\복사</a>"));
     assert!(body.contains("<a href=\"/끝공백\">끝공백 </a>"));
     assert!(body.contains("KST 탭\t문서</li>"));

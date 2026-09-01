@@ -160,7 +160,7 @@ pub fn render_recents_page(
             push_maki_direct_link_target(&mut href, entry.path());
             let href = href.trim();
             let authored_title;
-            let title = if entry.title_is_file_stem() {
+            let title = if entry.uses_path_label() {
                 entry.title()
             } else {
                 authored_title = direct_link_safe_title(entry.title());

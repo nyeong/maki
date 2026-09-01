@@ -47,7 +47,7 @@ pub struct SitemapEntry {
 #[derive(Clone)]
 pub(super) struct NoteMetadataEntry {
     pub(super) title: String,
-    pub(super) title_is_file_stem: bool,
+    pub(super) uses_path_label: bool,
     pub(super) path: String,
     pub(super) source_path: String,
     pub(super) modified: Option<SystemTime>,
@@ -56,7 +56,7 @@ pub(super) struct NoteMetadataEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentEntry {
     title: String,
-    title_is_file_stem: bool,
+    uses_path_label: bool,
     path: String,
     modified: Option<SystemTime>,
 }
@@ -123,8 +123,8 @@ impl RecentEntry {
         &self.title
     }
 
-    pub(crate) fn title_is_file_stem(&self) -> bool {
-        self.title_is_file_stem
+    pub(crate) fn uses_path_label(&self) -> bool {
+        self.uses_path_label
     }
 
     pub fn path(&self) -> &str {
@@ -160,11 +160,11 @@ impl Note {
     pub(super) fn metadata_entry_with_title(
         &self,
         title: String,
-        title_is_file_stem: bool,
+        uses_path_label: bool,
     ) -> NoteMetadataEntry {
         NoteMetadataEntry {
             title,
-            title_is_file_stem,
+            uses_path_label,
             path: self.note_ref().web_path(),
             source_path: self.source_path().display().to_string(),
             modified: self.modified,
@@ -236,7 +236,7 @@ impl NoteMetadataEntry {
     pub(super) fn into_recent_entry(self) -> RecentEntry {
         RecentEntry {
             title: self.title,
-            title_is_file_stem: self.title_is_file_stem,
+            uses_path_label: self.uses_path_label,
             path: self.path,
             modified: self.modified,
         }
@@ -275,7 +275,7 @@ pub(super) fn collect_recent_entries(mut entries: Vec<NoteMetadataEntry>) -> Vec
 fn disambiguate_recent_file_stem_titles(entries: &mut [NoteMetadataEntry]) {
     let mut entries_by_title = BTreeMap::<String, Vec<usize>>::new();
     for (index, entry) in entries.iter().enumerate() {
-        if entry.title_is_file_stem {
+        if entry.uses_path_label {
             entries_by_title
                 .entry(entry.title.clone())
                 .or_default()
