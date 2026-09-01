@@ -77,28 +77,28 @@ fn recent_entries_sort_by_modified_descending_then_source_path() {
     let entries = collect_recent_entries(vec![
         NoteMetadataEntry {
             title: "Older".to_string(),
-            title_is_file_stem: false,
+            uses_path_label: false,
             path: "/older".to_string(),
             source_path: "older.maki".to_string(),
             modified: Some(base),
         },
         NoteMetadataEntry {
             title: "Tie B".to_string(),
-            title_is_file_stem: false,
+            uses_path_label: false,
             path: "/tie-b".to_string(),
             source_path: "b.maki".to_string(),
             modified: Some(base + Duration::from_secs(10)),
         },
         NoteMetadataEntry {
             title: "Tie A".to_string(),
-            title_is_file_stem: false,
+            uses_path_label: false,
             path: "/tie-a".to_string(),
             source_path: "a.maki".to_string(),
             modified: Some(base + Duration::from_secs(10)),
         },
         NoteMetadataEntry {
             title: "Unknown".to_string(),
-            title_is_file_stem: false,
+            uses_path_label: false,
             path: "/unknown".to_string(),
             source_path: "unknown.maki".to_string(),
             modified: None,
@@ -118,21 +118,21 @@ fn recent_entry_disambiguation_preserves_modified_and_source_path_sorting() {
     let entries = collect_recent_entries(vec![
         NoteMetadataEntry {
             title: "same".to_string(),
-            title_is_file_stem: true,
+            uses_path_label: true,
             path: "/older".to_string(),
             source_path: "c/same.maki".to_string(),
             modified: Some(base),
         },
         NoteMetadataEntry {
             title: "same".to_string(),
-            title_is_file_stem: true,
+            uses_path_label: true,
             path: "/tie-b".to_string(),
             source_path: "b/same.maki".to_string(),
             modified: Some(base + Duration::from_secs(10)),
         },
         NoteMetadataEntry {
             title: "same".to_string(),
-            title_is_file_stem: true,
+            uses_path_label: true,
             path: "/tie-a".to_string(),
             source_path: "a/same.maki".to_string(),
             modified: Some(base + Duration::from_secs(10)),
@@ -141,14 +141,31 @@ fn recent_entry_disambiguation_preserves_modified_and_source_path_sorting() {
 
     let actual = entries
         .iter()
-        .map(|entry| (entry.path(), entry.title(), entry.modified()))
+        .map(|entry| {
+            (
+                entry.path(),
+                entry.title(),
+                entry.modified(),
+                entry.uses_path_label(),
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         actual,
         vec![
-            ("/tie-a", "a/same", Some(base + Duration::from_secs(10))),
-            ("/tie-b", "b/same", Some(base + Duration::from_secs(10))),
-            ("/older", "c/same", Some(base)),
+            (
+                "/tie-a",
+                "a/same",
+                Some(base + Duration::from_secs(10)),
+                true,
+            ),
+            (
+                "/tie-b",
+                "b/same",
+                Some(base + Duration::from_secs(10)),
+                true,
+            ),
+            ("/older", "c/same", Some(base), true),
         ]
     );
 }
@@ -156,8 +173,16 @@ fn recent_entry_disambiguation_preserves_modified_and_source_path_sorting() {
 #[test]
 fn recent_entries_disambiguate_duplicate_file_stems_with_minimal_path_suffixes() {
     let project = temp_project("recents-duplicate-file-stems");
-    write_note(&project, "notes/코딩 테스트.maki");
-    write_note(&project, "notes/제2차 미래 먹거리 계획/코딩 테스트.maki");
+    write_note_with_content(
+        &project,
+        "notes/코딩 테스트.maki",
+        "--^ title: 코딩 테스트\n",
+    );
+    write_note_with_content(
+        &project,
+        "notes/제2차 미래 먹거리 계획/코딩 테스트.maki",
+        "--^ title: 코딩 테스트\n",
+    );
     write_note(&project, "notes/A/개발 & 계획.maki");
     write_note(&project, "archive/A/개발 & 계획.maki");
     write_note(&project, "notes/로드맵.maki");
@@ -203,8 +228,8 @@ fn recent_entries_disambiguate_duplicate_file_stems_with_minimal_path_suffixes()
     assert_eq!(titles_by_path["/notes/고유 문서"], "고유 문서");
     assert_eq!(titles_by_path["/authored/one"], "같은 제목");
     assert_eq!(titles_by_path["/authored/two"], "같은 제목");
-    assert_eq!(titles_by_path["/authored/같은 제목"], "같은 제목");
-    assert_eq!(titles_by_path["/fallback/같은 제목"], "같은 제목");
+    assert_eq!(titles_by_path["/authored/같은 제목"], "authored/같은 제목");
+    assert_eq!(titles_by_path["/fallback/같은 제목"], "fallback/같은 제목");
     assert!(
         titles_by_path
             .values()
