@@ -21,7 +21,6 @@ use super::{
 };
 
 const META_TEMPLATE: &str = include_str!("../../../../templates/meta.maki");
-const RECENTS_TEMPLATE: &str = include_str!("../../../../templates/recents.maki");
 const DATES_INDEX_TEMPLATE: &str = include_str!("../../../../templates/dates-index.maki");
 const DIAGNOSTICS_TEMPLATE: &str = include_str!("../../../../templates/diagnostics.maki");
 const SITEMAP_TEMPLATE: &str = include_str!("../../../../templates/sitemap.maki");
@@ -144,10 +143,44 @@ pub fn render_recents_page(
     site_title: Option<&str>,
     site_header: bool,
 ) -> String {
-    let body = recents_page_body_source(entries);
-    let source = render_maki_template(RECENTS_TEMPLATE, &[("{{body}}", &body)]);
+    let mut renderer = Renderer::new_with_context(
+        RenderContext::default()
+            .with_asset_mode(asset_mode)
+            .with_site_title(site_title)
+            .with_site_header(site_header),
+    );
+    renderer.begin_project_page("Recents");
 
-    render_project_maki_source(&source, asset_mode, site_title, site_header)
+    if entries.is_empty() {
+        renderer.push_raw("<p>No notes.</p>");
+    } else {
+        renderer.push_raw("<ul>");
+        for entry in entries {
+            let mut href = String::new();
+            push_maki_direct_link_target(&mut href, entry.path());
+            let href = href.trim();
+            let authored_title;
+            let title = if entry.title_is_file_stem() {
+                entry.title()
+            } else {
+                authored_title = direct_link_safe_title(entry.title());
+                &authored_title
+            };
+            renderer.push_raw("<li>");
+            renderer.escape_html_into(&modified_time_kst_label(entry.modified()));
+            renderer.push_raw(" ");
+            if maki::is_safe_direct_href(href) {
+                renderer.render_anchor(href, title);
+            } else {
+                renderer.escape_html_into(title);
+            }
+            renderer.push_raw("</li>");
+        }
+        renderer.push_raw("</ul>");
+    }
+
+    renderer.push_raw("</body></html>");
+    renderer.into_html()
 }
 
 pub fn render_date_index_page(
@@ -248,26 +281,6 @@ fn render_project_maki_source(
             .with_site_title(site_title)
             .with_site_header(site_header),
     )
-}
-
-fn recents_page_body_source(entries: &[RecentEntry]) -> String {
-    let mut source = String::new();
-
-    if entries.is_empty() {
-        source.push_str("No notes.\n");
-        return source;
-    }
-
-    for entry in entries {
-        source.push_str("- ");
-        let modified = modified_time_kst_label(entry.modified());
-        push_maki_single_line(&mut source, &modified);
-        source.push(' ');
-        push_maki_link(&mut source, entry.title(), entry.path());
-        source.push('\n');
-    }
-
-    source
 }
 
 fn sitemap_page_body_source(entries: &[SitemapEntry]) -> String {

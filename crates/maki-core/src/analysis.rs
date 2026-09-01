@@ -11,6 +11,12 @@ pub struct SourceSnapshot<'a> {
     pub source: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DocumentTitleOrigin {
+    Authored,
+    FileStem,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentAnalysis {
     pub path: PathBuf,
@@ -372,19 +378,28 @@ pub struct DefinitionTarget {
 }
 
 pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
+    analyze_document_with_title_origin(path, source).0
+}
+
+fn analyze_document_with_title_origin(
+    path: &Path,
+    source: &str,
+) -> (DocumentAnalysis, DocumentTitleOrigin) {
     let parsed = parser::parse(source);
     let source_map = SourceMap::new(source);
     let properties = collect_properties(source, &source_map);
-    let document_span = parsed
-        .document
-        .title()
-        .and_then(|title| slice_span(source, title))
-        .unwrap_or_default();
-    let title = parsed
-        .document
-        .title()
-        .map(str::to_owned)
-        .unwrap_or_else(|| file_stem(path));
+    let (title, title_origin, document_span) = match parsed.document.title() {
+        Some(title) => (
+            title.to_owned(),
+            DocumentTitleOrigin::Authored,
+            slice_span(source, title).unwrap_or_default(),
+        ),
+        None => (
+            file_stem(path),
+            DocumentTitleOrigin::FileStem,
+            SourceSpan::default(),
+        ),
+    };
     let mut occurrences = DocumentOccurrences::default();
 
     collect_reference_definitions(
@@ -460,31 +475,41 @@ pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
     );
     diagnostics.sort_by_key(|diagnostic| diagnostic.span);
 
-    DocumentAnalysis {
-        path: path.to_path_buf(),
-        canonical_path: canonical_path(path),
-        title,
-        document_span,
-        blocks: occurrences.blocks,
-        block_ids: occurrences.block_ids,
-        headings: occurrences.headings,
-        note_links: occurrences.note_links,
-        reference_graph,
-        reference_links: occurrences.reference_links,
-        properties,
-        dates: occurrences.dates,
-        diagnostics,
-    }
+    (
+        DocumentAnalysis {
+            path: path.to_path_buf(),
+            canonical_path: canonical_path(path),
+            title,
+            document_span,
+            blocks: occurrences.blocks,
+            block_ids: occurrences.block_ids,
+            headings: occurrences.headings,
+            note_links: occurrences.note_links,
+            reference_graph,
+            reference_links: occurrences.reference_links,
+            properties,
+            dates: occurrences.dates,
+            diagnostics,
+        },
+        title_origin,
+    )
 }
 
 pub fn analyze_project(snapshots: &[SourceSnapshot<'_>]) -> ProjectAnalysis {
-    let mut documents = snapshots
-        .iter()
-        .map(|snapshot| {
-            let document = analyze_document(snapshot.path, snapshot.source);
-            (document.path.clone(), document)
-        })
-        .collect::<BTreeMap<_, _>>();
+    analyze_project_with_title_origins(snapshots).0
+}
+
+pub(crate) fn analyze_project_with_title_origins(
+    snapshots: &[SourceSnapshot<'_>],
+) -> (ProjectAnalysis, BTreeMap<PathBuf, DocumentTitleOrigin>) {
+    let mut documents = BTreeMap::new();
+    let mut title_origins = BTreeMap::new();
+    for snapshot in snapshots {
+        let (document, title_origin) =
+            analyze_document_with_title_origin(snapshot.path, snapshot.source);
+        title_origins.insert(document.path.clone(), title_origin);
+        documents.insert(document.path.clone(), document);
+    }
     let lookup = ProjectLookup::new(&documents);
     let mut semantic_diagnostics = Vec::new();
 
@@ -517,10 +542,13 @@ pub fn analyze_project(snapshots: &[SourceSnapshot<'_>]) -> ProjectAnalysis {
             .then_with(|| left.span.cmp(&right.span))
     });
 
-    ProjectAnalysis {
-        documents,
-        diagnostics,
-    }
+    (
+        ProjectAnalysis {
+            documents,
+            diagnostics,
+        },
+        title_origins,
+    )
 }
 
 impl ProjectAnalysis {
@@ -1361,9 +1389,11 @@ mod tests {
     #[test]
     fn document_analysis_locates_headings_properties_links_and_dates() {
         let source = "--^ title: 문서\n\n= 소개\n--^ id: intro\n[[다른문서#詳細]] [2026-08-25]\n";
-        let analysis = analyze_document(Path::new("docs/current.maki"), source);
+        let (analysis, title_origin) =
+            analyze_document_with_title_origin(Path::new("docs/current.maki"), source);
 
         assert_eq!(analysis.title, "문서");
+        assert_eq!(title_origin, DocumentTitleOrigin::Authored);
         assert_eq!(analysis.headings[0].anchor, "intro");
         assert_eq!(
             &source[analysis.headings[0].title_span.start..analysis.headings[0].title_span.end],
@@ -1372,6 +1402,15 @@ mod tests {
         assert_eq!(analysis.properties.len(), 2);
         assert_eq!(analysis.note_links[0].target, "다른문서#詳細");
         assert_eq!(analysis.dates[0].origin, DateOrigin::VisibleInline);
+    }
+
+    #[test]
+    fn document_analysis_marks_file_stem_fallback_titles() {
+        let (analysis, title_origin) =
+            analyze_document_with_title_origin(Path::new("docs/current.maki"), "body");
+
+        assert_eq!(analysis.title, "current");
+        assert_eq!(title_origin, DocumentTitleOrigin::FileStem);
     }
 
     #[test]
