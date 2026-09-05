@@ -873,7 +873,7 @@ pre code {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.4rem 0.55rem 0.4rem 0.85rem;
+  padding: 0.2rem 0.55rem 0.2rem 0.85rem;
   border-bottom: 1px solid var(--code-border);
   background: var(--code-toolbar-bg);
 }
@@ -1277,7 +1277,7 @@ th {
 
   .maki-code-toolbar {
     gap: 0.5rem;
-    padding: 0.4rem 0.5rem 0.4rem 0.65rem;
+    padding: 0.2rem 0.5rem 0.2rem 0.65rem;
   }
 
   .maki-code-language {
