@@ -116,6 +116,28 @@ fn test_rendered_note_includes_live_reload_script() {
     );
     assert!(body.contains("</script></body>"));
     assert!(!body.contains("<style>:root"));
+    assert!(!body.contains("/.maki/assets/vendor/highlight.js/highlight.min.js"));
+    assert!(!body.contains("/.maki/assets/maki-code-blocks.js"));
+}
+
+#[test]
+fn test_rendered_code_note_loads_code_block_assets_once_in_dependency_order() {
+    let maki = Maki::load(repo_path("docs")).unwrap();
+    let state = AppState::new(maki);
+    let response = handle_request(&state, &http::Request::get("/use-cases")).unwrap();
+    let body = String::from_utf8(response.body().to_vec()).unwrap();
+    let highlight = "<script src=\"/.maki/assets/vendor/highlight.js/highlight.min.js\"></script>";
+    let controller = "<script src=\"/.maki/assets/maki-code-blocks.js\"></script>";
+
+    assert!(body.contains("data-maki-code-block"));
+    assert_eq!(body.matches(highlight).count(), 1);
+    assert_eq!(body.matches(controller).count(), 1);
+    assert!(body.find(highlight).unwrap() < body.find(controller).unwrap());
+    assert!(
+        body.find("<script src=\"/.maki/assets/maki-toc.js\"></script>")
+            .unwrap()
+            < body.find(highlight).unwrap()
+    );
 }
 
 #[test]
@@ -729,6 +751,32 @@ fn test_runtime_asset_routes_return_source_assets() {
     );
     assert_eq!(toc.get_header("Cache-Control"), Some("no-cache"));
     assert!(toc_body.contains("HEADING_SELECTOR"));
+
+    let highlight = handle_request(
+        &state,
+        &http::Request::get("/.maki/assets/vendor/highlight.js/highlight.min.js"),
+    )
+    .unwrap();
+    let highlight_body = String::from_utf8(highlight.body().to_vec()).unwrap();
+    assert_eq!(
+        highlight.get_header("Content-Type"),
+        Some("application/javascript; charset=utf-8")
+    );
+    assert_eq!(highlight.get_header("Cache-Control"), Some("no-cache"));
+    assert!(highlight_body.contains("hljs"));
+
+    let code_blocks = handle_request(
+        &state,
+        &http::Request::get("/.maki/assets/maki-code-blocks.js"),
+    )
+    .unwrap();
+    let code_blocks_body = String::from_utf8(code_blocks.body().to_vec()).unwrap();
+    assert_eq!(
+        code_blocks.get_header("Content-Type"),
+        Some("application/javascript; charset=utf-8")
+    );
+    assert_eq!(code_blocks.get_header("Cache-Control"), Some("no-cache"));
+    assert!(code_blocks_body.contains("data-maki-code-block"));
 }
 
 #[test]
@@ -740,6 +788,10 @@ fn test_watched_file_snapshot_includes_runtime_assets() {
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-external-links.js")));
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-search.js")));
     assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-toc.js")));
+    assert!(snapshot.contains_key(&PathBuf::from(
+        ".maki/assets/vendor/highlight.js/highlight.min.js"
+    )));
+    assert!(snapshot.contains_key(&PathBuf::from(".maki/assets/maki-code-blocks.js")));
 }
 
 #[test]

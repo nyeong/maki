@@ -10,7 +10,9 @@ use crate::{
 };
 
 use super::{
-    assets::{push_project_navigation, push_project_scripts, push_stylesheet},
+    assets::{
+        push_code_block_scripts, push_project_navigation, push_project_scripts, push_stylesheet,
+    },
     context::RenderContext,
     date_markup::{DATE_RANGE_SEPARATOR_HTML, date_stamp_class, date_stamp_delimiters},
 };
@@ -23,6 +25,7 @@ pub(in crate::html) struct Renderer<'a> {
     block_id_anchors: bool,
     reference_note_scope: ReferenceNoteScope,
     rendered_ids: BTreeSet<String>,
+    rendered_code_block: bool,
 }
 
 #[derive(Default)]
@@ -583,15 +586,28 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_code(&mut self, lines: &[&str], lang: Option<&str>) {
-        self.html.push_str("<pre><code");
-        if let Some(lang) = lang {
+        let lang = lang.filter(|language| !language.trim().is_empty());
+        let language_label = lang.unwrap_or("text");
+        self.rendered_code_block = true;
+        self.html.push_str(
+            "<div class=\"maki-code-block\" data-maki-code-block><div class=\"maki-code-toolbar\"><span class=\"maki-code-language\">",
+        );
+        self.escape_html_into(language_label);
+        self.html.push_str(
+            "</span><div class=\"maki-code-actions\" data-maki-code-actions></div></div><pre tabindex=\"0\" aria-label=\"",
+        );
+        self.escape_html_attr_into(language_label);
+        self.html.push_str(" code\"><code");
+        if let Some(lang) = lang.filter(|lang| is_safe_code_language(lang)) {
             self.html.push_str(" class=\"language-");
+            self.escape_html_attr_into(lang);
+            self.html.push_str("\" data-language=\"");
             self.escape_html_attr_into(lang);
             self.html.push('"');
         }
         self.html.push('>');
         self.render_raw_lines(lines);
-        self.html.push_str("</code></pre>");
+        self.html.push_str("</code></pre></div>");
     }
 
     fn render_raw_lines(&mut self, lines: &[&str]) {
@@ -1032,6 +1048,9 @@ impl<'a> Renderer<'a> {
         self.render_blocks(&document.blocks, document.reference_definitions());
         self.render_reference_notes(document);
 
+        if self.rendered_code_block {
+            push_code_block_scripts(&mut self.html, self.context.asset_mode);
+        }
         self.html.push_str("</body></html>");
         self.html.clone()
     }
@@ -1059,6 +1078,7 @@ impl<'a> Renderer<'a> {
             block_id_anchors: true,
             reference_note_scope: ReferenceNoteScope::default(),
             rendered_ids: BTreeSet::new(),
+            rendered_code_block: false,
         }
     }
 
@@ -1082,4 +1102,18 @@ impl<'a> Renderer<'a> {
             }
         }
     }
+}
+
+fn is_safe_code_language(language: &str) -> bool {
+    if language.len() > 64 {
+        return false;
+    }
+
+    let mut bytes = language.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes.all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'+' | b'#' | b'.' | b'-')
+        })
 }

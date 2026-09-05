@@ -10,8 +10,9 @@ mod renderer;
 mod tests;
 
 pub use assets::{
-    CSS_ASSET_PATH, EXTERNAL_LINKS_SCRIPT_ASSET_PATH, RuntimeAsset, SEARCH_SCRIPT_ASSET_PATH,
-    TOC_SCRIPT_ASSET_PATH, runtime_asset_for_request_path, runtime_assets,
+    CODE_BLOCKS_SCRIPT_ASSET_PATH, CSS_ASSET_PATH, EXTERNAL_LINKS_SCRIPT_ASSET_PATH,
+    HIGHLIGHT_SCRIPT_ASSET_PATH, RuntimeAsset, SEARCH_SCRIPT_ASSET_PATH, TOC_SCRIPT_ASSET_PATH,
+    runtime_asset_for_request_path, runtime_assets,
 };
 pub use context::{AssetMode, DocumentNavigation, DocumentNavigationItem, NoteInfo, RenderContext};
 pub use pages::{
