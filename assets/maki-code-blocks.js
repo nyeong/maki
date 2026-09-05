@@ -10,12 +10,30 @@
     success: "Copied",
   });
   const COPY_ICON = `
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+    <svg data-icon="copy" viewBox="0 0 24 24" width="16" height="16" fill="none"
       stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
       stroke-linejoin="round" aria-hidden="true" focusable="false">
       <rect x="8" y="8" width="11" height="11" rx="2"></rect>
       <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
     </svg>`;
+  const COPY_SUCCESS_ICON = `
+    <svg data-icon="check" viewBox="0 0 24 24" width="16" height="16" fill="none"
+      stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="m5 12 4 4L19 6"></path>
+    </svg>`;
+  const COPY_ERROR_ICON = `
+    <svg data-icon="error" viewBox="0 0 24 24" width="16" height="16" fill="none"
+      stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="m9 9 6 6m0-6-6 6"></path>
+    </svg>`;
+  const COPY_FEEDBACK_ICONS = Object.freeze({
+    error: COPY_ERROR_ICON,
+    idle: COPY_ICON,
+    success: COPY_SUCCESS_ICON,
+  });
   const WRAP_ICON = `
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
       stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
@@ -330,13 +348,9 @@
     icon.className = "maki-code-action-icon";
     icon.innerHTML = iconMarkup;
     icon.setAttribute("aria-hidden", "true");
+    button.append(icon);
 
-    const label = documentObject.createElement("span");
-    label.className = "maki-code-action-label";
-    label.textContent = labelText;
-    button.append(icon, label);
-
-    return { button, label };
+    return button;
   };
 
   const setWrapped = (block, button, wrapped) => {
@@ -346,15 +360,18 @@
     return nextWrapped;
   };
 
-  const setCopyFeedback = (button, label, status, state) => {
+  const setCopyFeedback = (button, status, state) => {
     const message =
       COPY_FEEDBACK_MESSAGES[state] || COPY_FEEDBACK_MESSAGES.idle;
+    const icon = button.querySelector(".maki-code-action-icon");
 
     button.classList.toggle("is-success", state === "success");
     button.classList.toggle("is-error", state === "error");
     button.setAttribute("aria-label", message);
     button.title = message;
-    label.textContent = message;
+    if (icon) {
+      icon.innerHTML = COPY_FEEDBACK_ICONS[state] || COPY_FEEDBACK_ICONS.idle;
+    }
     status.textContent = state === "idle" ? "" : message;
   };
 
@@ -390,13 +407,13 @@
       code.classList.add("hljs");
     }
 
-    const copyControl = createActionButton(
+    const copyButton = createActionButton(
       documentObject,
       "copy",
       "Copy code",
       COPY_ICON,
     );
-    const wrapControl = createActionButton(
+    const wrapButton = createActionButton(
       documentObject,
       "wrap",
       "Wrap lines",
@@ -410,7 +427,7 @@
 
     let copyAttempt = 0;
     let feedbackTimer = null;
-    copyControl.button.addEventListener("click", async () => {
+    copyButton.addEventListener("click", async () => {
       const attempt = ++copyAttempt;
       let copied = false;
       try {
@@ -421,33 +438,27 @@
       if (attempt !== copyAttempt) return;
 
       if (feedbackTimer !== null) cancel(feedbackTimer);
-      setCopyFeedback(
-        copyControl.button,
-        copyControl.label,
-        status,
-        copied ? "success" : "error",
-      );
+      setCopyFeedback(copyButton, status, copied ? "success" : "error");
       feedbackTimer = schedule(() => {
         feedbackTimer = null;
-        setCopyFeedback(copyControl.button, copyControl.label, status, "idle");
+        setCopyFeedback(copyButton, status, "idle");
       }, COPY_FEEDBACK_MS);
     });
 
-    setWrapped(block, wrapControl.button, false);
-    wrapControl.button.addEventListener("click", () => {
-      const wrapped =
-        wrapControl.button.getAttribute("aria-pressed") !== "true";
-      setWrapped(block, wrapControl.button, wrapped);
+    setWrapped(block, wrapButton, false);
+    wrapButton.addEventListener("click", () => {
+      const wrapped = wrapButton.getAttribute("aria-pressed") !== "true";
+      setWrapped(block, wrapButton, wrapped);
     });
 
-    actions.append(copyControl.button, wrapControl.button, status);
+    actions.append(copyButton, wrapButton, status);
     block.setAttribute(ENHANCED_ATTRIBUTE, "");
 
     return {
-      copyButton: copyControl.button,
+      copyButton,
       originalCode,
       status,
-      wrapButton: wrapControl.button,
+      wrapButton,
     };
   };
 

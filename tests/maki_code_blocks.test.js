@@ -105,11 +105,15 @@ class FakeElement {
   }
 
   get textContent() {
+    if (this.children.length) {
+      return this.children.map((child) => child.textContent).join("");
+    }
     return this._textContent;
   }
 
   set textContent(value) {
-    this._textContent = value;
+    this.children = [];
+    this._textContent = String(value);
   }
 
   addEventListener(type, listener) {
@@ -146,7 +150,15 @@ class FakeElement {
   }
 
   querySelector(selector) {
-    return this.queries.get(selector) || null;
+    if (this.queries.has(selector)) return this.queries.get(selector);
+    if (!selector.startsWith(".")) return null;
+
+    const className = selector.slice(1);
+    return (
+      this.children.find((child) =>
+        child.className.split(/\s+/).includes(className),
+      ) || null
+    );
   }
 
   removeChild(child) {
@@ -220,6 +232,17 @@ const actionButton = (actions, action) =>
   actions.children.find(
     (child) => child.getAttribute("data-maki-code-action") === action,
   );
+
+const assertIconOnlyButton = (button, accessibleName) => {
+  assert.equal(button.tagName, "BUTTON");
+  assert.equal(button.type, "button");
+  assert.equal(button.children.length, 1);
+  assert.equal(button.children[0].className, "maki-code-action-icon");
+  assert.equal(button.children[0].getAttribute("aria-hidden"), "true");
+  assert.equal(button.textContent.trim(), "");
+  assert.equal(button.getAttribute("aria-label"), accessibleName);
+  assert.equal(button.title, accessibleName);
+};
 
 test("normalizes common language aliases without accepting malformed names", () => {
   assert.equal(normalizeLanguage(" HTML "), "xml");
@@ -411,18 +434,30 @@ test("enhancement highlights once but always copies the original source", async 
   assert.match(fixture.code.innerHTML, /hljs-keyword/);
   assert.equal(fixture.code.classList.contains("hljs"), true);
   assert.equal(fixture.actions.children.length, 3);
+  assertIconOnlyButton(controls.copyButton, "Copy code");
+  assertIconOnlyButton(controls.wrapButton, "Wrap lines");
+  const idleIcon = controls.copyButton.children[0].innerHTML;
+  assert.match(idleIcon, /data-icon="copy"/);
 
   await controls.copyButton.click();
   assert.deepEqual(copied, [source]);
   assert.equal(controls.copyButton.getAttribute("aria-label"), "Copied");
+  assert.equal(controls.copyButton.title, "Copied");
   assert.equal(controls.status.textContent, "Copied");
   assert.equal(controls.copyButton.classList.contains("is-success"), true);
+  assert.equal(controls.copyButton.textContent.trim(), "");
+  assert.equal(controls.copyButton.children.length, 1);
+  assert.notEqual(controls.copyButton.children[0].innerHTML, idleIcon);
+  assert.match(controls.copyButton.children[0].innerHTML, /data-icon="check"/);
   assert.equal(timers[0].delay, 2000);
 
   timers[0].callback();
   assert.equal(controls.copyButton.getAttribute("aria-label"), "Copy code");
+  assert.equal(controls.copyButton.title, "Copy code");
   assert.equal(controls.status.textContent, "");
   assert.equal(controls.copyButton.classList.contains("is-success"), false);
+  assert.equal(controls.copyButton.children[0].innerHTML, idleIcon);
+  assertIconOnlyButton(controls.copyButton, "Copy code");
 
   assert.equal(enhanceCodeBlock(fixture.block, dependencies), null);
   assert.equal(fixture.code.innerHTMLWrites, 1);
@@ -442,14 +477,22 @@ test("copy failures are announced and reset", async () => {
       return timers.length;
     },
   });
+  const idleIcon = controls.copyButton.children[0].innerHTML;
 
   await controls.copyButton.click();
   assert.equal(controls.copyButton.getAttribute("aria-label"), "Copy failed");
+  assert.equal(controls.copyButton.title, "Copy failed");
   assert.equal(controls.status.textContent, "Copy failed");
   assert.equal(controls.copyButton.classList.contains("is-error"), true);
+  assert.equal(controls.copyButton.textContent.trim(), "");
+  assert.equal(controls.copyButton.children.length, 1);
+  assert.notEqual(controls.copyButton.children[0].innerHTML, idleIcon);
+  assert.match(controls.copyButton.children[0].innerHTML, /data-icon="error"/);
   timers[0]();
   assert.equal(controls.copyButton.getAttribute("aria-label"), "Copy code");
+  assert.equal(controls.copyButton.title, "Copy code");
   assert.equal(controls.copyButton.classList.contains("is-error"), false);
+  assert.equal(controls.copyButton.children[0].innerHTML, idleIcon);
 });
 
 test("plain and unsupported blocks are enhanced without code mutation", () => {

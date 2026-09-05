@@ -116,6 +116,8 @@ Browser runtime은 알려진 language를 syntax highlight하고 각 code block�
 - `Copy code`: 해당 block의 원문을 clipboard에 복사하고 결과를 button 상태로 알린다.
 - `Wrap lines`: 해당 block만 줄바꿈하거나 기본 horizontal scroll로 되돌린다.
 
+두 control은 toolbar에서 icon-only button으로 표시한다.
+Copy 결과는 icon 모양·색상과 accessible name·tooltip, live status로 알리고 Wrap의 block별 on/off 상태는 `aria-pressed`로 노출한다.
 Language가 없거나 highlighter가 지원하지 않으면 plain code로 안전하게 남는다.
 Runtime asset에는 vendored highlighting engine과 first-party Maki grammar가 포함되며 CDN이나 외부 network에 의존하지 않는다.
 JavaScript를 사용할 수 없는 환경에서도 language label과 원문 code는 읽을 수 있다.
