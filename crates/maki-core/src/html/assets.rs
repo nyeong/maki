@@ -5,9 +5,15 @@ use super::context::AssetMode;
 pub(in crate::html) const DEFAULT_CSS: &str = include_str!("../../../../assets/maki.css");
 pub(in crate::html) const EXTERNAL_LINKS_SCRIPT: &str =
     include_str!("../../../../assets/maki-external-links.js");
+pub(in crate::html) const HIGHLIGHT_SCRIPT: &str =
+    include_str!("../../../../assets/vendor/highlight.js/highlight.min.js");
+pub(in crate::html) const CODE_BLOCKS_SCRIPT: &str =
+    include_str!("../../../../assets/maki-code-blocks.js");
 pub(in crate::html) const SEARCH_SCRIPT: &str = include_str!("../../../../assets/maki-search.js");
 pub(in crate::html) const TOC_SCRIPT: &str = include_str!("../../../../assets/maki-toc.js");
 pub const CSS_ASSET_PATH: &str = "/.maki/assets/maki.css";
+pub const HIGHLIGHT_SCRIPT_ASSET_PATH: &str = "/.maki/assets/vendor/highlight.js/highlight.min.js";
+pub const CODE_BLOCKS_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-code-blocks.js";
 pub const EXTERNAL_LINKS_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-external-links.js";
 pub const SEARCH_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-search.js";
 pub const TOC_SCRIPT_ASSET_PATH: &str = "/.maki/assets/maki-toc.js";
@@ -65,6 +71,18 @@ const RUNTIME_ASSETS: &[RuntimeAsset] = &[
         embedded: EXTERNAL_LINKS_SCRIPT,
     },
     RuntimeAsset {
+        request_path: HIGHLIGHT_SCRIPT_ASSET_PATH,
+        file_name: "vendor/highlight.js/highlight.min.js",
+        content_type: "application/javascript; charset=utf-8",
+        embedded: HIGHLIGHT_SCRIPT,
+    },
+    RuntimeAsset {
+        request_path: CODE_BLOCKS_SCRIPT_ASSET_PATH,
+        file_name: "maki-code-blocks.js",
+        content_type: "application/javascript; charset=utf-8",
+        embedded: CODE_BLOCKS_SCRIPT,
+    },
+    RuntimeAsset {
         request_path: SEARCH_SCRIPT_ASSET_PATH,
         file_name: "maki-search.js",
         content_type: "application/javascript; charset=utf-8",
@@ -118,6 +136,21 @@ pub(in crate::html) fn push_project_scripts(html: &mut String, asset_mode: Asset
     );
     push_script(html, asset_mode, SEARCH_SCRIPT, SEARCH_SCRIPT_ASSET_PATH);
     push_script(html, asset_mode, TOC_SCRIPT, TOC_SCRIPT_ASSET_PATH);
+}
+
+pub(in crate::html) fn push_code_block_scripts(html: &mut String, asset_mode: AssetMode) {
+    push_script(
+        html,
+        asset_mode,
+        HIGHLIGHT_SCRIPT,
+        HIGHLIGHT_SCRIPT_ASSET_PATH,
+    );
+    push_script(
+        html,
+        asset_mode,
+        CODE_BLOCKS_SCRIPT,
+        CODE_BLOCKS_SCRIPT_ASSET_PATH,
+    );
 }
 
 fn push_script(html: &mut String, asset_mode: AssetMode, script: &str, asset_path: &str) {

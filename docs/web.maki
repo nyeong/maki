@@ -1,5 +1,5 @@
 --^ title: Web Server and Routes
---^ updated: [2026-08-31]
+--^ updated: [2026-09-05]
 
 = Local source serve
 
@@ -110,6 +110,15 @@ Project index에는 document, block, block ID owner/declaration, heading, raw no
 = Runtime asset과 live reload
 
 `/.maki/assets/` 아래에서 renderer CSS와 JavaScript를 제공한다.
+Code Block은 server-rendered markup에 language label과 code toolbar를 포함한다.
+Browser runtime은 알려진 language를 syntax highlight하고 각 code block에 다음 control을 붙인다.
+
+- `Copy code`: 해당 block의 원문을 clipboard에 복사하고 결과를 button 상태로 알린다.
+- `Wrap lines`: 해당 block만 줄바꿈하거나 기본 horizontal scroll로 되돌린다.
+
+Language가 없거나 highlighter가 지원하지 않으면 plain code로 안전하게 남는다.
+Runtime asset에는 vendored highlighting engine과 first-party Maki grammar가 포함되며 CDN이나 외부 network에 의존하지 않는다.
+JavaScript를 사용할 수 없는 환경에서도 language label과 원문 code는 읽을 수 있다.
 Local serve page는 `/.maki/events` Server-Sent Events endpoint를 사용해 source reload를 감지한다.
 
 = Metrics

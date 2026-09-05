@@ -8,6 +8,15 @@
   --line: #deded8;
   --code-bg: #eeeeea;
   --code-fg: #202124;
+  --code-border: #c9c9c2;
+  --code-toolbar-bg: #e5e5df;
+  --code-action-bg: #f8f8f5;
+  --code-action-hover: #ffffff;
+  --code-focus: #174ea6;
+  --code-success: #116329;
+  --code-success-bg: #dafbe1;
+  --code-error: #9b3a35;
+  --code-error-bg: #ffebe9;
   --link: #174ea6;
   --link-visited: #5f3dc4;
   --broken: #9b3a35;
@@ -816,11 +825,13 @@ li > ol {
 }
 
 pre {
+  max-width: 100%;
   margin: 1.25em 0;
   padding: 1em;
   overflow-x: auto;
   border: 1px solid var(--line);
   background: var(--code-bg);
+  overscroll-behavior-inline: contain;
 }
 
 code {
@@ -841,6 +852,253 @@ pre code {
   border: 0;
   background: transparent;
   white-space: pre;
+}
+
+.maki-code-block {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 1.5em 0;
+  overflow: hidden;
+  border: 1px solid var(--code-border);
+  border-radius: 10px;
+  background: var(--code-bg);
+  box-shadow: 0 1px 2px rgb(32 33 36 / 6%);
+}
+
+.maki-code-toolbar {
+  display: flex;
+  min-width: 0;
+  min-height: 2.85rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.55rem 0.4rem 0.85rem;
+  border-bottom: 1px solid var(--code-border);
+  background: var(--code-toolbar-bg);
+}
+
+.maki-code-language {
+  min-width: 0;
+  overflow: hidden;
+  color: #4e5258;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.maki-code-actions {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.35rem;
+  margin-inline-start: auto;
+}
+
+.maki-code-action {
+  appearance: none;
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid #b9b9b2;
+  border-radius: 6px;
+  background: var(--code-action-bg);
+  color: #3f4349;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.maki-code-action:hover {
+  border-color: #858982;
+  background: var(--code-action-hover);
+  color: var(--fg);
+}
+
+.maki-code-action:focus-visible,
+.maki-code-block pre:focus-visible {
+  outline: 2px solid var(--code-focus);
+  outline-offset: 2px;
+}
+
+.maki-code-block pre:focus-visible {
+  outline-offset: -3px;
+}
+
+.maki-code-action[aria-pressed="true"] {
+  border-color: #7fa6e8;
+  background: #e8f0fe;
+  color: #0b4596;
+}
+
+.maki-code-action.is-success {
+  border-color: #78a987;
+  background: var(--code-success-bg);
+  color: var(--code-success);
+}
+
+.maki-code-action.is-error {
+  border-color: #cb8c87;
+  background: var(--code-error-bg);
+  color: var(--code-error);
+}
+
+.maki-code-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.maki-code-action-icon {
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.maki-code-action svg {
+  display: block;
+  width: 1rem;
+  height: 1rem;
+}
+
+.maki-code-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.maki-code-block pre {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--code-bg);
+  font-size: 0.92rem;
+  line-height: 1.62;
+  tab-size: 4;
+}
+
+.maki-code-block pre code {
+  min-width: max-content;
+  color: var(--code-fg);
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.maki-code-block.is-wrapped pre {
+  overflow-x: hidden;
+}
+
+.maki-code-block.is-wrapped pre code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.maki-code-block .hljs {
+  background: transparent;
+  color: var(--code-fg);
+}
+
+.maki-code-block .hljs-comment,
+.maki-code-block .hljs-quote {
+  color: #5d636b;
+  font-style: italic;
+}
+
+.maki-code-block .hljs-keyword,
+.maki-code-block .hljs-selector-tag,
+.maki-code-block .hljs-literal,
+.maki-code-block .hljs-section,
+.maki-code-block .hljs-link {
+  color: #5d34a5;
+}
+
+.maki-code-block .hljs-string,
+.maki-code-block .hljs-doctag,
+.maki-code-block .hljs-regexp,
+.maki-code-block .hljs-template-tag,
+.maki-code-block .hljs-template-variable {
+  color: #0b6255;
+}
+
+.maki-code-block .hljs-title,
+.maki-code-block .hljs-name,
+.maki-code-block .hljs-selector-id,
+.maki-code-block .hljs-selector-class {
+  color: #713f12;
+}
+
+.maki-code-block .hljs-attr,
+.maki-code-block .hljs-attribute,
+.maki-code-block .hljs-variable,
+.maki-code-block .hljs-type,
+.maki-code-block .hljs-class .hljs-title {
+  color: #8a3d00;
+}
+
+.maki-code-block .hljs-number,
+.maki-code-block .hljs-symbol,
+.maki-code-block .hljs-bullet,
+.maki-code-block .hljs-meta,
+.maki-code-block .hljs-built_in,
+.maki-code-block .hljs-builtin-name {
+  color: #0757a6;
+}
+
+.maki-code-block .hljs-params,
+.maki-code-block .hljs-subst {
+  color: #34373c;
+}
+
+.maki-code-block .hljs-meta .hljs-string {
+  color: #116329;
+}
+
+.maki-code-block .hljs-addition {
+  background: var(--code-success-bg);
+  color: var(--code-success);
+}
+
+.maki-code-block .hljs-deletion {
+  background: var(--code-error-bg);
+  color: #82071e;
+}
+
+.maki-code-block .hljs-emphasis {
+  font-style: italic;
+}
+
+.maki-code-block .hljs-strong {
+  font-weight: 700;
 }
 
 hr {
@@ -1019,6 +1277,32 @@ th {
 
   .maki-subdocuments-list a {
     padding: 0.7rem 0;
+  }
+
+  .maki-code-toolbar {
+    flex-wrap: wrap;
+    gap: 0.35rem 0.6rem;
+    padding: 0.4rem 0.5rem 0.4rem 0.65rem;
+  }
+
+  .maki-code-language {
+    flex: 1 1 6rem;
+  }
+
+  .maki-code-actions {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .maki-code-action {
+    min-height: 2.25rem;
+    padding-inline: 0.6rem;
+  }
+
+  .maki-code-block pre {
+    padding: 0.85rem;
+    font-size: 0.88rem;
   }
 }
 
@@ -1207,6 +1491,7 @@ th {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .maki-code-action,
   .maki-toc-list li {
     transition: none;
   }

@@ -52,6 +52,8 @@
 
             postInstall = ''
               install -Dm644 LICENSE $out/share/licenses/maki/LICENSE
+              install -Dm644 assets/vendor/highlight.js/LICENSE \
+                $out/share/licenses/maki/highlight.js/LICENSE
             '';
 
             meta = {
@@ -153,6 +155,23 @@
             };
           };
 
+          javascript =
+            pkgs.runCommand "maki-javascript-checks"
+              {
+                nativeBuildInputs = [
+                  pkgs.eslint
+                  pkgs.nodejs
+                  pkgs.prettier
+                ];
+              }
+              ''
+                cd ${source}
+                node --test tests/*.test.js
+                eslint assets/maki-code-blocks.js
+                prettier --check assets/maki-code-blocks.js tests/maki_code_blocks.test.js
+                touch $out
+              '';
+
           maki = self.packages.${system}.maki;
 
           package-smoke =
@@ -170,6 +189,8 @@
                   lib.escapeShellArg (self.rev or "")
                 }
                 cmp ${./LICENSE} ${self.packages.${system}.maki}/share/licenses/maki/LICENSE
+                cmp ${./assets/vendor/highlight.js/LICENSE} \
+                  ${self.packages.${system}.maki}/share/licenses/maki/highlight.js/LICENSE
                 touch $out
               '';
 

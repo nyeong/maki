@@ -1,5 +1,6 @@
 use super::assets::{
-    DEFAULT_CSS, EXTERNAL_LINKS_SCRIPT, PROJECT_NAVIGATION_HTML, SEARCH_SCRIPT, TOC_SCRIPT,
+    CODE_BLOCKS_SCRIPT, DEFAULT_CSS, EXTERNAL_LINKS_SCRIPT, HIGHLIGHT_SCRIPT,
+    PROJECT_NAVIGATION_HTML, SEARCH_SCRIPT, TOC_SCRIPT,
 };
 use super::pages::format_unix_seconds_kst;
 use super::*;
@@ -38,11 +39,115 @@ hello <maki> & friends
     assert!(html.contains("<p>hello &lt;maki&gt; &amp; friends</p>"));
     assert!(
         html.contains(
-            "<pre><code class=\"language-html\">&lt;main&gt;\n&lt;/main&gt;</code></pre>"
+            "<div class=\"maki-code-block\" data-maki-code-block><div class=\"maki-code-toolbar\"><span class=\"maki-code-language\">html</span><div class=\"maki-code-actions\" data-maki-code-actions></div></div><pre tabindex=\"0\" aria-label=\"html code\"><code class=\"language-html\" data-language=\"html\">&lt;main&gt;\n&lt;/main&gt;</code></pre></div>"
         )
     );
     assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
     assert!(html.contains("<ol><li>first</li><li>second</li></ol>"));
+}
+
+#[test]
+fn code_block_without_language_uses_text_label_and_unclassified_code() {
+    let parsed = parser::parse(": <plain> & text\n\n--v lang:\n: explicit empty language");
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains(
+        "<div class=\"maki-code-block\" data-maki-code-block><div class=\"maki-code-toolbar\"><span class=\"maki-code-language\">text</span><div class=\"maki-code-actions\" data-maki-code-actions></div></div><pre tabindex=\"0\" aria-label=\"text code\"><code>&lt;plain&gt; &amp; text</code></pre></div>"
+    ));
+    assert!(html.contains(
+        "<pre tabindex=\"0\" aria-label=\"text code\"><code>explicit empty language</code></pre>"
+    ));
+    assert!(!html.contains("class=\"language-\""));
+}
+
+#[test]
+fn code_block_escapes_authored_language_in_text_and_attributes() {
+    let parsed = parser::parse(
+        r#"--v lang: c++ & "templates"
+: code"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(
+        html.contains("<span class=\"maki-code-language\">c++ &amp; &quot;templates&quot;</span>")
+    );
+    assert!(html.contains(
+        "<pre tabindex=\"0\" aria-label=\"c++ &amp; &quot;templates&quot; code\"><code>code</code></pre>"
+    ));
+}
+
+#[test]
+fn code_block_rejects_language_attribute_class_injection() {
+    let parsed = parser::parse("--v lang: x maki-code-status\n: code");
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<span class=\"maki-code-language\">x maki-code-status</span>"));
+    assert!(html.contains(
+        "<pre tabindex=\"0\" aria-label=\"x maki-code-status code\"><code>code</code></pre>"
+    ));
+    assert!(!html.contains("class=\"language-x maki-code-status\""));
+    assert!(!html.contains("data-language=\"x maki-code-status\""));
+}
+
+#[test]
+fn code_block_keeps_highlighter_attributes_for_safe_language_tokens() {
+    let parsed = parser::parse("--v lang: C++\n: code");
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<code class=\"language-C++\" data-language=\"C++\">code</code>"));
+}
+
+#[test]
+fn raw_pre_and_unknown_containers_are_not_enhanced_as_code_blocks() {
+    let parsed = parser::parse(
+        r#"--- pre
+plain <text>
+---
+
+--- custom option
+raw & fallback
+---"#,
+    );
+
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<pre>plain &lt;text&gt;</pre>"));
+    assert!(html.contains(
+        "<pre class=\"maki-container maki-container-unknown\" data-kind=\"custom\" data-args=\"option\"><code>custom option\nraw &amp; fallback</code></pre>"
+    ));
+    assert!(!html.contains("data-maki-code-block"));
+    assert!(!html.contains("<script>"));
+}
+
+#[test]
+fn standalone_code_block_scripts_are_embedded_once_in_dependency_order() {
+    let parsed = parser::parse(": first\n\n: second");
+
+    let html = render_document(&parsed.document);
+    let highlight = format!("<script>{HIGHLIGHT_SCRIPT}</script>");
+    let controller = format!("<script>{CODE_BLOCKS_SCRIPT}</script>");
+    let highlight_index = html.find(&highlight).unwrap();
+    let controller_index = html.find(&controller).unwrap();
+
+    assert_eq!(html.matches(&highlight).count(), 1);
+    assert_eq!(html.matches(&controller).count(), 1);
+    assert!(highlight_index < controller_index);
+    assert!(controller_index < html.find("</body>").unwrap());
+}
+
+#[test]
+fn documents_without_code_blocks_omit_code_block_scripts() {
+    let parsed = parser::parse("plain text with `inline code`");
+
+    let html = render_document(&parsed.document);
+
+    assert!(!html.contains(HIGHLIGHT_SCRIPT));
+    assert!(!html.contains(CODE_BLOCKS_SCRIPT));
+    assert!(!html.contains("<script>"));
 }
 
 #[test]
@@ -595,6 +700,35 @@ fn project_rendering_can_use_external_assets() {
     assert!(!html.contains(EXTERNAL_LINKS_SCRIPT));
     assert!(!html.contains(SEARCH_SCRIPT));
     assert!(!html.contains(TOC_SCRIPT));
+    assert!(!html.contains(HIGHLIGHT_SCRIPT_ASSET_PATH));
+    assert!(!html.contains(CODE_BLOCKS_SCRIPT_ASSET_PATH));
+}
+
+#[test]
+fn project_code_blocks_load_external_highlighter_then_controller_once() {
+    let parsed = parser::parse("--^ title: Page\n\n--v lang: rust\n: fn main() {}");
+    let resolve_note_link = |_target: &str| NoteLinkResolution::Broken;
+    let get_note_info = |_note_ref: &NoteRef| None;
+
+    let html = render_document_with_context(
+        &parsed.document,
+        RenderContext::project(&resolve_note_link, &get_note_info)
+            .with_asset_mode(AssetMode::External),
+    );
+    let highlight = format!("<script src=\"{HIGHLIGHT_SCRIPT_ASSET_PATH}\"></script>");
+    let controller = format!("<script src=\"{CODE_BLOCKS_SCRIPT_ASSET_PATH}\"></script>");
+
+    assert_eq!(html.matches(&highlight).count(), 1);
+    assert_eq!(html.matches(&controller).count(), 1);
+    assert!(html.find(&highlight).unwrap() < html.find(&controller).unwrap());
+    assert!(
+        html.find(&format!(
+            "<script src=\"{TOC_SCRIPT_ASSET_PATH}\"></script>"
+        ))
+        .unwrap()
+            < html.find(&highlight).unwrap()
+    );
+    assert!(html.find(&controller).unwrap() < html.find("</body>").unwrap());
 }
 
 #[test]
@@ -801,7 +935,9 @@ quote body
 
     let html = render_document(&parsed.document);
 
-    assert!(html.contains("<pre><code class=\"language-rust\">fn main() {}</code></pre>"));
+    assert!(html.contains(
+        "<pre tabindex=\"0\" aria-label=\"rust code\"><code class=\"language-rust\" data-language=\"rust\">fn main() {}</code></pre>"
+    ));
     assert!(html.contains("<pre>line &lt;one&gt;\nline two</pre>"));
     assert!(
         html.contains("<blockquote><h2 id=\"Quoted\">Quoted</h2><p>quote body</p></blockquote>")
@@ -913,7 +1049,9 @@ fn main() {}
     let html = render_document(&parsed.document);
 
     assert!(html.contains("<blockquote><pre>= Raw heading\n[site]</pre></blockquote>"));
-    assert!(html.contains("<pre><code class=\"language-rust\">fn main() {}</code></pre>"));
+    assert!(html.contains(
+        "<pre tabindex=\"0\" aria-label=\"rust code\"><code class=\"language-rust\" data-language=\"rust\">fn main() {}</code></pre>"
+    ));
     assert!(html.contains(
         "<blockquote><div class=\"maki-quote-text\">= Raw container heading\n[site]</div></blockquote>"
     ));
@@ -980,7 +1118,9 @@ fn list_items_render_indented_code_children_inside_list() {
     let html = render_document(&parsed.document);
 
     assert!(html.contains(
-        "<ul><li>unordered<pre><code>quoted &lt;text&gt;\nsecond line</code></pre></li></ul>"
+        "<ul><li>unordered<div class=\"maki-code-block\" data-maki-code-block><div class=\"maki-code-toolbar\"><span class=\"maki-code-language\">text</span><div class=\"maki-code-actions\" data-maki-code-actions></div></div><pre tabindex=\"0\" aria-label=\"text code\"><code>quoted &lt;text&gt;\nsecond line</code></pre></div></li></ul>"
     ));
-    assert!(html.contains("<ol><li>ordered<pre><code>ordered text</code></pre></li></ol>"));
+    assert!(html.contains(
+        "<ol><li>ordered<div class=\"maki-code-block\" data-maki-code-block><div class=\"maki-code-toolbar\"><span class=\"maki-code-language\">text</span><div class=\"maki-code-actions\" data-maki-code-actions></div></div><pre tabindex=\"0\" aria-label=\"text code\"><code>ordered text</code></pre></div></li></ol>"
+    ));
 }

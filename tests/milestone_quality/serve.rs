@@ -76,7 +76,7 @@ fn v0_fixture_serves_core_poc_behavior() {
         "<ol><li>supported ordered list</li><li>preserve this ordered shape</li></ol>",
     );
     page.assert_body_contains(
-        "<pre><code class=\"language-html\">&lt;main&gt;\n  fixture code\n&lt;/main&gt;</code></pre>"
+        "<pre tabindex=\"0\" aria-label=\"html code\"><code class=\"language-html\" data-language=\"html\">&lt;main&gt;\n  fixture code\n&lt;/main&gt;</code></pre>"
     );
     page.assert_body_excludes("should-not-render-property");
 

@@ -1,5 +1,8 @@
 export default [
   {
+    ignores: ["assets/vendor/**/*.js"],
+  },
+  {
     files: ["assets/**/*.js"],
     languageOptions: {
       ecmaVersion: 2024,
