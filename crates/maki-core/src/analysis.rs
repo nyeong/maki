@@ -762,13 +762,7 @@ fn collect_block(
     let mut body_spans = Vec::new();
     let kind = match &block.kind {
         BlockKind::Paragraph { body } => {
-            collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
-            collect_date_markers(
-                source,
-                body,
-                DateMarkerOrigin::Inline,
-                &mut occurrences.date_markers,
-            );
+            collect_visible_inlines(source, body, occurrences);
             collect_inline_source_spans(source, body, &mut body_spans);
             AnalysisBlockKind::Paragraph
         }
@@ -781,13 +775,7 @@ fn collect_block(
             body,
             raw_body,
         } => {
-            collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
-            collect_date_markers(
-                source,
-                body,
-                DateMarkerOrigin::Inline,
-                &mut occurrences.date_markers,
-            );
+            collect_visible_inlines(source, body, occurrences);
             if let Some(title_span) = slice_span(source, raw_body) {
                 let span = whole_line_span(source_map, title_span);
                 let marker_start = title_span.start.saturating_sub(level + 1);
@@ -810,13 +798,7 @@ fn collect_block(
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_inlines(source, &item.body, DateOrigin::VisibleInline, occurrences);
-                collect_date_markers(
-                    source,
-                    &item.body,
-                    DateMarkerOrigin::Inline,
-                    &mut occurrences.date_markers,
-                );
+                collect_visible_inlines(source, &item.body, occurrences);
                 collect_inline_source_spans(source, &item.body, &mut body_spans);
                 for child in &item.children {
                     collect_block(source, source_map, child, occurrences);
@@ -831,13 +813,7 @@ fn collect_block(
         BlockKind::Table { header, rows, .. } => {
             for row in std::iter::once(header).chain(rows) {
                 for cell in &row.cells {
-                    collect_inlines(source, &cell.body, DateOrigin::VisibleInline, occurrences);
-                    collect_date_markers(
-                        source,
-                        &cell.body,
-                        DateMarkerOrigin::Inline,
-                        &mut occurrences.date_markers,
-                    );
+                    collect_visible_inlines(source, &cell.body, occurrences);
                     collect_inline_source_spans(source, &cell.body, &mut body_spans);
                 }
             }
@@ -879,6 +855,20 @@ fn collect_block(
             value_span,
         });
     }
+}
+
+fn collect_visible_inlines(
+    source: &str,
+    inlines: &[Inline<'_>],
+    occurrences: &mut DocumentOccurrences,
+) {
+    collect_inlines(source, inlines, DateOrigin::VisibleInline, occurrences);
+    collect_date_markers(
+        source,
+        inlines,
+        DateMarkerOrigin::Inline,
+        &mut occurrences.date_markers,
+    );
 }
 
 fn collect_inlines(
@@ -1039,18 +1029,10 @@ fn collect_date(
     origin: DateOrigin,
     dates: &mut Vec<DateOccurrence>,
 ) {
-    let Some(body_span) = slice_span(source, stamp.body()) else {
+    let Some(span) = date_stamp_span(source, stamp) else {
         return;
     };
-    push_date_occurrence(
-        stamp,
-        origin,
-        SourceSpan::new(
-            body_span.start.saturating_sub(1),
-            (body_span.end + 1).min(source.len()),
-        ),
-        dates,
-    );
+    push_date_occurrence(stamp, origin, span, dates);
 }
 
 fn push_date_occurrence(
@@ -1127,11 +1109,13 @@ fn collect_date_range_marker(
     origin: DateMarkerOrigin,
     markers: &mut Vec<DateMarkerOccurrence>,
 ) {
+    let start_stamp = range.start();
+    let end_stamp = range.end();
     let (Some(start_span), Some(end_span), Some(start), Some(end)) = (
-        date_stamp_span(source, range.start()),
-        date_stamp_span(source, range.end()),
-        range.start().date(),
-        range.end().date(),
+        date_stamp_span(source, start_stamp),
+        date_stamp_span(source, end_stamp),
+        start_stamp.date(),
+        end_stamp.date(),
     ) else {
         return;
     };

@@ -396,19 +396,12 @@ impl Server {
         target: &DateTargetIdentity,
         kinds: impl IntoIterator<Item = DateStampKind>,
     ) -> Vec<Location> {
-        let mut seen = BTreeSet::new();
+        let indexed_markers = self.analysis.date_marker_locations(target);
         let mut locations = Vec::new();
 
         for kind in kinds {
-            for marker in self
-                .analysis
-                .date_marker_locations(target)
-                .iter()
-                .filter(|marker| marker.kind == kind)
-            {
-                if seen.insert((marker.path.clone(), marker.span))
-                    && let Some(location) = self.symbol_location(&marker.path, marker.span)
-                {
+            for marker in indexed_markers.iter().filter(|marker| marker.kind == kind) {
+                if let Some(location) = self.symbol_location(&marker.path, marker.span) {
                     locations.push(location);
                 }
             }
