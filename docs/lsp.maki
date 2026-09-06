@@ -1,5 +1,5 @@
 --^ title: Maki LSP
---^ updated: [2026-09-01]
+--^ updated: [2026-09-06]
 
 = 개요
 
@@ -27,8 +27,8 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 = 지원 기능
 
 - parser warning과 깨진/모호한 document·heading·explicit-ID link, unresolved explicit reference, duplicate ID diagnostics
-- document, heading, explicit-ID link와 Document-local reference의 definition
-- document, heading, explicit-ID와 Document-local reference의 references
+- document, heading, explicit-ID link, Document-local reference와 date marker의 definition
+- document, heading, explicit-ID, Document-local reference와 date marker의 references
 - HTTP/HTTPS target인 일반 Reference Use와 Direct Link의 document link
 - document, heading, explicit ID, property key와 관습 value completion
 - heading document symbol
@@ -53,6 +53,26 @@ Discovery 결과를 bare `@id`로 삽입하거나 project-wide resolution fallba
 Definition과 references는 core의 resolved target identity를 사용한다.
 Heading의 같은 explicit ID를 가리키는 `#id`와 `@id`는 같은 declaration의 references로 취급하고, 다른 Document에서 재사용한 같은 ID는 포함하지 않는다.
 `textDocument/references`는 client의 `includeDeclaration` 값을 따른다.
+
+Date navigation은 authored marker의 normalized typed identity를 사용한다.
+`[date]`는 reference이고 `<date>`는 event declaration이다.
+어느 marker에서 Definition을 실행해도 같은 identity의 모든 event marker를 source path와 span 순서의 location array로 반환하며, event가 없으면 definition이 없다.
+References는 같은 identity의 reference marker만 반환하고 `includeDeclaration=true`일 때 event marker를 앞에 추가한다.
+결과는 중복을 제거하고 event/reference group마다 source path와 span 순서로 고정한다.
+
+Gregorian day와 같은 날을 나타내는 ISO weekday는 같은 day identity다.
+따라서 `[2026-W37-1]`과 `<2026-09-07>`은 서로 navigation할 수 있고 display suffix는 identity에 영향을 주지 않는다.
+Range endpoint도 같은 방식으로 day를 normalize하며 range marker 전체가 하나의 occurrence이므로 양 endpoint와 `--` 어디에서나 같은 target으로 navigation한다.
+
+Day, Gregorian month, ISO week와 range는 서로 다른 target granularity다.
+같은 하루인 Day와 one-day range, 같은 기간을 덮는 Month/ISO week와 explicit range도 동일 identity로 합치지 않는다.
+Definition/References는 exact identity만 비교하고 period containment나 range overlap 결과는 포함하지 않는다.
+포함 날짜, containing period/range와 overlapping range 탐색은 관계를 구분할 수 있는 별도 기능의 범위다.
+
+Document-local Reference Use와 resolved Note Link navigation은 date navigation보다 우선한다.
+따라서 date target을 간접 표시하는 `[deadline][]`은 local reference definition으로 이동하지만 `[deadline]: [2026-09-07]` value에 직접 작성한 date marker는 date event로 이동한다.
+그 밖의 direct authored date marker는 document, heading, explicit ID와 Reference Definition fallback보다 우선한다.
+Property key나 `deadline`/`scheduled` 관습은 marker의 reference/event 역할을 바꾸지 않는다.
 
 Document-local reference는 `[key][]`, `[title][key]`, `[^key][]`, `[^title][key]`와 `[^][key]`가 같은 active Reference Definition identity를 사용한다. Declaration은 `[key]: value`다.
 어느 use 또는 같은 key의 definition에서 Definition/References를 실행해도 현재 Document 안의 active key span과 모든 Reference Use/Footnote presentation을 대상으로 한다.

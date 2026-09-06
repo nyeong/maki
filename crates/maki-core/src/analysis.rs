@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
-use crate::parser::{self, Block, BlockKind, DateStamp, DateStampKind, Inline};
+use crate::parser::{
+    self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
+    Inline, IsoWeek,
+};
 use crate::source::{SourceMap, SourceSpan};
 
 #[derive(Debug, Clone, Copy)]
@@ -30,14 +33,16 @@ pub struct DocumentAnalysis {
     pub reference_graph: DocumentReferenceGraph,
     pub reference_links: Vec<ReferenceLinkOccurrence>,
     pub properties: Vec<PropertyOccurrence>,
+    pub date_markers: Vec<DateMarkerOccurrence>,
     pub dates: Vec<DateOccurrence>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectAnalysis {
-    pub documents: BTreeMap<PathBuf, DocumentAnalysis>,
+    documents: BTreeMap<PathBuf, DocumentAnalysis>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    date_marker_index: BTreeMap<DateTargetIdentity, Vec<DateMarkerLocation>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +302,7 @@ struct DocumentOccurrences {
     note_links: Vec<NoteLinkOccurrence>,
     references: ReferenceGraphBuilder,
     reference_links: Vec<ReferenceLinkOccurrence>,
+    date_markers: Vec<DateMarkerOccurrence>,
     dates: Vec<DateOccurrence>,
 }
 
@@ -327,6 +333,37 @@ pub struct DateOccurrence {
     pub kind: DateStampKind,
     pub body: String,
     pub origin: DateOrigin,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DateTargetIdentity {
+    Day(Date),
+    Month(DateMonth),
+    IsoWeek(IsoWeek),
+    Range { start: Date, end: Date },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DateMarkerOrigin {
+    Inline,
+    PropertyValue { key: String },
+    ReferenceDefinitionValue { key: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DateMarkerOccurrence {
+    pub kind: DateStampKind,
+    pub target: DateTargetIdentity,
+    pub origin: DateMarkerOrigin,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DateMarkerLocation {
+    pub path: PathBuf,
+    pub kind: DateStampKind,
+    pub origin: DateMarkerOrigin,
     pub span: SourceSpan,
 }
 
@@ -408,6 +445,11 @@ fn analyze_document_with_title_origin(
         &parsed.document.blocks,
         &mut occurrences.references,
     );
+    collect_reference_definition_date_markers(
+        source,
+        &parsed.document.blocks,
+        &mut occurrences.date_markers,
+    );
     for block in &parsed.document.blocks {
         collect_block(source, &source_map, block, &mut occurrences);
     }
@@ -435,6 +477,16 @@ fn analyze_document_with_title_origin(
             },
             &mut occurrences.dates,
         );
+        if !property_occurs_in_container(property, &occurrences.blocks) {
+            collect_date_markers(
+                source,
+                &parsed_value,
+                DateMarkerOrigin::PropertyValue {
+                    key: property.key.clone(),
+                },
+                &mut occurrences.date_markers,
+            );
+        }
     }
     occurrences.blocks.sort_by_key(|block| block.span);
     occurrences
@@ -444,6 +496,7 @@ fn analyze_document_with_title_origin(
         .reference_links
         .sort_by_key(|reference| reference.span);
     occurrences.note_links.sort_by_key(|link| link.span);
+    occurrences.date_markers.sort_by_key(|marker| marker.span);
     let reference_graph = std::mem::take(&mut occurrences.references).finish();
 
     let mut diagnostics = parsed
@@ -488,6 +541,7 @@ fn analyze_document_with_title_origin(
             reference_graph,
             reference_links: occurrences.reference_links,
             properties,
+            date_markers: occurrences.date_markers,
             dates: occurrences.dates,
             diagnostics,
         },
@@ -541,23 +595,66 @@ pub(crate) fn analyze_project_with_title_origins(
             .cmp(&right.path)
             .then_with(|| left.span.cmp(&right.span))
     });
+    let date_marker_index = build_date_marker_index(&documents);
 
     (
         ProjectAnalysis {
             documents,
             diagnostics,
+            date_marker_index,
         },
         title_origins,
     )
 }
 
+fn build_date_marker_index(
+    documents: &BTreeMap<PathBuf, DocumentAnalysis>,
+) -> BTreeMap<DateTargetIdentity, Vec<DateMarkerLocation>> {
+    let mut index: BTreeMap<DateTargetIdentity, Vec<DateMarkerLocation>> = BTreeMap::new();
+    for document in documents.values() {
+        for marker in &document.date_markers {
+            index
+                .entry(marker.target)
+                .or_default()
+                .push(DateMarkerLocation {
+                    path: document.path.clone(),
+                    kind: marker.kind,
+                    origin: marker.origin.clone(),
+                    span: marker.span,
+                });
+        }
+    }
+    for locations in index.values_mut() {
+        locations.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then_with(|| left.span.cmp(&right.span))
+        });
+        locations.dedup_by(|left, right| {
+            left.path == right.path && left.span == right.span && left.kind == right.kind
+        });
+    }
+    index
+}
+
 impl ProjectAnalysis {
+    pub fn documents(&self) -> &BTreeMap<PathBuf, DocumentAnalysis> {
+        &self.documents
+    }
+
     pub fn document(&self, path: &Path) -> Option<&DocumentAnalysis> {
         self.documents.get(path)
     }
 
     pub fn note_candidates(&self) -> impl Iterator<Item = &DocumentAnalysis> {
         self.documents.values()
+    }
+
+    pub fn date_marker_locations(&self, target: &DateTargetIdentity) -> &[DateMarkerLocation] {
+        self.date_marker_index
+            .get(target)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub fn property_keys(&self) -> Vec<String> {
@@ -634,6 +731,28 @@ fn collect_reference_definitions(
     }
 }
 
+fn collect_reference_definition_date_markers(
+    source: &str,
+    blocks: &[Block<'_>],
+    markers: &mut Vec<DateMarkerOccurrence>,
+) {
+    for block in blocks {
+        let BlockKind::ReferenceDefinition { definitions } = &block.kind else {
+            continue;
+        };
+        for definition in definitions {
+            collect_date_markers(
+                source,
+                &definition.value,
+                DateMarkerOrigin::ReferenceDefinitionValue {
+                    key: definition.key.to_string(),
+                },
+                markers,
+            );
+        }
+    }
+}
+
 fn collect_block(
     source: &str,
     source_map: &SourceMap<'_>,
@@ -644,6 +763,12 @@ fn collect_block(
     let kind = match &block.kind {
         BlockKind::Paragraph { body } => {
             collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
+            collect_date_markers(
+                source,
+                body,
+                DateMarkerOrigin::Inline,
+                &mut occurrences.date_markers,
+            );
             collect_inline_source_spans(source, body, &mut body_spans);
             AnalysisBlockKind::Paragraph
         }
@@ -657,6 +782,12 @@ fn collect_block(
             raw_body,
         } => {
             collect_inlines(source, body, DateOrigin::VisibleInline, occurrences);
+            collect_date_markers(
+                source,
+                body,
+                DateMarkerOrigin::Inline,
+                &mut occurrences.date_markers,
+            );
             if let Some(title_span) = slice_span(source, raw_body) {
                 let span = whole_line_span(source_map, title_span);
                 let marker_start = title_span.start.saturating_sub(level + 1);
@@ -680,6 +811,12 @@ fn collect_block(
         BlockKind::List { items } => {
             for item in items {
                 collect_inlines(source, &item.body, DateOrigin::VisibleInline, occurrences);
+                collect_date_markers(
+                    source,
+                    &item.body,
+                    DateMarkerOrigin::Inline,
+                    &mut occurrences.date_markers,
+                );
                 collect_inline_source_spans(source, &item.body, &mut body_spans);
                 for child in &item.children {
                     collect_block(source, source_map, child, occurrences);
@@ -695,6 +832,12 @@ fn collect_block(
             for row in std::iter::once(header).chain(rows) {
                 for cell in &row.cells {
                     collect_inlines(source, &cell.body, DateOrigin::VisibleInline, occurrences);
+                    collect_date_markers(
+                        source,
+                        &cell.body,
+                        DateMarkerOrigin::Inline,
+                        &mut occurrences.date_markers,
+                    );
                     collect_inline_source_spans(source, &cell.body, &mut body_spans);
                 }
             }
@@ -947,6 +1090,75 @@ fn collect_property_dates(
     }
 }
 
+fn collect_date_markers(
+    source: &str,
+    inlines: &[Inline<'_>],
+    origin: DateMarkerOrigin,
+    markers: &mut Vec<DateMarkerOccurrence>,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::DateStamp(stamp) => {
+                let Some(span) = date_stamp_span(source, *stamp) else {
+                    continue;
+                };
+                markers.push(DateMarkerOccurrence {
+                    kind: stamp.kind(),
+                    target: date_target_identity(stamp.target()),
+                    origin: origin.clone(),
+                    span,
+                });
+            }
+            Inline::DateRange(range) => {
+                collect_date_range_marker(source, *range, origin.clone(), markers);
+            }
+            _ => {
+                if let Some(children) = inline.nested_inlines() {
+                    collect_date_markers(source, children, origin.clone(), markers);
+                }
+            }
+        }
+    }
+}
+
+fn collect_date_range_marker(
+    source: &str,
+    range: DateRange<'_>,
+    origin: DateMarkerOrigin,
+    markers: &mut Vec<DateMarkerOccurrence>,
+) {
+    let (Some(start_span), Some(end_span), Some(start), Some(end)) = (
+        date_stamp_span(source, range.start()),
+        date_stamp_span(source, range.end()),
+        range.start().date(),
+        range.end().date(),
+    ) else {
+        return;
+    };
+    markers.push(DateMarkerOccurrence {
+        kind: range.kind(),
+        target: DateTargetIdentity::Range { start, end },
+        origin,
+        span: SourceSpan::new(start_span.start, end_span.end),
+    });
+}
+
+fn date_stamp_span(source: &str, stamp: DateStamp<'_>) -> Option<SourceSpan> {
+    let body_span = slice_span(source, stamp.body())?;
+    Some(SourceSpan::new(
+        body_span.start.saturating_sub(1),
+        (body_span.end + 1).min(source.len()),
+    ))
+}
+
+fn date_target_identity(target: DateStampTarget) -> DateTargetIdentity {
+    match target {
+        DateStampTarget::Date(date) => DateTargetIdentity::Day(date),
+        DateStampTarget::Month(month) => DateTargetIdentity::Month(month),
+        DateStampTarget::IsoWeek(week) => DateTargetIdentity::IsoWeek(week),
+    }
+}
+
 fn collect_inline_source_spans(source: &str, inlines: &[Inline<'_>], spans: &mut Vec<SourceSpan>) {
     for inline in inlines {
         let slice = match inline {
@@ -1004,6 +1216,14 @@ fn collect_properties(source: &str, source_map: &SourceMap<'_>) -> Vec<PropertyO
             })
         })
         .collect()
+}
+
+fn property_occurs_in_container(property: &PropertyOccurrence, blocks: &[BlockOccurrence]) -> bool {
+    blocks.iter().any(|block| {
+        block.kind == AnalysisBlockKind::Container
+            && block.span.start <= property.span.start
+            && property.span.end <= block.span.end
+    })
 }
 
 fn duplicate_id_diagnostics(
@@ -1449,6 +1669,38 @@ mod tests {
     }
 
     #[test]
+    fn authored_date_markers_ignore_raw_scanned_properties_inside_containers() {
+        let source = "---quote\n--^ deadline: [2026-09-07]\nbody <2026-09-08>\n---\n\noutside\n--^ deadline: [2026-09-09]\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.properties.len(), 2);
+        assert_eq!(analysis.dates.len(), 2);
+        assert_eq!(analysis.date_markers.len(), 1);
+        assert_eq!(
+            &source[analysis.date_markers[0].span.start..analysis.date_markers[0].span.end],
+            "[2026-09-09]"
+        );
+        assert_eq!(
+            analysis.date_markers[0].origin,
+            DateMarkerOrigin::PropertyValue {
+                key: "deadline".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn authored_date_markers_ignore_reparsed_quote_bodies() {
+        let source = "> [2026-09-07]\n\n---quote\n<2026-09-08>\n---\n\noutside [2026-09-09]\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.date_markers.len(), 1);
+        assert_eq!(
+            &source[analysis.date_markers[0].span.start..analysis.date_markers[0].span.end],
+            "[2026-09-09]"
+        );
+    }
+
+    #[test]
     fn document_analysis_locates_reference_link_markers() {
         let source = "- [김치][]\n\n[김치]: <https://hakkeido.com/>\n";
         let analysis = analyze_document(Path::new("index.maki"), source);
@@ -1517,6 +1769,132 @@ mod tests {
                 ("2026-09-01", "[range][]"),
                 ("2026-09-02", "[range][]"),
             ]
+        );
+    }
+
+    #[test]
+    fn authored_date_markers_normalize_equivalent_day_spellings_and_keep_period_identity() {
+        let source = "*[2026-09-07 Monday]* [2026-W37-1] [2026-09] [2026-W37]";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.date_markers.len(), 4);
+        assert_eq!(
+            analysis.date_markers[0].target,
+            DateTargetIdentity::Day(Date::parse("2026-09-07").unwrap())
+        );
+        assert_eq!(
+            analysis.date_markers[1].target,
+            analysis.date_markers[0].target
+        );
+        assert_eq!(
+            analysis.date_markers[2].target,
+            DateTargetIdentity::Month(DateMonth::new(2026, 9).unwrap())
+        );
+        assert_eq!(
+            analysis.date_markers[3].target,
+            DateTargetIdentity::IsoWeek(IsoWeek::new(2026, 37).unwrap())
+        );
+        assert!(analysis.date_markers.iter().all(|marker| {
+            marker.kind == DateStampKind::Date && marker.origin == DateMarkerOrigin::Inline
+        }));
+        assert_eq!(
+            analysis
+                .date_markers
+                .iter()
+                .map(|marker| &source[marker.span.start..marker.span.end])
+                .collect::<Vec<_>>(),
+            vec![
+                "[2026-09-07 Monday]",
+                "[2026-W37-1]",
+                "[2026-09]",
+                "[2026-W37]",
+            ]
+        );
+    }
+
+    #[test]
+    fn authored_date_markers_record_property_and_root_reference_definition_origins() {
+        let source = "--^ scheduled: *<2026-09-07 10:00>*\n\n[launch]: See **[2026-W37-1 Monday]**\n[launch]: <2026-09-08 18:00>";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.date_markers.len(), 3);
+        assert_eq!(
+            analysis.date_markers[0].origin,
+            DateMarkerOrigin::PropertyValue {
+                key: "scheduled".to_string()
+            }
+        );
+        assert_eq!(analysis.date_markers[0].kind, DateStampKind::Event);
+        assert_eq!(
+            analysis.date_markers[1].origin,
+            DateMarkerOrigin::ReferenceDefinitionValue {
+                key: "launch".to_string()
+            }
+        );
+        assert_eq!(
+            analysis.date_markers[2].origin,
+            DateMarkerOrigin::ReferenceDefinitionValue {
+                key: "launch".to_string()
+            }
+        );
+        assert_eq!(analysis.date_markers[2].kind, DateStampKind::Event);
+        assert_eq!(
+            analysis
+                .date_markers
+                .iter()
+                .map(|marker| &source[marker.span.start..marker.span.end])
+                .collect::<Vec<_>>(),
+            vec![
+                "<2026-09-07 10:00>",
+                "[2026-W37-1 Monday]",
+                "<2026-09-08 18:00>",
+            ]
+        );
+    }
+
+    #[test]
+    fn authored_date_range_is_one_marker_covering_both_endpoints_and_separator() {
+        let source = "before <2026-W37-1 Mon>--<2026-09-11 Fri> after";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.date_markers.len(), 1);
+        assert_eq!(analysis.date_markers[0].kind, DateStampKind::Event);
+        assert_eq!(analysis.date_markers[0].origin, DateMarkerOrigin::Inline);
+        assert_eq!(
+            analysis.date_markers[0].target,
+            DateTargetIdentity::Range {
+                start: Date::parse("2026-09-07").unwrap(),
+                end: Date::parse("2026-09-11").unwrap(),
+            }
+        );
+        assert_eq!(
+            &source[analysis.date_markers[0].span.start..analysis.date_markers[0].span.end],
+            "<2026-W37-1 Mon>--<2026-09-11 Fri>"
+        );
+        assert_eq!(analysis.dates.len(), 2);
+    }
+
+    #[test]
+    fn authored_date_markers_exclude_semantically_expanded_reference_uses() {
+        let source = "[day][] [range][] [shown][day]\n\n[day]: [2026-09-07]\n[range]: [2026-09-08]--[2026-09-09]";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(
+            analysis
+                .date_markers
+                .iter()
+                .map(|marker| &source[marker.span.start..marker.span.end])
+                .collect::<Vec<_>>(),
+            vec!["[2026-09-07]", "[2026-09-08]--[2026-09-09]"]
+        );
+        assert!(analysis.date_markers.iter().all(|marker| matches!(
+            marker.origin,
+            DateMarkerOrigin::ReferenceDefinitionValue { .. }
+        )));
+        assert_eq!(analysis.dates.len(), 4);
+        assert_eq!(
+            &source[analysis.dates[0].span.start..analysis.dates[0].span.end],
+            "[day][]"
         );
     }
 
@@ -1742,6 +2120,54 @@ mod tests {
             &source[diagnostic.span.start..diagnostic.span.end] == "same"
                 && diagnostic.message == "duplicate id: same"
         }));
+    }
+
+    #[test]
+    fn project_date_marker_index_normalizes_targets_and_sorts_locations_by_path_and_span() {
+        let later_source = "[2026-09-07] then <2026-09-07>";
+        let earlier_source = "<2026-W37-1 Monday>";
+        let project = analyze_project(&[
+            SourceSnapshot {
+                path: Path::new("z.maki"),
+                source: later_source,
+            },
+            SourceSnapshot {
+                path: Path::new("a.maki"),
+                source: earlier_source,
+            },
+        ]);
+        let target = DateTargetIdentity::Day(Date::parse("2026-09-07").unwrap());
+
+        let locations = project.date_marker_locations(&target);
+        assert_eq!(locations.len(), 3);
+        assert_eq!(
+            locations
+                .iter()
+                .map(|location| location.path.as_path())
+                .collect::<Vec<_>>(),
+            vec![
+                Path::new("a.maki"),
+                Path::new("z.maki"),
+                Path::new("z.maki")
+            ]
+        );
+        assert_eq!(
+            locations
+                .iter()
+                .map(|location| location.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                DateStampKind::Event,
+                DateStampKind::Date,
+                DateStampKind::Event
+            ]
+        );
+        assert!(locations[1].span < locations[2].span);
+        assert!(
+            project
+                .date_marker_locations(&DateTargetIdentity::Month(DateMonth::new(2026, 9).unwrap()))
+                .is_empty()
+        );
     }
 
     #[test]

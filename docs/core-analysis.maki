@@ -1,5 +1,5 @@
 --^ title: Core Analysis
---^ updated: [2026-08-31]
+--^ updated: [2026-09-06]
 
 = 개요
 
@@ -34,8 +34,14 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - document reference graph: key별 active definition과 definition별 reverse use index
 - target reference occurrence: Hyper Link 또는 Note Link target인 일반 Reference Use의 title/target/span과 definition target span
 - direct link occurrence: Reference Definition identity가 없는 title/target/span
-- date occurrence: visible inline/property value origin, property key, kind, span
+- authored date marker occurrence: marker kind, normalized target identity, authored origin, marker 전체 span
+- rendered date occurrence: visible inline/property value origin, property key, kind, span
 - diagnostic: source path, span, kind, message
+
+Authored date marker의 target identity는 `Day(Date)`, `Month(DateMonth)`, `IsoWeek(IsoWeek)`, `Range { start, end }` 중 하나다.
+ISO weekday와 Gregorian day처럼 같은 날을 나타내는 표기는 같은 `Day` identity로 정규화한다.
+표시 suffix는 identity에 포함하지 않지만 day, month, ISO week, range granularity는 서로 다른 identity로 유지한다.
+Origin은 visible `Inline`, `PropertyValue { key }`, `ReferenceDefinitionValue { key }` 중 하나다.
 
 = Range Rules
 
@@ -49,6 +55,8 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 - Title span은 title을 재정의하는 첫 bracket body다. Default-title form과 automatic Footnote에는 별도 title span이 없다.
 - Direct Link marker span은 `[title](target)` 전체이고 title/target span은 각 delimiter를 제외한다.
 - Property key/value span은 prefix, `:`, 양끝 whitespace를 제외한다.
+- Date Stamp marker span은 delimiter와 표시 suffix를 포함한 marker 전체다.
+- Date Range marker는 endpoint별 occurrence로 나누지 않으며 span은 두 endpoint와 `--` separator 전체를 포함한다.
 - Parser warning은 문제가 있는 source line span을 우선 사용한다.
 - Project semantic warning은 문제가 있는 semantic target span을 사용한다.
 
@@ -59,6 +67,9 @@ Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자�
 
 두 함수는 filesystem과 network를 읽지 않는다.
 Project 분석은 document/heading/explicit-ID link resolution, explicit reference resolution과 semantic diagnostics를 계산한다.
+또한 normalized date target identity별 authored marker location index를 만들며 각 location은 path와 span 순으로 정렬하고 동일한 `(path, span, kind)`를 중복 제거한다.
+`date_marker_locations(target)`은 전체 Document를 다시 순회하지 않고 해당 target의 marker location slice를 반환한다.
+Project의 Document map과 date marker reverse index는 같은 immutable snapshot이다. Document map은 `documents()`와 `document(path)` read-only accessor로만 노출하여 index가 stale해지는 mutation을 허용하지 않는다.
 현재 snapshot 전체를 다시 분석한다. API 사용자는 내부 index 전략에 의존하지 않는다.
 
 Note Link target parser는 `/`와 `+` document selector, `#`와 `@` internal selector를 protocol-neutral data로 보존한다.
@@ -97,6 +108,8 @@ External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이
 - Quote와 quote container에서 별도 문자열로 다시 파싱한 nested Maki reference는 원본 source span이 없으므로 located graph에서 제외한다.
 - 일반 Property occurrence는 방향과 key/value span을 제공하며 owner block relation은 별도 field로 제공하지 않는다.
   Addressable `id` property만 Block ID occurrence가 owner block relation을 별도로 제공한다.
-- Date Range의 두 endpoint는 각각의 date occurrence로 노출된다.
+- 전역 line scanner가 fenced Container body의 property 모양 raw line을 Property occurrence로 보존할 수 있지만 authored date marker로는 index하지 않는다.
+- 기존 rendered `dates` occurrence는 hover 등 rendered 의미 소비를 위해 Reference Use의 semantic date expansion을 포함하며 Date Range endpoint를 각각 노출한다.
+- Authored date marker는 Reference Use의 semantic expansion을 포함하지 않는다. Root Reference Definition value에 직접 작성한 marker는 definition key origin으로 포함하며 Date Range 전체를 occurrence 하나로 노출한다.
 
 이 항목은 API 소비자가 의존해야 할 현재 동작을 설명한다. 변경 제안과 작업 상태는 Forgejo issue에서 관리한다.

@@ -128,7 +128,7 @@ fn project_index_json(maki: &Maki) -> Result<String, MakiError> {
 
 fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
     let mut json = String::from("{\"schema_version\":1,\"documents\":[");
-    for (index, document) in analysis.documents.values().enumerate() {
+    for (index, document) in analysis.documents().values().enumerate() {
         if index > 0 {
             json.push(',');
         }
