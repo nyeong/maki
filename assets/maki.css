@@ -996,7 +996,7 @@ pre code {
   border: 0;
   border-radius: 0;
   background: var(--code-bg);
-  font-size: 0.92rem;
+  font-size: 0.9em;
   line-height: 1.62;
   tab-size: 4;
 }
@@ -1292,7 +1292,7 @@ th {
 
   .maki-code-block pre {
     padding: 0.85rem;
-    font-size: 0.88rem;
+    font-size: 0.88em;
   }
 }
 
