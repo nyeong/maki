@@ -17,11 +17,13 @@ use lsp_types::{
     WorkspaceSymbolResponse,
 };
 use maki_core::analysis::{
-    AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin, DefinitionTarget, DefinitionTargetKind,
-    DocumentAnalysis, HeadingOccurrence, LinkResolution, ProjectAnalysis, ReferenceDefinitionId,
-    SourceSnapshot, analyze_project, property_description,
+    AnalysisBlockKind, AnalysisDiagnosticKind, DateMarkerOccurrence, DateOrigin,
+    DateTargetIdentity, DefinitionTarget, DefinitionTargetKind, DocumentAnalysis,
+    HeadingOccurrence, LinkResolution, ProjectAnalysis, ReferenceDefinitionId, SourceSnapshot,
+    analyze_project, property_description,
 };
 use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
+use maki_core::parser::DateStampKind;
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
 use maki_core::{Maki, MakiConfig, is_discoverable_maki_path, list_maki_files};
 
@@ -327,6 +329,11 @@ impl Server {
             return Some(GotoDefinitionResponse::Scalar(self.location(target)?));
         }
 
+        if let Some(marker) = date_marker_at(document, offset) {
+            let locations = self.date_marker_locations(&marker.target, [DateStampKind::Event]);
+            return (!locations.is_empty()).then_some(GotoDefinitionResponse::Array(locations));
+        }
+
         let definition_id = reference_declaration_definition_id_at(document, offset)?;
         let definition = document.reference_graph.definition(definition_id)?;
         Some(GotoDefinitionResponse::Scalar(
@@ -362,6 +369,16 @@ impl Server {
             return Some(self.reference_locations(&identity, params.context.include_declaration));
         }
 
+        if let Some(marker) = date_marker_at(document, offset) {
+            let kinds = params
+                .context
+                .include_declaration
+                .then_some(DateStampKind::Event)
+                .into_iter()
+                .chain([DateStampKind::Date]);
+            return Some(self.date_marker_locations(&marker.target, kinds));
+        }
+
         if let Some(identity) = self.reference_identity_at(document, offset) {
             return Some(self.reference_locations(&identity, params.context.include_declaration));
         }
@@ -372,6 +389,25 @@ impl Server {
             definition_id,
             params.context.include_declaration,
         ))
+    }
+
+    fn date_marker_locations(
+        &self,
+        target: &DateTargetIdentity,
+        kinds: impl IntoIterator<Item = DateStampKind>,
+    ) -> Vec<Location> {
+        let indexed_markers = self.analysis.date_marker_locations(target);
+        let mut locations = Vec::new();
+
+        for kind in kinds {
+            for marker in indexed_markers.iter().filter(|marker| marker.kind == kind) {
+                if let Some(location) = self.symbol_location(&marker.path, marker.span) {
+                    locations.push(location);
+                }
+            }
+        }
+
+        locations
     }
 
     fn document_reference_locations(
@@ -499,7 +535,7 @@ impl Server {
             locations.extend(self.declaration_locations(identity));
         }
 
-        for document in self.analysis.documents.values() {
+        for document in self.analysis.documents().values() {
             for link in &document.note_links {
                 let Some(LinkResolution::Found(target)) = link.resolution.as_ref() else {
                     continue;
@@ -590,7 +626,7 @@ impl Server {
         let query = params.query.to_lowercase();
         let mut symbols = Vec::new();
 
-        for document in self.analysis.documents.values() {
+        for document in self.analysis.documents().values() {
             if (query.is_empty() || document.title.to_lowercase().contains(&query))
                 && let Some(location) = self.symbol_location(&document.path, document.document_span)
             {
@@ -698,6 +734,13 @@ fn reference_use_definition_id_at(
         .iter()
         .find(|reference| span_touches(reference.span, offset))
         .and_then(|reference| reference.definition_id)
+}
+
+fn date_marker_at(document: &DocumentAnalysis, offset: usize) -> Option<&DateMarkerOccurrence> {
+    document
+        .date_markers
+        .iter()
+        .find(|marker| span_touches(marker.span, offset))
 }
 
 fn reference_declaration_definition_id_at(
@@ -1238,21 +1281,37 @@ mod tests {
         Url::parse(&format!("file:///workspace/{path}")).unwrap()
     }
 
+    fn definition_response_at(
+        server: &Server,
+        path: &str,
+        position: Position,
+    ) -> Option<GotoDefinitionResponse> {
+        server.definition(GotoDefinitionParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                lsp_types::TextDocumentIdentifier::new(document_uri(path)),
+                position,
+            ),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+    }
+
     fn definition_at(server: &Server, path: &str, position: Position) -> Location {
-        let response = server
-            .definition(GotoDefinitionParams {
-                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
-                    lsp_types::TextDocumentIdentifier::new(document_uri(path)),
-                    position,
-                ),
-                work_done_progress_params: Default::default(),
-                partial_result_params: Default::default(),
-            })
+        let response = definition_response_at(server, path, position)
             .expect("position should resolve to a definition");
         let GotoDefinitionResponse::Scalar(location) = response else {
             panic!("definition should be a scalar location");
         };
         location
+    }
+
+    fn definitions_at(server: &Server, path: &str, position: Position) -> Vec<Location> {
+        let response = definition_response_at(server, path, position)
+            .expect("position should resolve to definitions");
+        let GotoDefinitionResponse::Array(locations) = response else {
+            panic!("definitions should be an array of locations");
+        };
+        locations
     }
 
     fn references_at(
@@ -1274,6 +1333,24 @@ mod tests {
                 partial_result_params: Default::default(),
             })
             .expect("position should have references")
+    }
+
+    fn position_in(source: &str, marker: &str, byte_offset: usize) -> Position {
+        let marker_start = source.find(marker).expect("marker should occur in source");
+        lsp_position(
+            SourceMap::new(source)
+                .utf16_position(marker_start + byte_offset)
+                .expect("marker offset should have a UTF-16 position"),
+        )
+    }
+
+    fn marker_location(path: &str, source: &str, marker: &str) -> Location {
+        let start = source.find(marker).expect("marker should occur in source");
+        Location::new(
+            document_uri(path),
+            lsp_range(source, SourceSpan::new(start, start + marker.len()))
+                .expect("marker should have an LSP range"),
+        )
     }
 
     fn document_links_for(server: &Server, path: &str) -> Vec<DocumentLink> {
@@ -1326,7 +1403,7 @@ mod tests {
             server.documents.keys().cloned().collect::<Vec<_>>(),
             vec![PathBuf::from("index.maki")]
         );
-        assert_eq!(server.analysis.documents.len(), 1);
+        assert_eq!(server.analysis.documents().len(), 1);
 
         let hidden_uri = Url::from_file_path(
             workspace
@@ -1793,6 +1870,322 @@ mod tests {
                 document_uri("target.maki"),
                 Range::new(Position::new(0, 11), Position::new(0, 17)),
             )
+        );
+    }
+
+    #[test]
+    fn date_navigation_matches_normalized_targets_across_documents() {
+        let declaration_a = "<2026-09-07 09:00>\n";
+        let declaration_z = "<2026-W37-1 noon>\n";
+        let references = "[2026-W37-1 Monday]\n[2026-09-07]\n";
+        let server = test_server(BTreeMap::from([
+            (PathBuf::from("a-event.maki"), declaration_a.to_string()),
+            (PathBuf::from("references.maki"), references.to_string()),
+            (PathBuf::from("z-event.maki"), declaration_z.to_string()),
+        ]));
+        let expected_declarations = vec![
+            marker_location("a-event.maki", declaration_a, "<2026-09-07 09:00>"),
+            marker_location("z-event.maki", declaration_z, "<2026-W37-1 noon>"),
+        ];
+        let expected_references = vec![
+            marker_location("references.maki", references, "[2026-W37-1 Monday]"),
+            marker_location("references.maki", references, "[2026-09-07]"),
+        ];
+
+        assert_eq!(
+            definitions_at(&server, "references.maki", Position::new(0, 3)),
+            expected_declarations
+        );
+        assert_eq!(
+            definitions_at(&server, "z-event.maki", Position::new(0, 3)),
+            expected_declarations
+        );
+        assert_eq!(
+            references_at(&server, "a-event.maki", Position::new(0, 3), false),
+            expected_references
+        );
+
+        let mut expected_with_declarations = expected_declarations;
+        expected_with_declarations.extend(expected_references);
+        assert_eq!(
+            references_at(&server, "references.maki", Position::new(1, 3), true),
+            expected_with_declarations
+        );
+    }
+
+    #[test]
+    fn date_definition_is_absent_without_an_event_declaration() {
+        let source = "[2026-10-01]\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        assert_eq!(
+            definition_response_at(&server, "index.maki", Position::new(0, 3)),
+            None
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 3), false),
+            vec![marker_location("index.maki", source, "[2026-10-01]")]
+        );
+    }
+
+    #[test]
+    fn date_navigation_preserves_target_granularity() {
+        let declarations = concat!(
+            "<2026-09-07>\n",
+            "<2026-09>\n",
+            "<2026-W37>\n",
+            "<2026-09-07>--<2026-09-07>\n",
+            "<2026-09-07>--<2026-09-13>\n",
+            "<2026-09-01>--<2026-09-30>\n",
+        );
+        let cases = [
+            ("day.maki", "[2026-09-07]", "<2026-09-07>"),
+            ("month.maki", "[2026-09]", "<2026-09>"),
+            ("week.maki", "[2026-W37]", "<2026-W37>"),
+            (
+                "one-day-range.maki",
+                "[2026-09-07]--[2026-09-07]",
+                "<2026-09-07>--<2026-09-07>",
+            ),
+            (
+                "week-range.maki",
+                "[2026-09-07]--[2026-09-13]",
+                "<2026-09-07>--<2026-09-13>",
+            ),
+            (
+                "month-range.maki",
+                "[2026-09-01]--[2026-09-30]",
+                "<2026-09-01>--<2026-09-30>",
+            ),
+        ];
+        let mut documents =
+            BTreeMap::from([(PathBuf::from("declarations.maki"), declarations.to_string())]);
+        for (path, reference, _) in cases {
+            documents.insert(PathBuf::from(path), format!("{reference}\n"));
+        }
+        let server = test_server(documents);
+
+        for (path, reference, declaration) in cases {
+            assert_eq!(
+                definitions_at(&server, path, Position::new(0, 2)),
+                vec![marker_location(
+                    "declarations.maki",
+                    declarations,
+                    declaration,
+                )],
+                "{reference} should resolve only to its exact target granularity"
+            );
+            assert_eq!(
+                references_at(&server, path, Position::new(0, 2), false),
+                vec![marker_location(path, &format!("{reference}\n"), reference)],
+                "{reference} should not include containing periods or equivalent ranges"
+            );
+        }
+    }
+
+    #[test]
+    fn date_range_navigation_uses_the_whole_normalized_marker() {
+        let declaration = "<2026-09-07 kickoff>--<2026-09-11 wrap>";
+        let reference = "[2026-W37-1 Mon]--[2026-W37-5 Fri]";
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("declaration.maki"),
+                format!("{declaration}\n"),
+            ),
+            (PathBuf::from("reference.maki"), format!("{reference}\n")),
+        ]);
+        let server = test_server(documents);
+        let expected = vec![marker_location(
+            "declaration.maki",
+            &format!("{declaration}\n"),
+            declaration,
+        )];
+        let separator = reference.find("--").unwrap();
+
+        for byte_offset in [2, separator, separator + 1, reference.len() - 2] {
+            assert_eq!(
+                definitions_at(
+                    &server,
+                    "reference.maki",
+                    position_in(reference, reference, byte_offset),
+                ),
+                expected,
+                "every part of a range marker should resolve as one target"
+            );
+        }
+    }
+
+    #[test]
+    fn date_navigation_uses_delimiters_not_property_keys_for_roles() {
+        let source = concat!(
+            "--v id: [2026-09-07]\n",
+            "--v title: <2026-W37-1 10:00>\n",
+            "Task\n",
+        );
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        let declaration = marker_location("index.maki", source, "<2026-W37-1 10:00>");
+        let reference = marker_location("index.maki", source, "[2026-09-07]");
+
+        assert_eq!(
+            definitions_at(
+                &server,
+                "index.maki",
+                position_in(source, "[2026-09-07]", 3),
+            ),
+            vec![declaration.clone()]
+        );
+        assert_eq!(
+            references_at(
+                &server,
+                "index.maki",
+                position_in(source, "[2026-09-07]", 3),
+                true,
+            ),
+            vec![declaration.clone(), reference.clone()]
+        );
+        assert_eq!(
+            references_at(
+                &server,
+                "index.maki",
+                position_in(source, "<2026-W37-1 10:00>", 3),
+                true,
+            ),
+            vec![declaration, reference]
+        );
+    }
+
+    #[test]
+    fn direct_date_markers_follow_local_reference_precedence() {
+        let index = "[deadline][]\n\n[deadline]: [2026-09-07]\n";
+        let declaration = "<2026-W37-1>\n";
+        let server = test_server(BTreeMap::from([
+            (PathBuf::from("event.maki"), declaration.to_string()),
+            (PathBuf::from("index.maki"), index.to_string()),
+        ]));
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 3)),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(2, 1), Position::new(2, 9)),
+            )
+        );
+        assert_eq!(
+            definitions_at(&server, "index.maki", Position::new(2, 15)),
+            vec![marker_location("event.maki", declaration, "<2026-W37-1>")]
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(2, 15), true),
+            vec![
+                marker_location("event.maki", declaration, "<2026-W37-1>"),
+                marker_location("index.maki", index, "[2026-09-07]"),
+            ]
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(2, 10)),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(2, 1), Position::new(2, 9)),
+            )
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 3), true),
+            vec![
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(2, 1), Position::new(2, 9)),
+                ),
+                Location::new(
+                    document_uri("index.maki"),
+                    Range::new(Position::new(0, 1), Position::new(0, 9)),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_date_marker_precedes_heading_reference_identity() {
+        let index = "= [2026-09-07]\n--^ id: dated-heading\n";
+        let other = "[[/index#dated-heading]]\n<2026-W37-1>\n";
+        let server = test_server(BTreeMap::from([
+            (PathBuf::from("index.maki"), index.to_string()),
+            (PathBuf::from("other.maki"), other.to_string()),
+        ]));
+
+        assert_eq!(
+            definitions_at(&server, "index.maki", Position::new(0, 5)),
+            vec![marker_location("other.maki", other, "<2026-W37-1>")]
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", Position::new(0, 5), false),
+            vec![marker_location("index.maki", index, "[2026-09-07]")]
+        );
+    }
+
+    #[test]
+    fn document_title_date_marker_precedes_document_reference_identity() {
+        let index = "--^ title: [2026-09-07]\n\nbody\n";
+        let other = "[[/index]]\n<2026-W37-1>\n";
+        let server = test_server(BTreeMap::from([
+            (PathBuf::from("index.maki"), index.to_string()),
+            (PathBuf::from("other.maki"), other.to_string()),
+        ]));
+        let marker_position = position_in(index, "[2026-09-07]", 3);
+
+        assert_eq!(
+            definitions_at(&server, "index.maki", marker_position),
+            vec![marker_location("other.maki", other, "<2026-W37-1>")]
+        );
+        assert_eq!(
+            references_at(&server, "index.maki", marker_position, false),
+            vec![marker_location("index.maki", index, "[2026-09-07]")]
+        );
+    }
+
+    #[test]
+    fn date_navigation_uses_utf16_ranges_and_current_source_snapshots() {
+        let reference = "😀 [2026-09-07]\n";
+        let mut server = test_server(BTreeMap::from([
+            (
+                PathBuf::from("declaration.maki"),
+                "no declaration yet\n".to_string(),
+            ),
+            (PathBuf::from("reference.maki"), reference.to_string()),
+        ]));
+
+        assert_eq!(
+            definition_response_at(&server, "reference.maki", Position::new(0, 4)),
+            None
+        );
+
+        let unsaved = "😀 <2026-W37-1>\n";
+        server
+            .open_documents
+            .insert(PathBuf::from("declaration.maki"));
+        server
+            .documents
+            .insert(PathBuf::from("declaration.maki"), unsaved.to_string());
+        server.reanalyze();
+
+        assert_eq!(
+            definitions_at(&server, "reference.maki", Position::new(0, 4)),
+            vec![Location::new(
+                document_uri("declaration.maki"),
+                Range::new(Position::new(0, 3), Position::new(0, 15)),
+            )]
+        );
+        assert_eq!(
+            references_at(&server, "declaration.maki", Position::new(0, 4), false),
+            vec![Location::new(
+                document_uri("reference.maki"),
+                Range::new(Position::new(0, 3), Position::new(0, 15)),
+            )]
         );
     }
 
