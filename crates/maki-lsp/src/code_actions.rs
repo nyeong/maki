@@ -9,6 +9,7 @@ use maki_core::analysis::{
     AnalysisBlockKind, DocumentAnalysis, ReferenceDefinitionOccurrence, ReferenceDefinitionState,
     UrlLinkOccurrence,
 };
+use maki_core::link_target::http_url_display_title;
 use maki_core::parser::ReferenceValueKind;
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ struct ExtractActionData {
 struct ExtractionIndex<'a> {
     reserved_keys: HashSet<&'a str>,
     active_url_definitions: HashMap<&'a str, &'a ReferenceDefinitionOccurrence>,
+    table_spans: Vec<SourceSpan>,
 }
 
 struct ExtractionContext<'a> {
@@ -76,15 +78,36 @@ impl<'a> ExtractionIndex<'a> {
                 active_url_definitions.entry(target).or_insert(definition);
             }
         }
+        let table_spans = document
+            .blocks
+            .iter()
+            .filter_map(|block| (block.kind == AnalysisBlockKind::Table).then_some(block.span))
+            .collect::<Vec<_>>();
+        debug_assert!(
+            table_spans
+                .windows(2)
+                .all(|spans| spans[0].end <= spans[1].start),
+            "analysis table spans must be sorted and non-overlapping"
+        );
 
         Self {
             reserved_keys,
             active_url_definitions,
+            table_spans,
         }
     }
 
     fn active_url_definition(&self, target: &str) -> Option<&'a ReferenceDefinitionOccurrence> {
         self.active_url_definitions.get(target).copied()
+    }
+
+    fn is_in_table(&self, offset: usize) -> bool {
+        let insertion = self
+            .table_spans
+            .partition_point(|span| span.start <= offset);
+        insertion
+            .checked_sub(1)
+            .is_some_and(|index| self.table_spans[index].contains(offset))
     }
 }
 
@@ -105,6 +128,16 @@ pub(crate) fn extract_url_actions(
     let Some(selection) = selection_span(&source_map, range) else {
         return Vec::new();
     };
+    let mut candidates = document
+        .url_links
+        .iter()
+        .filter(|link| spans_intersect_or_touch(link.span, selection))
+        .filter(|link| parse_http_url(&link.target).is_some())
+        .peekable();
+    if candidates.peek().is_none() {
+        return Vec::new();
+    }
+
     let index = ExtractionIndex::new(document);
     let extraction = ExtractionContext {
         uri,
@@ -115,11 +148,7 @@ pub(crate) fn extract_url_actions(
         capabilities,
     };
 
-    document
-        .url_links
-        .iter()
-        .filter(|link| spans_intersect_or_touch(link.span, selection))
-        .filter(|link| parse_http_url(&link.target).is_some())
+    candidates
         .filter_map(|link| action_for_link(&extraction, link, &index))
         .map(CodeActionOrCommand::CodeAction)
         .collect()
@@ -243,21 +272,16 @@ pub(crate) fn resolve_extract_url_action<'a>(
                     capabilities,
                 );
             }
-            valid_reference_component(fallback_url_display(&link.target))
-                .then(|| fallback_url_display(&link.target).to_string())
+            owned_url_reference_title(&link.target)
         }
         ExtractMode::BareFetch => {
             if index.active_url_definition(&link.target).is_some() {
-                valid_reference_component(fallback_url_display(&link.target))
-                    .then(|| fallback_url_display(&link.target).to_string())
+                owned_url_reference_title(&link.target)
             } else {
                 let fetched_title = page_titles.page_title(&parsed_url);
                 fetched_title
                     .filter(|title| valid_fetched_title(title))
-                    .or_else(|| {
-                        let fallback = fallback_url_display(&link.target);
-                        valid_reference_component(fallback).then(|| fallback.to_string())
-                    })
+                    .or_else(|| owned_url_reference_title(&link.target))
             }
         }
     };
@@ -290,7 +314,7 @@ fn action_for_link(
         let edit = extraction_edit(context, link, display, index)?;
         (EXTRACT_ACTION_TITLE, ExtractMode::Named, Some(edit))
     } else if index.active_url_definition(&link.target).is_some() {
-        let display = fallback_url_display(&link.target);
+        let display = http_url_display_title(&link.target);
         if !valid_reference_component(display) {
             return None;
         }
@@ -337,9 +361,7 @@ fn extraction_edit(
     index: &ExtractionIndex<'_>,
 ) -> Option<WorkspaceEdit> {
     let source = context.source;
-    let in_table_row = context.document.blocks.iter().any(|block| {
-        block.kind == AnalysisBlockKind::Table && block.span.contains(link.span.start)
-    });
+    let in_table_row = index.is_in_table(link.span.start);
     if !valid_reference_component(display)
         || (in_table_row && !is_table_safe_reference_component(display))
     {
@@ -479,23 +501,17 @@ fn ends_with_blank_line(source: &str, line_ending: &str) -> bool {
         .is_some_and(|without_last| without_last.ends_with(line_ending))
 }
 
-fn fallback_url_display(target: &str) -> &str {
-    let Some((scheme, body)) = target.split_once("://") else {
-        return target;
-    };
-    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
-        body
-    } else {
-        target
-    }
-}
-
 fn valid_reference_component(value: &str) -> bool {
     !value.is_empty()
         && value.trim() == value
         && !value.starts_with('^')
         && !value.contains(['[', ']'])
         && !value.chars().any(char::is_control)
+}
+
+fn owned_url_reference_title(target: &str) -> Option<String> {
+    let title = http_url_display_title(target);
+    valid_reference_component(title).then(|| title.to_owned())
 }
 
 fn valid_fetched_title(value: &str) -> bool {
@@ -892,6 +908,18 @@ mod tests {
     }
 
     #[test]
+    fn table_index_tracks_links_before_inside_and_after_tables() {
+        let source = "[before]<https://before.example/>\n\n| Link |\n|---|\n| [inside]<https://inside.example/> |\n\n[after]<https://after.example/>";
+        let document = analyze_document(Path::new("index.maki"), source);
+        let index = ExtractionIndex::new(&document);
+
+        assert_eq!(document.url_links.len(), 3);
+        assert!(!index.is_in_table(document.url_links[0].span.start));
+        assert!(index.is_in_table(document.url_links[1].span.start));
+        assert!(!index.is_in_table(document.url_links[2].span.start));
+    }
+
+    #[test]
     fn unrepresentable_immediate_extractions_are_not_offered() {
         let ipv6 = "<https://[2606:4700:4700::1111]/>\n\n[site]: <https://[2606:4700:4700::1111]/>";
         assert!(
@@ -952,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn dense_key_collisions_are_indexed_once() {
+    fn available_key_skips_dense_suffix_collisions() {
         let mut owned = vec!["Title".to_string()];
         owned.extend((2..=10_000).map(|suffix| format!("Title-{suffix}")));
         let reserved = owned.iter().map(String::as_str).collect::<HashSet<_>>();

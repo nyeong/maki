@@ -554,6 +554,16 @@ fn parse_braced_inline<'a>(
     Some(wrap(contents))
 }
 
+fn parse_link_compound<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    // Each parser must leave the cursor unchanged when returning `None`, so the
+    // next family sees the same opener and recovery can classify it afterward.
+    parse_inline_note_link(cursor)
+        .or_else(|| parse_inline_direct_link(cursor))
+        .or_else(|| parse_inline_hyper_link(cursor))
+        .or_else(|| parse_inline_footnote(cursor))
+        .or_else(|| parse_inline_reference(cursor))
+}
+
 fn parse_escaped_inline<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
     let escaped = cursor
         .rest()
@@ -564,69 +574,92 @@ fn parse_escaped_inline<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>>
     cursor.bump('\\'.len_utf8());
     let escaped_start = cursor.pos();
 
-    let compound = parse_inline_note_link(cursor)
-        .or_else(|| parse_inline_direct_link(cursor))
-        .or_else(|| parse_inline_hyper_link(cursor))
-        .or_else(|| parse_inline_footnote(cursor))
-        .or_else(|| parse_inline_reference(cursor));
-    if compound.is_none() {
-        if let Some(end) = closed_link_compound_end(cursor) {
-            cursor.bump(end);
-        } else if link_compound_is_committed(cursor) {
-            cursor.bump(cursor.rest().len());
-        } else {
-            cursor.bump(escaped.len_utf8());
+    if parse_link_compound(cursor).is_none() {
+        match link_compound_recovery(cursor) {
+            LinkCompoundRecovery::Closed(end) => cursor.bump(end),
+            LinkCompoundRecovery::Incomplete => cursor.bump(cursor.rest().len()),
+            LinkCompoundRecovery::Unrecognized => cursor.bump(escaped.len_utf8()),
         }
     }
 
     Some(Inline::Text(&cursor.source[escaped_start..cursor.pos()]))
 }
 
-fn closed_link_compound_end(cursor: &InlineCursor<'_>) -> Option<usize> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkCompoundRecovery {
+    Unrecognized,
+    Closed(usize),
+    Incomplete,
+}
+
+impl LinkCompoundRecovery {
+    fn from_end(end: Option<usize>) -> Self {
+        end.map_or(Self::Incomplete, Self::Closed)
+    }
+}
+
+fn link_compound_recovery(cursor: &InlineCursor<'_>) -> LinkCompoundRecovery {
     let rest = cursor.rest();
     if rest.starts_with(INLINE_NOTE_LINK_BEGIN) {
-        let target_end =
-            cursor.find_closing(ClosingDelimiter::NoteLink, INLINE_NOTE_LINK_BEGIN.len())?;
-        return Some(target_end + INLINE_NOTE_LINK_END.len());
+        let end = cursor
+            .find_closing(ClosingDelimiter::NoteLink, INLINE_NOTE_LINK_BEGIN.len())
+            .map(|target_end| target_end + INLINE_NOTE_LINK_END.len());
+        return LinkCompoundRecovery::from_end(end);
     }
     if starts_http_url_opener(rest) {
-        let target_end = cursor.find_closing(ClosingDelimiter::Angle, '<'.len_utf8())?;
-        return Some(target_end + '>'.len_utf8());
+        let end = cursor
+            .find_closing(ClosingDelimiter::Angle, '<'.len_utf8())
+            .map(|target_end| target_end + '>'.len_utf8());
+        return LinkCompoundRecovery::from_end(end);
     }
 
-    let (raw_title, title_end) = bracket_contents_at(cursor, 0)?;
+    let Some((raw_title, title_end)) = bracket_contents_at(cursor, 0) else {
+        return LinkCompoundRecovery::Unrecognized;
+    };
     let after_title = &rest[title_end..];
     if let Some(raw_footnote_title) = raw_title.strip_prefix('^') {
         let title = raw_footnote_title.trim();
         let valid_title =
             raw_footnote_title.is_empty() || (!title.is_empty() && !title.starts_with('^'));
-        return (valid_title && after_title.starts_with('['))
-            .then(|| bracket_contents_at(cursor, title_end).map(|(_, end)| end))
-            .flatten();
+        if !valid_title || !after_title.starts_with('[') {
+            return LinkCompoundRecovery::Unrecognized;
+        }
+        let end = bracket_contents_at(cursor, title_end).map(|(_, end)| end);
+        return LinkCompoundRecovery::from_end(end);
     }
-    link_title(raw_title)?;
+    if link_title(raw_title).is_none() {
+        return LinkCompoundRecovery::Unrecognized;
+    }
 
     if after_title.starts_with(INLINE_NOTE_LINK_BEGIN) {
         let target_start = title_end + INLINE_NOTE_LINK_BEGIN.len();
-        let target_end = cursor.find_closing(ClosingDelimiter::NoteLink, target_start)?;
-        return Some(target_end + INLINE_NOTE_LINK_END.len());
+        let end = cursor
+            .find_closing(ClosingDelimiter::NoteLink, target_start)
+            .map(|target_end| target_end + INLINE_NOTE_LINK_END.len());
+        return LinkCompoundRecovery::from_end(end);
     }
     if after_title.starts_with('(') {
-        let opening = cursor.pos().checked_add(title_end)?;
-        let closing = cursor.delimiters.matching_parenthesis(opening)?;
-        return closing
-            .checked_sub(cursor.pos())
+        let end = cursor
+            .pos()
+            .checked_add(title_end)
+            .and_then(|opening| cursor.delimiters.matching_parenthesis(opening))
+            .and_then(|closing| closing.checked_sub(cursor.pos()))
             .and_then(|end| end.checked_add(')'.len_utf8()));
+        return LinkCompoundRecovery::from_end(end);
     }
     if starts_http_url_opener(after_title) {
         let target_start = title_end + '<'.len_utf8();
-        let target_end = cursor.find_closing(ClosingDelimiter::Angle, target_start)?;
-        return Some(target_end + '>'.len_utf8());
+        let end = cursor
+            .find_closing(ClosingDelimiter::Angle, target_start)
+            .map(|target_end| target_end + '>'.len_utf8());
+        return LinkCompoundRecovery::from_end(end);
     }
-    after_title
-        .starts_with('[')
-        .then(|| bracket_contents_at(cursor, title_end).map(|(_, end)| end))
-        .flatten()
+    if after_title.starts_with('[') {
+        let end = bracket_contents_at(cursor, title_end).map(|(_, end)| end);
+        return LinkCompoundRecovery::from_end(end);
+    }
+
+    LinkCompoundRecovery::Unrecognized
 }
 
 fn starts_http_url_opener(source: &str) -> bool {
@@ -638,33 +671,8 @@ fn starts_http_url_opener(source: &str) -> bool {
     })
 }
 
-fn link_compound_is_committed(cursor: &InlineCursor<'_>) -> bool {
-    let rest = cursor.rest();
-    if rest.starts_with(INLINE_NOTE_LINK_BEGIN) || starts_http_url_opener(rest) {
-        return true;
-    }
-
-    let Some((raw_title, title_end)) = bracket_contents_at(cursor, 0) else {
-        return false;
-    };
-    let after_title = &rest[title_end..];
-    if let Some(raw_footnote_title) = raw_title.strip_prefix('^') {
-        let title = raw_footnote_title.trim();
-        let valid_title =
-            raw_footnote_title.is_empty() || (!title.is_empty() && !title.starts_with('^'));
-        return valid_title && after_title.starts_with('[');
-    }
-    if link_title(raw_title).is_none() {
-        return false;
-    }
-
-    after_title.starts_with('[')
-        || after_title.starts_with('(')
-        || starts_http_url_opener(after_title)
-}
-
 fn parse_incomplete_link_compound<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
-    if !link_compound_is_committed(cursor) || closed_link_compound_end(cursor).is_some() {
+    if link_compound_recovery(cursor) != LinkCompoundRecovery::Incomplete {
         return None;
     }
 
@@ -697,11 +705,7 @@ pub fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
         let start = cursor.pos();
 
         if let Some(inline) = parse_inline_code(&mut cursor)
-            .or_else(|| parse_inline_note_link(&mut cursor))
-            .or_else(|| parse_inline_direct_link(&mut cursor))
-            .or_else(|| parse_inline_hyper_link(&mut cursor))
-            .or_else(|| parse_inline_footnote(&mut cursor))
-            .or_else(|| parse_inline_reference(&mut cursor))
+            .or_else(|| parse_link_compound(&mut cursor))
             .or_else(|| parse_incomplete_link_compound(&mut cursor))
             .or_else(|| parse_inline_date_range(&mut cursor))
             .or_else(|| parse_inline_date_stamp(&mut cursor))

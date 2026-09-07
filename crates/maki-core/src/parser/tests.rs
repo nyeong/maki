@@ -534,6 +534,7 @@ fn closed_invalid_link_compounds_do_not_consume_following_links() {
     for source in [
         "[x]() [[after]]",
         "[x]( ) [[after]]",
+        "[x](https://bad/<https://inner>) [[after]]",
         "[[]] [[after]]",
         "[x][[]] [[after]]",
         "[x][ ] [[after]]",
@@ -541,6 +542,8 @@ fn closed_invalid_link_compounds_do_not_consume_following_links() {
         "[^][] [[after]]",
         "[^x][ ] [[after]]",
         "[^x][^key] [[after]]",
+        "<http://bad [[inner]] value> [[after]]",
+        "[t]<http://bad [x][k] value> [[after]]",
     ] {
         let after_start = source.rfind("[[after]]").unwrap();
         assert_eq!(

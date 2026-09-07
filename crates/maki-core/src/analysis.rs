@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
+use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title};
 use crate::parser::{
     self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Inline, IsoWeek,
@@ -1032,7 +1032,8 @@ fn collect_inlines(
                         title_span,
                         target_span,
                     });
-                    let reference_title = (*title).unwrap_or_else(|| display_url_title(target));
+                    let reference_title =
+                        (*title).unwrap_or_else(|| http_url_display_title(target));
                     let Some(reference_title_span) = slice_span(source, reference_title) else {
                         continue;
                     };
@@ -1074,17 +1075,6 @@ fn collect_inlines(
                 }
             }
         }
-    }
-}
-
-fn display_url_title(target: &str) -> &str {
-    let Some((scheme, body)) = target.split_once("://") else {
-        return target;
-    };
-    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
-        body
-    } else {
-        target
     }
 }
 

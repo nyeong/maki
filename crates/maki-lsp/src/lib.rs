@@ -144,7 +144,6 @@ struct Server {
     source_root: PathBuf,
     documents: BTreeMap<PathBuf, String>,
     document_versions: BTreeMap<PathBuf, i32>,
-    open_documents: BTreeSet<PathBuf>,
     analysis: ProjectAnalysis,
     page_title_provider: Arc<dyn PageTitleProvider>,
     extraction_capabilities: code_actions::ExtractionCapabilities,
@@ -170,7 +169,6 @@ impl Server {
             source_root,
             documents,
             document_versions: BTreeMap::new(),
-            open_documents: BTreeSet::new(),
             analysis,
             page_title_provider: Arc::new(HttpPageTitleProvider::new()),
             extraction_capabilities,
@@ -268,7 +266,6 @@ impl Server {
                         .insert(path.clone(), params.text_document.version);
                     self.documents
                         .insert(path.clone(), params.text_document.text);
-                    self.open_documents.insert(path);
                     self.reanalyze();
                     self.publish_diagnostics(connection)?;
                 }
@@ -279,7 +276,7 @@ impl Server {
                 if let (Some(path), Some(change)) = (
                     self.relative_path(&params.text_document.uri),
                     params.content_changes.into_iter().last(),
-                ) && self.open_documents.contains(&path)
+                ) && self.document_versions.contains_key(&path)
                 {
                     self.document_versions
                         .insert(path.clone(), params.text_document.version);
@@ -301,7 +298,6 @@ impl Server {
                             self.documents.remove(&path);
                         }
                     }
-                    self.open_documents.remove(&path);
                     self.document_versions.remove(&path);
                     self.reanalyze();
                     self.publish_empty_diagnostics(connection, &path)?;
@@ -336,7 +332,7 @@ impl Server {
     }
 
     fn publish_diagnostics(&self, connection: &Connection) -> LspResult<()> {
-        for path in &self.open_documents {
+        for path in self.document_versions.keys() {
             let Some(source) = self.documents.get(path) else {
                 continue;
             };
@@ -1418,7 +1414,6 @@ mod tests {
         Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
@@ -1715,6 +1710,100 @@ mod tests {
     }
 
     #[test]
+    fn document_versions_are_the_open_document_registry_across_lifecycle() {
+        let workspace = temp_workspace("open-document-registry");
+        write_workspace_file(&workspace, "index.maki", "disk");
+        let path = PathBuf::from("index.maki");
+        let uri = Url::from_file_path(workspace.root.join(&path)).unwrap();
+        let mut server =
+            Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
+        let (server_connection, _client_connection) = Connection::memory();
+        let change = |version, text: &str| Notification {
+            method: "textDocument/didChange".to_string(),
+            params: serde_json::to_value(DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier::new(
+                    uri.clone(),
+                    version,
+                ),
+                content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.to_string(),
+                }],
+            })
+            .unwrap(),
+        };
+
+        server
+            .handle_notification(&server_connection, change(0, "ignored-before-open"))
+            .unwrap();
+        assert!(!server.document_versions.contains_key(&path));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("disk")
+        );
+
+        server
+            .handle_notification(
+                &server_connection,
+                Notification {
+                    method: "textDocument/didOpen".to_string(),
+                    params: serde_json::to_value(DidOpenTextDocumentParams {
+                        text_document: lsp_types::TextDocumentItem::new(
+                            uri.clone(),
+                            "maki".to_string(),
+                            1,
+                            "first".to_string(),
+                        ),
+                    })
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        assert_eq!(server.document_versions.get(&path), Some(&1));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("first")
+        );
+
+        server
+            .handle_notification(&server_connection, change(2, "second"))
+            .unwrap();
+        assert_eq!(server.document_versions.get(&path), Some(&2));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("second")
+        );
+
+        server
+            .handle_notification(
+                &server_connection,
+                Notification {
+                    method: "textDocument/didClose".to_string(),
+                    params: serde_json::to_value(DidCloseTextDocumentParams {
+                        text_document: lsp_types::TextDocumentIdentifier::new(uri.clone()),
+                    })
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        assert!(!server.document_versions.contains_key(&path));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("disk")
+        );
+
+        server
+            .handle_notification(&server_connection, change(3, "ignored-after-close"))
+            .unwrap();
+        assert!(!server.document_versions.contains_key(&path));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("disk")
+        );
+    }
+
+    #[test]
     fn workspace_loading_bounds_duplicated_hidden_and_generated_trees() {
         let workspace = temp_workspace("hidden-tree");
         write_workspace_file(&workspace, "index.maki", "= Included");
@@ -1922,7 +2011,6 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
@@ -2510,8 +2598,8 @@ mod tests {
 
         let unsaved = "😀 <2026-W37-1>\n";
         server
-            .open_documents
-            .insert(PathBuf::from("declaration.maki"));
+            .document_versions
+            .insert(PathBuf::from("declaration.maki"), 1);
         server
             .documents
             .insert(PathBuf::from("declaration.maki"), unsaved.to_string());
@@ -2680,7 +2768,6 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
@@ -2782,7 +2869,6 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
@@ -2822,9 +2908,8 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
             documents,
-            document_versions: BTreeMap::new(),
+            document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
         };
@@ -2856,9 +2941,8 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
             documents,
-            document_versions: BTreeMap::new(),
+            document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
         };
@@ -2897,9 +2981,8 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
             documents,
-            document_versions: BTreeMap::new(),
+            document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
         };
@@ -2975,7 +3058,6 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
@@ -3014,7 +3096,6 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),

@@ -69,6 +69,21 @@ pub fn parse_note_link_target(target: &str) -> NoteLinkTarget<'_> {
     NoteLinkTarget::parse(target)
 }
 
+/// Returns the authored HTTP URL text used as its fallback label.
+///
+/// The returned value is always a subslice of `target`, which lets source
+/// analysis preserve exact authored spans.
+pub fn http_url_display_title(target: &str) -> &str {
+    let Some((scheme, body)) = target.split_once("://") else {
+        return target;
+    };
+    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+        body
+    } else {
+        target
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +168,19 @@ mod tests {
                 inner: Some(InnerSelector::Id("id")),
             }
         );
+    }
+
+    #[test]
+    fn derives_http_display_titles_case_insensitively() {
+        assert_eq!(
+            http_url_display_title("https://example.com/path"),
+            "example.com/path"
+        );
+        assert_eq!(http_url_display_title("HTTP://EXAMPLE.COM"), "EXAMPLE.COM");
+        assert_eq!(
+            http_url_display_title("ftp://example.com"),
+            "ftp://example.com"
+        );
+        assert_eq!(http_url_display_title("local/path"), "local/path");
     }
 }

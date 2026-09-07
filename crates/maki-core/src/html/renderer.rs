@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    link_target::{DocumentSelector, InnerSelector, NoteLinkTarget},
+    link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title},
     maki::{self, NoteLinkResolution},
     parser::{
         self, BlockKind, DateRange, DateStamp, Document, Inline, ListItem, ListKind,
@@ -392,16 +392,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_hyper_link(&mut self, title: Option<&str>, target: &str) {
-        let title = title.unwrap_or_else(|| {
-            let Some((scheme, body)) = target.split_once("://") else {
-                return target;
-            };
-            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
-                body
-            } else {
-                target
-            }
-        });
+        let title = title.unwrap_or_else(|| http_url_display_title(target));
         self.render_anchor(target, title);
     }
 
