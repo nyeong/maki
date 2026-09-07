@@ -1,5 +1,5 @@
 --^ title: Maki LSP
---^ updated: [2026-09-06]
+--^ updated: [2026-09-07]
 
 = 개요
 
@@ -29,7 +29,8 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 - parser warning과 깨진/모호한 document·heading·explicit-ID link, unresolved explicit reference, duplicate ID diagnostics
 - document, heading, explicit-ID link, Document-local reference와 date marker의 definition
 - document, heading, explicit-ID, Document-local reference와 date marker의 references
-- HTTP/HTTPS target인 일반 Reference Use와 Direct Link의 document link
+- HTTP/HTTPS target인 일반 Reference Use와 authored URL Link의 document link
+- authored URL Link를 Document-local Reference로 추출하는 `refactor.extract` Code Action
 - document, heading, explicit ID, property key와 관습 value completion
 - heading document symbol
 - document title, heading과 explicit ID workspace symbol
@@ -80,6 +81,38 @@ Document-local reference는 `[key][]`, `[title][key]`, `[^key][]`, `[^title][key
 Duplicate definition 위치에서도 source-first active definition으로 이동하며 `includeDeclaration=true`일 때 active declaration 하나만 반환한다.
 Direct Link는 definition을 만들지 않으므로 Document-local reference의 Definition/References 대상이 아니다.
 
+== URL Reference 추출
+
+Visible `[title]<URL>` 또는 `<URL>` occurrence와 맞닿거나 겹치는 range에서 `refactor.extract` Code Action을 제공한다.
+Reference Definition value, Code/Raw text body와 기존 `[title](URL)` 표기에는 action을 제공하지 않는다.
+Action은 선택한 occurrence 하나만 교체한다.
+
+Title이 이미 있는 `[title]<URL>`은 network를 사용하지 않고 listing response에 edit를 바로 싣는다.
+Bare `<URL>`은 같은 exact URL을 가진 active Reference Definition이 있으면 그 key를 즉시 재사용하며 network를 사용하지 않는다.
+그 밖의 Bare URL action은 `Fetch page title and extract URL as reference`로 표시하고 listing 중에는 edit나 network request를 만들지 않는다.
+Client가 `codeAction/resolve`를 요청할 때 현재 source와 core analysis에서 URI, occurrence span과 target을 다시 확인한 뒤에만 HTML title을 한 번 조회한다.
+Stale하거나 변조된 action data는 조회와 edit 없이 disabled action으로 반환한다.
+Client가 lazy `disabled` property를 지원하지 않으면 같은 실패를 edit·command 없는 action으로 반환하고 지원하지 않는 property를 추가하지 않는다.
+Title 조회 action은 Code Action literal/data와 `edit` resolve, `workspace.workspaceEdit.documentChanges`를 모두 지원하며 열린 document version이 있는 client에만 제공한다. Resolve 결과의 `TextDocumentEdit`에는 조회를 시작한 document version을 싣는다.
+따라서 조회를 기다리는 동안 buffer가 바뀌면 client가 stale edit 적용을 거부할 수 있다. Code Action literal은 지원하지만 나머지 title 조회 capability가 없는 client에는 network가 필요 없는 named URL과 기존 definition 재사용 action만 제공하며, literal 자체를 지원하지 않는 client에는 extraction action을 제공하지 않는다.
+
+Title 조회는 HTTP/HTTPS만 대상으로 하며 userinfo, non-default port, local/private/link-local/reserved address와 HTTPS downgrade redirect를 거부한다.
+Proxy environment, cookie와 credential을 상속하지 않고 redirect 횟수, connect/전체 timeout, HTML body byte 수와 title 길이를 제한한다.
+Resolve를 명시적으로 실행하면 대상 server와 DNS resolver에는 일반 HTTP GET에 수반되는 client IP, URL path와 `maki-lsp/<version>` User-Agent가 보일 수 있다.
+일부 client는 action preview를 위해 실제 적용 전에 resolve를 요청할 수 있으므로 server가 GET 시점을 최종 적용 click 이후로 보장할 수는 없다.
+Platform DNS lookup은 취소할 수 없으므로 process-wide 전용 worker 하나에서 수행하고 LSP protocol thread는 bounded timeout까지만 응답을 기다린다.
+Worker가 아직 lookup 중이면 새 조회를 쌓지 않고 즉시 deterministic fallback을 사용하며, queue도 한 작업으로 제한한다.
+HTML/XHTML response의 normalized plain `<title>`만 사용하며 Maki delimiter와 table cell을 깨는 문자는 안전한 문자로 바꾼다.
+조회 또는 parsing에 실패하면 source URL에서 case-insensitive `http://` 또는 `https://`만 제거한 문자열을 display와 base key로 사용한다.
+그 fallback도 Reference title/key로 표현할 수 없으면 action을 disabled로 반환한다.
+
+같은 URL의 active Reference Definition을 찾지 못하면 `[display]: <URL>`을 만든다.
+Table cell에서 기존 definition key의 `|`를 Reference Use로 안전하게 표현할 수 없으면 그 definition은 재사용하지 않고 table-safe key의 alias definition을 만든다.
+Base key가 active 또는 duplicate definition key와 충돌하면 `-2`, `-3` 순서의 stable suffix를 붙이고 use는 `[display][suffixed-key]`로 유지한다.
+Display와 key가 같을 때만 `[display][]`를 사용한다.
+새 definition은 Document 끝의 root Reference Definition cluster에 이어 붙이고, 그런 trailing cluster가 없으면 EOF에 별도 block으로 추가한다.
+기존 LF/CRLF와 final-newline 유무를 보존한다.
+
 Link hover는 resolved Document와 source selector를 표시한다.
 Reference Definition value가 exact Note Link면 그 target span도 같은 project resolution과 Definition navigation을 사용한다.
 Exact Date/Date Range target을 실제 날짜로 표현하는 일반 Reference Use marker에서는 semantic target 날짜 hover를 제공한다.
@@ -91,7 +124,7 @@ Explicit ID의 canonical source selector는 `@`지만 HTML destination fragment�
 Active Reference Definition value가 정확히 하나의 유효한 HTTP/HTTPS Hyper Link면 일반 Reference Use인 `[key][]`와 `[title][key]` marker 전체를 `textDocument/documentLink`로 제공한다.
 URL 모양 text라도 angle-bracket Hyper Link가 아닌 Prose value면 document link를 만들지 않는다.
 같은 definition을 쓰는 Footnote, Prose Reference Use와 definition line에는 document link를 만들지 않는다.
-유효한 HTTP/HTTPS target을 가진 Direct Link는 marker 전체를 document link로 제공한다.
+유효한 HTTP/HTTPS target을 가진 Bare 또는 titled URL Link는 marker 전체를 document link로 제공한다.
 Reference definition과 use range는 core의 Document reference graph를 사용한다.
 원본 source 좌표가 보존되는 list item child block은 explicit-ID definition, references, hover와 diagnostics 대상이다.
 Quote와 quote container에서 별도 source로 다시 파싱한 Maki body의 위치 기반 기능은 지원하지 않는다.

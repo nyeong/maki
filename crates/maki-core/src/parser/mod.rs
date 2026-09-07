@@ -12,6 +12,7 @@ mod tests;
 
 pub use diagnostic::{ParseDiagnostic, ParseDiagnosticKind, format_parse_diagnostic_kind};
 pub use inline::parse_inline;
+pub(crate) use inline::{is_local_link_target, uri_scheme};
 pub use types::{
     Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Document, Inline, IsoWeek, ListItem, ListKind, ReferenceDefinition, ReferenceDefinitions,

@@ -331,8 +331,10 @@ impl<'a> Renderer<'a> {
         };
 
         match definition.value.as_slice() {
-            [Inline::HyperLink { target }] => self.render_anchor(target, title),
-            [Inline::NoteLink { target }] => self.render_note_link_with_title(target, Some(title)),
+            [Inline::HyperLink { target, .. }] => self.render_anchor(target, title),
+            [Inline::NoteLink { target, .. }] => {
+                self.render_note_link_with_title(target, Some(title))
+            }
             [Inline::DateStamp(stamp)] => self.render_date_reference(title, *stamp),
             [Inline::DateRange(range)] if raw.ends_with("][]") => self.render_date_range(*range),
             _ => self.escape_html_into(raw),
@@ -381,10 +383,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_note_link(&mut self, target: &str) {
-        self.render_note_link_with_title(target, None);
-    }
-
     fn render_direct_link(&mut self, raw: &str, title: &str, target: &str) {
         if maki::is_safe_direct_href(target) {
             self.render_anchor(target, title);
@@ -393,11 +391,17 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_hyper_link(&mut self, target: &str) {
-        let title = target
-            .strip_prefix("https://")
-            .or_else(|| target.strip_prefix("http://"))
-            .unwrap_or(target);
+    fn render_hyper_link(&mut self, title: Option<&str>, target: &str) {
+        let title = title.unwrap_or_else(|| {
+            let Some((scheme, body)) = target.split_once("://") else {
+                return target;
+            };
+            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+                body
+            } else {
+                target
+            }
+        });
         self.render_anchor(target, title);
     }
 
@@ -513,7 +517,9 @@ impl<'a> Renderer<'a> {
         references: &parser::ReferenceDefinitions<'_>,
     ) {
         match inline {
-            Inline::NoteLink { target } => self.render_note_link(target),
+            Inline::NoteLink { title, target, .. } => {
+                self.render_note_link_with_title(target, *title)
+            }
             Inline::Reference { raw, title, key } => {
                 self.render_reference(raw, title, references.get(key))
             }
@@ -524,7 +530,7 @@ impl<'a> Renderer<'a> {
             Inline::DirectLink { raw, title, target } => {
                 self.render_direct_link(raw, title, target)
             }
-            Inline::HyperLink { target } => self.render_hyper_link(target),
+            Inline::HyperLink { title, target, .. } => self.render_hyper_link(*title, target),
             Inline::DateStamp(stamp) => self.render_date_stamp(*stamp),
             Inline::DateRange(range) => self.render_date_range(*range),
             Inline::SoftBreak => self.html.push(' '),

@@ -297,7 +297,7 @@ fn render_stable_inline_and_footnote_syntax() {
 #[test]
 fn reference_value_kind_selects_link_or_literal_presentation() {
     let parsed = parser::parse(
-        r#"[site][], [ 문서 ][ document ], [description][], [summary][description], and [ direct ]( https://direct.example/path ).
+        r#"[site][], [ 문서 ][ document ], [description][], [summary][description], and [ direct ]<https://direct.example/path>.
 
 [site]: <https://example.com/search?q=maki>
 [document]: [[/notes/path]]
@@ -420,14 +420,47 @@ fn unresolved_reference_markers_render_the_exact_source() {
 
 #[test]
 fn direct_links_keep_raw_local_hrefs_and_do_not_activate_unsafe_schemes() {
-    let parsed =
-        parser::parse("[asset](downloads) [fragment](#section) [unsafe](javascript:alert(1))");
+    let parsed = parser::parse(
+        "[asset](downloads) [fragment](#section) [numeric](2026:notes) [unsafe](javascript:alert(1))",
+    );
     let html = render_document(&parsed.document);
 
     assert!(html.contains("<a href=\"downloads\">asset</a>"));
     assert!(html.contains("<a href=\"#section\">fragment</a>"));
+    assert!(html.contains("<a href=\"2026:notes\">numeric</a>"));
+    assert!(!html.contains("<a class=\"external-link\" href=\"2026:notes\">"));
     assert!(html.contains("[unsafe](javascript:alert(1))"));
     assert!(!html.contains("href=\"javascript:"));
+}
+
+#[test]
+fn titled_url_and_note_links_render_their_explicit_titles() {
+    let parsed = parser::parse(
+        "[Site]<HTTPS://example.com/path> <HTTP://bare.example/path> [문서][[/docs]] [old](https://old.example)",
+    );
+    let html = render_document(&parsed.document);
+
+    assert!(html.contains("<a class=\"external-link\" href=\"HTTPS://example.com/path\">Site</a>"));
+    assert!(html.contains(
+        "<a class=\"external-link\" href=\"HTTP://bare.example/path\">bare.example/path</a>"
+    ));
+    assert!(html.contains("<a href=\"/docs\">문서</a>"));
+    assert!(html.contains("[old](https://old.example)"));
+    assert!(!html.contains("href=\"https://old.example\""));
+}
+
+#[test]
+fn escaped_titled_links_render_as_one_literal_compound() {
+    let parsed =
+        parser::parse(r"\[Site]<https://example.com> \[문서][[/docs]] \[ref][key] \[local](/path)");
+    let html = render_document(&parsed.document);
+
+    assert!(
+        html.contains(
+            "[Site]&lt;https://example.com&gt; [문서][[/docs]] [ref][key] [local](/path)"
+        )
+    );
+    assert!(!html.contains("<a "));
 }
 
 #[test]

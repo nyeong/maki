@@ -19,25 +19,26 @@ fn note_ref() {
 }
 
 #[test]
-fn direct_href_safety_allows_web_and_local_links_but_rejects_active_content() {
+fn direct_href_safety_allows_only_local_links() {
+    for target in ["/docs/page", "docs/page", "../asset", "#heading"] {
+        assert!(is_safe_direct_href(target), "expected safe href: {target}");
+    }
     for target in [
         "https://example.com",
         "HTTP://example.com",
         "mailto:me@example.com",
         "tel:+82000000000",
-        "/docs/page",
-        "docs/page",
-        "#heading",
         "//cdn.example.com/file",
-    ] {
-        assert!(is_safe_direct_href(target), "expected safe href: {target}");
-    }
-    for target in [
+        "\\\\cdn.example.com/file",
+        "/\\cdn.example.com/file",
+        "\\/cdn.example.com/file",
         "javascript:alert(1)",
         "JaVaScRiPt:alert(1)",
         "data:text/html,unsafe",
         "vbscript:unsafe",
         "file:///etc/passwd",
+        "\tleading-control",
+        "trailing-control\t",
         "java\tscript:alert(1)",
     ] {
         assert!(

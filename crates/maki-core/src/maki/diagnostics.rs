@@ -292,7 +292,7 @@ fn collect_inline_link_diagnostics(
 ) {
     for inline in inlines {
         match inline {
-            Inline::NoteLink { target } => push_link_diagnostic(
+            Inline::NoteLink { target, .. } => push_link_diagnostic(
                 diagnostics,
                 source_path,
                 maki.resolve_note_link(current, target),

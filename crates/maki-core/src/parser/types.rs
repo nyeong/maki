@@ -5,6 +5,8 @@ use super::draft::PropertyItemDraft;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inline<'a> {
     NoteLink {
+        raw: &'a str,
+        title: Option<&'a str>,
         target: &'a str,
     },
     Reference {
@@ -23,6 +25,8 @@ pub enum Inline<'a> {
         target: &'a str,
     },
     HyperLink {
+        raw: &'a str,
+        title: Option<&'a str>,
         target: &'a str,
     },
     Italic(Vec<Inline<'a>>),
