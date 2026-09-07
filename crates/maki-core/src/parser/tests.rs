@@ -514,6 +514,51 @@ fn incomplete_http_link_compounds_commit_the_line_remainder() {
 }
 
 #[test]
+fn incomplete_link_compounds_commit_the_line_remainder() {
+    for source in [
+        "[[unfinished <https://later.example>",
+        "[x](unfinished <https://later.example>",
+        "[x][[unfinished <https://later.example>",
+        "[x][unfinished [[later-note]]",
+        "[^x][unfinished <https://later.example>",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+
+    let source = "[x](".repeat(16_384);
+    assert_eq!(parse_inline(&source), vec![Inline::Text(&source)]);
+}
+
+#[test]
+fn closed_invalid_link_compounds_do_not_consume_following_links() {
+    for source in [
+        "[x]() [[after]]",
+        "[x]( ) [[after]]",
+        "[[]] [[after]]",
+        "[x][[]] [[after]]",
+        "[x][ ] [[after]]",
+        "[x][^key] [[after]]",
+        "[^][] [[after]]",
+        "[^x][ ] [[after]]",
+        "[^x][^key] [[after]]",
+    ] {
+        let after_start = source.rfind("[[after]]").unwrap();
+        assert_eq!(
+            parse_inline(source),
+            vec![
+                Inline::Text(&source[..after_start]),
+                Inline::NoteLink {
+                    raw: "[[after]]",
+                    title: None,
+                    target: "after",
+                },
+            ],
+            "closed candidate should stop before the following link: {source}"
+        );
+    }
+}
+
+#[test]
 fn invalid_direct_links_stay_literal_as_one_compound() {
     for source in [
         "[legacy](https://host/<https://inner.example>)",

@@ -570,9 +570,9 @@ fn parse_escaped_inline<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>>
         .or_else(|| parse_inline_footnote(cursor))
         .or_else(|| parse_inline_reference(cursor));
     if compound.is_none() {
-        if let Some(end) = closed_escaped_link_compound_end(cursor) {
+        if let Some(end) = closed_link_compound_end(cursor) {
             cursor.bump(end);
-        } else if escaped_link_compound_is_committed(cursor) {
+        } else if link_compound_is_committed(cursor) {
             cursor.bump(cursor.rest().len());
         } else {
             cursor.bump(escaped.len_utf8());
@@ -582,7 +582,7 @@ fn parse_escaped_inline<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>>
     Some(Inline::Text(&cursor.source[escaped_start..cursor.pos()]))
 }
 
-fn closed_escaped_link_compound_end(cursor: &InlineCursor<'_>) -> Option<usize> {
+fn closed_link_compound_end(cursor: &InlineCursor<'_>) -> Option<usize> {
     let rest = cursor.rest();
     if rest.starts_with(INLINE_NOTE_LINK_BEGIN) {
         let target_end =
@@ -638,7 +638,7 @@ fn starts_http_url_opener(source: &str) -> bool {
     })
 }
 
-fn escaped_link_compound_is_committed(cursor: &InlineCursor<'_>) -> bool {
+fn link_compound_is_committed(cursor: &InlineCursor<'_>) -> bool {
     let rest = cursor.rest();
     if rest.starts_with(INLINE_NOTE_LINK_BEGIN) || starts_http_url_opener(rest) {
         return true;
@@ -661,6 +661,16 @@ fn escaped_link_compound_is_committed(cursor: &InlineCursor<'_>) -> bool {
     after_title.starts_with('[')
         || after_title.starts_with('(')
         || starts_http_url_opener(after_title)
+}
+
+fn parse_incomplete_link_compound<'a>(cursor: &mut InlineCursor<'a>) -> Option<Inline<'a>> {
+    if !link_compound_is_committed(cursor) || closed_link_compound_end(cursor).is_some() {
+        return None;
+    }
+
+    let rest = cursor.rest();
+    cursor.bump(rest.len());
+    Some(Inline::Text(rest))
 }
 
 pub(super) fn parse_inlines<'a>(source: &[&'a str]) -> Vec<Inline<'a>> {
@@ -692,6 +702,7 @@ pub fn parse_inline<'a>(source: &'a str) -> Vec<Inline<'a>> {
             .or_else(|| parse_inline_hyper_link(&mut cursor))
             .or_else(|| parse_inline_footnote(&mut cursor))
             .or_else(|| parse_inline_reference(&mut cursor))
+            .or_else(|| parse_incomplete_link_compound(&mut cursor))
             .or_else(|| parse_inline_date_range(&mut cursor))
             .or_else(|| parse_inline_date_stamp(&mut cursor))
             .or_else(|| parse_braced_inline(&mut cursor, "^{", Inline::Superscript))

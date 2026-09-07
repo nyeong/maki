@@ -543,6 +543,9 @@ Inline은 line body 안의 source span을 해석한 구조 단위이다.
 두 delimiter pair를 쓰는 compound는 반드시 붙여 쓴다.
 `[title] <URL>`, `[title] [[target]]`, `[title] [key]`, `[title] (path)`는 title을 뒤 marker와 합치지 않는다.
 
+Link compound의 형태가 opener에서 확정된 뒤 필요한 closing delimiter가 없으면, 그 opener부터 현재 line 또는 table cell 끝까지를 literal Text로 남긴다.
+그 안의 link 모양 fragment는 별도 Inline으로 다시 파싱하지 않는다.
+
 우선순위는 아래와 같다:
 
 1. Backslash Escape (`\*`)
