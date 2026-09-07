@@ -172,7 +172,7 @@ fn parse_nested_todo_list_items() {
 #[test]
 fn parse_document_recognizes_all_explicit_reference_uses_before_definitions() {
     let parsed = parse(
-        r#"Read [djot][], [ the language ][djot], [^source][], [^ 출처 ][source], [^][source], and [ inline ](https://example.com).
+        r#"Read [djot][], [ the language ][djot], [^source][], [^ 출처 ][source], [^][source], and [ inline ]<https://example.com>.
 
 [djot]: <https://github.com/jgm/djot>
 [source]: Published on [2026-08-25]."#,
@@ -216,9 +216,9 @@ fn parse_document_recognizes_all_explicit_reference_uses_before_definitions() {
                 key: "source",
             },
             Inline::Text(", and "),
-            Inline::DirectLink {
-                raw: "[ inline ](https://example.com)",
-                title: "inline",
+            Inline::HyperLink {
+                raw: "[ inline ]<https://example.com>",
+                title: Some("inline"),
                 target: "https://example.com",
             },
             Inline::Text("."),
@@ -288,12 +288,330 @@ fn explicit_compounds_precede_dates_and_note_links_keep_priority() {
     ));
     assert!(matches!(
         parse_inline("[[note]]").as_slice(),
-        [Inline::NoteLink { target: "note" }]
+        [Inline::NoteLink { target: "note", .. }]
     ));
     assert!(matches!(
         parse_inline("[2026-08-25]").as_slice(),
         [Inline::DateStamp(_)]
     ));
+}
+
+#[test]
+fn typed_links_share_semantic_families_and_preserve_raw_markers() {
+    assert_eq!(
+        parse_inline(
+            "[사이트]<https://example.com/path> <HTTP://EXAMPLE.COM> [문서][[/notes/today]] [[#오늘]] [파일](../자료 (초안).pdf)"
+        ),
+        vec![
+            Inline::HyperLink {
+                raw: "[사이트]<https://example.com/path>",
+                title: Some("사이트"),
+                target: "https://example.com/path",
+            },
+            Inline::Text(" "),
+            Inline::HyperLink {
+                raw: "<HTTP://EXAMPLE.COM>",
+                title: None,
+                target: "HTTP://EXAMPLE.COM",
+            },
+            Inline::Text(" "),
+            Inline::NoteLink {
+                raw: "[문서][[/notes/today]]",
+                title: Some("문서"),
+                target: "/notes/today",
+            },
+            Inline::Text(" "),
+            Inline::NoteLink {
+                raw: "[[#오늘]]",
+                title: None,
+                target: "#오늘",
+            },
+            Inline::Text(" "),
+            Inline::DirectLink {
+                raw: "[파일](../자료 (초안).pdf)",
+                title: "파일",
+                target: "../자료 (초안).pdf",
+            },
+        ]
+    );
+}
+
+#[test]
+fn note_links_require_a_target_but_allow_a_single_closing_bracket_inside_it() {
+    for source in ["[[]]", "[표시][[]]"] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+
+    assert_eq!(
+        parse_inline("[[a]b]] [표시][[a]b]]"),
+        vec![
+            Inline::NoteLink {
+                raw: "[[a]b]]",
+                title: None,
+                target: "a]b",
+            },
+            Inline::Text(" "),
+            Inline::NoteLink {
+                raw: "[표시][[a]b]]",
+                title: Some("표시"),
+                target: "a]b",
+            },
+        ]
+    );
+}
+
+#[test]
+fn typed_link_delimiters_must_be_exactly_adjacent() {
+    assert_eq!(
+        parse_inline("[사이트] <https://example.com>"),
+        vec![
+            Inline::Text("[사이트] "),
+            Inline::HyperLink {
+                raw: "<https://example.com>",
+                title: None,
+                target: "https://example.com",
+            },
+        ]
+    );
+    assert_eq!(
+        parse_inline("[문서] [[target]]"),
+        vec![
+            Inline::Text("[문서] "),
+            Inline::NoteLink {
+                raw: "[[target]]",
+                title: None,
+                target: "target",
+            },
+        ]
+    );
+    assert_eq!(
+        parse_inline("[파일] (path)"),
+        vec![Inline::Text("[파일] (path)")]
+    );
+    assert_eq!(
+        parse_inline("[표시] [key]"),
+        vec![Inline::Text("[표시] [key]")]
+    );
+}
+
+#[test]
+fn direct_link_targets_are_local_and_never_url_schemes() {
+    for source in [
+        "[web](https://example.com)",
+        "[web](HTTP://example.com)",
+        "[mail](mailto:me@example.com)",
+        "[file](file:///tmp/data)",
+        "[cdn](//cdn.example.com/file)",
+        "[cdn](\\\\cdn.example.com/file)",
+        "[cdn](/\\cdn.example.com/file)",
+        "[cdn](\\/cdn.example.com/file)",
+        "[control](\tpath)",
+        "[control](path\t)",
+        "[script](javascript:alert(1))",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+
+    for (source, target) in [
+        ("[root](/notes/today)", "/notes/today"),
+        ("[relative](notes/today)", "notes/today"),
+        ("[parent](../today)", "../today"),
+        ("[fragment](#today)", "#today"),
+        ("[space](files/design draft.pdf)", "files/design draft.pdf"),
+        ("[colon](notes/today:draft)", "notes/today:draft"),
+        ("[numeric-colon](2026:notes)", "2026:notes"),
+        ("[trim-unicode](\u{a0}notes/today\u{3000})", "notes/today"),
+        ("[inner-unicode](notes\u{2003}draft)", "notes\u{2003}draft"),
+    ] {
+        assert!(matches!(
+            parse_inline(source).as_slice(),
+            [Inline::DirectLink {
+                target: parsed_target,
+                ..
+            }] if *parsed_target == target
+        ));
+    }
+}
+
+#[test]
+fn hyper_link_targets_reject_whitespace_and_control_characters() {
+    for invalid in [
+        "\0", "\u{7}", "\u{7f}", "\u{85}", "\t", "\n", "\u{a0}", "\u{1680}", "\u{2003}",
+        "\u{2028}", "\u{202f}", "\u{3000}",
+    ] {
+        for source in [
+            format!("<https://example.com/a{invalid}b>"),
+            format!("[web]<https://example.com/a{invalid}b>"),
+        ] {
+            assert_eq!(parse_inline(&source), vec![Inline::Text(&source)]);
+        }
+    }
+}
+
+#[test]
+fn typed_link_titles_trim_unicode_whitespace() {
+    assert_eq!(
+        parse_inline(
+            "[\u{3000}URL\u{a0}]<https://example.com> [\u{3000}Note\u{a0}][[target]] [\u{3000}Local\u{a0}](path)"
+        ),
+        vec![
+            Inline::HyperLink {
+                raw: "[\u{3000}URL\u{a0}]<https://example.com>",
+                title: Some("URL"),
+                target: "https://example.com",
+            },
+            Inline::Text(" "),
+            Inline::NoteLink {
+                raw: "[\u{3000}Note\u{a0}][[target]]",
+                title: Some("Note"),
+                target: "target",
+            },
+            Inline::Text(" "),
+            Inline::DirectLink {
+                raw: "[\u{3000}Local\u{a0}](path)",
+                title: "Local",
+                target: "path",
+            },
+        ]
+    );
+}
+
+#[test]
+fn invalid_http_link_compounds_stay_literal_without_reactivating_nested_links() {
+    for source in [
+        "<http://bad [[note]] value>",
+        "[t]<http://bad [x][key] value>",
+        "<http://a<https://inner>>",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+
+    assert_eq!(
+        parse_inline("<ftp://host/[[note]]>"),
+        vec![
+            Inline::Text("<ftp://host/"),
+            Inline::NoteLink {
+                raw: "[[note]]",
+                title: None,
+                target: "note",
+            },
+            Inline::Text(">"),
+        ]
+    );
+}
+
+#[test]
+fn incomplete_http_link_compounds_commit_the_line_remainder() {
+    for source in [
+        "<http://unfinished [[later-note]]",
+        "[t]<https://unfinished [later][reference]",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+
+    let source = "<http://".repeat(16_384);
+    assert_eq!(parse_inline(&source), vec![Inline::Text(&source)]);
+}
+
+#[test]
+fn incomplete_link_compounds_commit_the_line_remainder() {
+    for source in [
+        "[[unfinished <https://later.example>",
+        "[x](unfinished <https://later.example>",
+        "[x][[unfinished <https://later.example>",
+        "[x][unfinished [[later-note]]",
+        "[^x][unfinished <https://later.example>",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+
+    let source = "[x](".repeat(16_384);
+    assert_eq!(parse_inline(&source), vec![Inline::Text(&source)]);
+}
+
+#[test]
+fn closed_invalid_link_compounds_do_not_consume_following_links() {
+    for source in [
+        "[x]() [[after]]",
+        "[x]( ) [[after]]",
+        "[x](https://bad/<https://inner>) [[after]]",
+        "[[]] [[after]]",
+        "[x][[]] [[after]]",
+        "[x][ ] [[after]]",
+        "[x][^key] [[after]]",
+        "[^][] [[after]]",
+        "[^x][ ] [[after]]",
+        "[^x][^key] [[after]]",
+        "<http://bad [[inner]] value> [[after]]",
+        "[t]<http://bad [x][k] value> [[after]]",
+    ] {
+        let after_start = source.rfind("[[after]]").unwrap();
+        assert_eq!(
+            parse_inline(source),
+            vec![
+                Inline::Text(&source[..after_start]),
+                Inline::NoteLink {
+                    raw: "[[after]]",
+                    title: None,
+                    target: "after",
+                },
+            ],
+            "closed candidate should stop before the following link: {source}"
+        );
+    }
+}
+
+#[test]
+fn invalid_direct_links_stay_literal_as_one_compound() {
+    for source in [
+        "[legacy](https://host/<https://inner.example>)",
+        "[legacy](mailto:a [[note]])",
+        "[authority](\\\\host/<https://inner.example>)",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(source)]);
+    }
+}
+
+#[test]
+fn references_remain_valid_without_a_left_boundary() {
+    assert_eq!(
+        parse_inline("한국어[표시][key]를 dp[height][height] `[height][height]`"),
+        vec![
+            Inline::Text("한국어"),
+            Inline::Reference {
+                raw: "[표시][key]",
+                title: "표시",
+                key: "key",
+            },
+            Inline::Text("를 dp"),
+            Inline::Reference {
+                raw: "[height][height]",
+                title: "height",
+                key: "height",
+            },
+            Inline::Text(" "),
+            Inline::Code("[height][height]"),
+        ]
+    );
+}
+
+#[test]
+fn escaping_the_first_opener_escapes_the_whole_link_compound() {
+    for (source, literal) in [
+        (
+            r"\[사이트]<https://example.com>",
+            "[사이트]<https://example.com>",
+        ),
+        (r"\[문서][[target]]", "[문서][[target]]"),
+        (r"\[표시][key]", "[표시][key]"),
+        (r"\[key][]", "[key][]"),
+        (r"\[^표시][key]", "[^표시][key]"),
+        (r"\[파일](path)", "[파일](path)"),
+        (r"\[[target]]", "[[target]]"),
+        (r"\<https://example.com>", "<https://example.com>"),
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(literal)]);
+    }
 }
 
 #[test]
@@ -350,6 +668,84 @@ fn parse_inline_handles_long_unclosed_delimiter_runs_as_text() {
 }
 
 #[test]
+fn parse_inline_handles_long_escaped_opener_runs_without_rescanning_suffixes() {
+    let source = r"\[".repeat(16_384);
+    let parsed = parse_inline(&source);
+
+    assert_eq!(parsed.len(), 16_384);
+    assert!(parsed.iter().all(|inline| *inline == Inline::Text("[")));
+}
+
+#[test]
+fn parse_inline_handles_long_unclosed_escaped_direct_links_without_rescanning_suffixes() {
+    let source = r"\[x](".repeat(16_384);
+    let parsed = parse_inline(&source);
+
+    assert_eq!(parsed, vec![Inline::Text(&source[1..])]);
+}
+
+#[test]
+fn incomplete_escaped_link_compounds_keep_the_committed_remainder_literal() {
+    for source in [
+        r"\<https://unfinished [[later-note]]",
+        r"\[x](unfinished <https://later.example>",
+        r"\[x][[unfinished <https://later.example>",
+        r"\[x][unfinished [[later-note]]",
+        r"\[x]<https://unfinished [[later-note]]",
+        r"\[^x][unfinished <https://later.example>",
+    ] {
+        assert_eq!(parse_inline(source), vec![Inline::Text(&source[1..])]);
+    }
+
+    assert_eq!(
+        parse_inline(r"\[label] then <https://later.example>"),
+        vec![
+            Inline::Text("[label] then "),
+            Inline::HyperLink {
+                raw: "<https://later.example>",
+                title: None,
+                target: "https://later.example",
+            },
+        ]
+    );
+}
+
+#[test]
+fn closed_invalid_escaped_compounds_do_not_consume_following_links() {
+    for source in [
+        r"\<http://> [[after]]",
+        r"\<http://bad value> [[after]]",
+        r"\<http://a<bad> [[after]]",
+        r"\[x]() [[after]]",
+        r"\[x]( ) [[after]]",
+        r"\[[]] [[after]]",
+        r"\[x][[]] [[after]]",
+        r"\[x][ ] [[after]]",
+        r"\[x][^key] [[after]]",
+        r"\[^][] [[after]]",
+        r"\[^x][ ] [[after]]",
+        r"\[^x][^key] [[after]]",
+        r"\[x]<http://> [[after]]",
+        r"\[x]<http://bad value> [[after]]",
+        r"\[x]<http://a<bad> [[after]]",
+    ] {
+        let after_start = source.rfind("[[after]]").unwrap();
+        assert_eq!(
+            parse_inline(source),
+            vec![
+                Inline::Text(&source[1..after_start]),
+                Inline::NoteLink {
+                    raw: "[[after]]",
+                    title: None,
+                    target: "after",
+                },
+            ],
+            "closed escaped candidate should stop before the following link: {source}"
+        );
+    }
+}
+
+#[test]
 fn parse_inline_supports_star_delimited_strong_text() {
     assert_eq!(
         parse_inline("Use *bold `code`* now."),
@@ -376,6 +772,8 @@ fn parse_inline_supports_hyper_links_but_not_bare_urls() {
         vec![
             Inline::Text("Read "),
             Inline::HyperLink {
+                raw: "<https://example.com/docs>",
+                title: None,
                 target: "https://example.com/docs"
             },
             Inline::Text(", not https://example.com/bare.")

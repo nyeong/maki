@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
+use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title};
 use crate::parser::{
     self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Inline, IsoWeek,
@@ -32,6 +32,7 @@ pub struct DocumentAnalysis {
     pub note_links: Vec<NoteLinkOccurrence>,
     pub reference_graph: DocumentReferenceGraph,
     pub reference_links: Vec<ReferenceLinkOccurrence>,
+    pub url_links: Vec<UrlLinkOccurrence>,
     pub properties: Vec<PropertyOccurrence>,
     pub date_markers: Vec<DateMarkerOccurrence>,
     pub dates: Vec<DateOccurrence>,
@@ -86,9 +87,20 @@ pub struct HeadingOccurrence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteLinkOccurrence {
     pub target: String,
+    pub title: Option<String>,
     pub span: SourceSpan,
+    pub title_span: Option<SourceSpan>,
     pub target_span: SourceSpan,
     pub resolution: Option<LinkResolution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlLinkOccurrence {
+    pub target: String,
+    pub title: Option<String>,
+    pub span: SourceSpan,
+    pub title_span: Option<SourceSpan>,
+    pub target_span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +314,7 @@ struct DocumentOccurrences {
     note_links: Vec<NoteLinkOccurrence>,
     references: ReferenceGraphBuilder,
     reference_links: Vec<ReferenceLinkOccurrence>,
+    url_links: Vec<UrlLinkOccurrence>,
     date_markers: Vec<DateMarkerOccurrence>,
     dates: Vec<DateOccurrence>,
 }
@@ -462,6 +475,7 @@ fn analyze_document_with_title_origin(
                 source,
                 &definition.value,
                 DateOrigin::VisibleInline,
+                InlineCollectionScope::ReferenceValue,
                 &mut occurrences,
             );
         }
@@ -495,6 +509,7 @@ fn analyze_document_with_title_origin(
     occurrences
         .reference_links
         .sort_by_key(|reference| reference.span);
+    occurrences.url_links.sort_by_key(|link| link.span);
     occurrences.note_links.sort_by_key(|link| link.span);
     occurrences.date_markers.sort_by_key(|marker| marker.span);
     let reference_graph = std::mem::take(&mut occurrences.references).finish();
@@ -540,6 +555,7 @@ fn analyze_document_with_title_origin(
             note_links: occurrences.note_links,
             reference_graph,
             reference_links: occurrences.reference_links,
+            url_links: occurrences.url_links,
             properties,
             date_markers: occurrences.date_markers,
             dates: occurrences.dates,
@@ -711,7 +727,9 @@ fn collect_reference_definitions(
                 .unwrap_or_else(|| SourceSpan::new(definition_span.end, definition_span.end));
             let value_kind = definition.value_kind();
             let semantic_target = match definition.value.as_slice() {
-                [Inline::HyperLink { target }] | [Inline::NoteLink { target }] => Some(*target),
+                [Inline::HyperLink { target, .. }] | [Inline::NoteLink { target, .. }] => {
+                    Some(*target)
+                }
                 [Inline::DateStamp(_)] | [Inline::DateRange(_)] => Some(definition.raw_value),
                 _ => None,
             };
@@ -862,7 +880,13 @@ fn collect_visible_inlines(
     inlines: &[Inline<'_>],
     occurrences: &mut DocumentOccurrences,
 ) {
-    collect_inlines(source, inlines, DateOrigin::VisibleInline, occurrences);
+    collect_inlines(
+        source,
+        inlines,
+        DateOrigin::VisibleInline,
+        InlineCollectionScope::Visible,
+        occurrences,
+    );
     collect_date_markers(
         source,
         inlines,
@@ -871,22 +895,31 @@ fn collect_visible_inlines(
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InlineCollectionScope {
+    Visible,
+    ReferenceValue,
+}
+
 fn collect_inlines(
     source: &str,
     inlines: &[Inline<'_>],
     origin: DateOrigin,
+    scope: InlineCollectionScope,
     occurrences: &mut DocumentOccurrences,
 ) {
     for inline in inlines {
         match inline {
-            Inline::NoteLink { target } => {
-                if let Some(target_span) = slice_span(source, target) {
+            Inline::NoteLink { raw, title, target } => {
+                if let (Some(span), Some(target_span)) =
+                    (slice_span(source, raw), slice_span(source, target))
+                {
+                    let title_span = title.and_then(|title| slice_span(source, title));
                     occurrences.note_links.push(NoteLinkOccurrence {
                         target: (*target).to_string(),
-                        span: SourceSpan::new(
-                            target_span.start.saturating_sub(2),
-                            (target_span.end + 2).min(source.len()),
-                        ),
+                        title: title.map(ToString::to_string),
+                        span,
+                        title_span,
                         target_span,
                         resolution: None,
                     });
@@ -987,6 +1020,32 @@ fn collect_inlines(
                     key_span,
                 });
             }
+            Inline::HyperLink { raw, title, target } if scope == InlineCollectionScope::Visible => {
+                if let (Some(span), Some(target_span)) =
+                    (slice_span(source, raw), slice_span(source, target))
+                {
+                    let title_span = title.and_then(|title| slice_span(source, title));
+                    occurrences.url_links.push(UrlLinkOccurrence {
+                        target: (*target).to_string(),
+                        title: title.map(ToString::to_string),
+                        span,
+                        title_span,
+                        target_span,
+                    });
+                    let reference_title =
+                        (*title).unwrap_or_else(|| http_url_display_title(target));
+                    let Some(reference_title_span) = slice_span(source, reference_title) else {
+                        continue;
+                    };
+                    occurrences.reference_links.push(ReferenceLinkOccurrence {
+                        title: reference_title.to_string(),
+                        target: (*target).to_string(),
+                        span,
+                        title_span: reference_title_span,
+                        target_span,
+                    });
+                }
+            }
             Inline::DirectLink { raw, title, target } => {
                 if let (Some(span), Some(title_span), Some(target_span)) = (
                     slice_span(source, raw),
@@ -1012,7 +1071,7 @@ fn collect_inlines(
             }
             _ => {
                 if let Some(children) = inline.nested_inlines() {
-                    collect_inlines(source, children, origin.clone(), occurrences);
+                    collect_inlines(source, children, origin.clone(), scope, occurrences);
                 }
             }
         }
@@ -1146,15 +1205,15 @@ fn date_target_identity(target: DateStampTarget) -> DateTargetIdentity {
 fn collect_inline_source_spans(source: &str, inlines: &[Inline<'_>], spans: &mut Vec<SourceSpan>) {
     for inline in inlines {
         let slice = match inline {
-            Inline::NoteLink { target }
-            | Inline::HyperLink { target }
-            | Inline::Text(target)
+            Inline::Text(target)
             | Inline::Code(target)
             | Inline::Superscript(target)
             | Inline::Subscript(target)
             | Inline::Insertion(target)
             | Inline::Deletion(target) => Some(*target),
-            Inline::Reference { raw, .. }
+            Inline::NoteLink { raw, .. }
+            | Inline::HyperLink { raw, .. }
+            | Inline::Reference { raw, .. }
             | Inline::Footnote { raw, .. }
             | Inline::DirectLink { raw, .. } => Some(*raw),
             Inline::DateStamp(stamp) => Some(stamp.body()),
@@ -1609,6 +1668,131 @@ mod tests {
     }
 
     #[test]
+    fn document_analysis_preserves_titled_note_and_url_link_spans() {
+        let source = "😀[표시][[/다른#제목]] <http://bare.example/path> [사이트]<HTTPS://named.example/path> [로컬](/path)";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.note_links.len(), 1);
+        let note = &analysis.note_links[0];
+        assert_eq!(note.title.as_deref(), Some("표시"));
+        assert_eq!(
+            &source[note.span.start..note.span.end],
+            "[표시][[/다른#제목]]"
+        );
+        assert_eq!(
+            note.title_span.map(|span| &source[span.start..span.end]),
+            Some("표시")
+        );
+        assert_eq!(
+            &source[note.target_span.start..note.target_span.end],
+            "/다른#제목"
+        );
+
+        assert_eq!(analysis.url_links.len(), 2);
+        let bare = &analysis.url_links[0];
+        assert_eq!(bare.title, None);
+        assert_eq!(
+            &source[bare.span.start..bare.span.end],
+            "<http://bare.example/path>"
+        );
+        assert_eq!(bare.title_span, None);
+        assert_eq!(
+            &source[bare.target_span.start..bare.target_span.end],
+            "http://bare.example/path"
+        );
+        let bare_reference = &analysis.reference_links[0];
+        assert_eq!(bare_reference.title, "bare.example/path");
+        assert_eq!(
+            &source[bare_reference.title_span.start..bare_reference.title_span.end],
+            bare_reference.title
+        );
+        let named = &analysis.url_links[1];
+        assert_eq!(named.title.as_deref(), Some("사이트"));
+        assert_eq!(
+            &source[named.span.start..named.span.end],
+            "[사이트]<HTTPS://named.example/path>"
+        );
+        assert_eq!(
+            named.title_span.map(|span| &source[span.start..span.end]),
+            Some("사이트")
+        );
+        assert_eq!(
+            &source[named.target_span.start..named.target_span.end],
+            "HTTPS://named.example/path"
+        );
+
+        assert_eq!(analysis.reference_links.len(), 3);
+        assert_eq!(
+            analysis.reference_links[0].target,
+            "http://bare.example/path"
+        );
+        assert_eq!(
+            analysis.reference_links[1].target,
+            "HTTPS://named.example/path"
+        );
+        let local = &analysis.reference_links[2];
+        assert_eq!(local.title, "로컬");
+        assert_eq!(local.target, "/path");
+        assert_eq!(&source[local.span.start..local.span.end], "[로컬](/path)");
+        assert_eq!(
+            &source[local.title_span.start..local.title_span.end],
+            "로컬"
+        );
+        assert_eq!(
+            &source[local.target_span.start..local.target_span.end],
+            "/path"
+        );
+    }
+
+    #[test]
+    fn titled_note_links_keep_project_resolution_by_target() {
+        let project = analyze_project(&[
+            SourceSnapshot {
+                path: Path::new("index.maki"),
+                source: "[다른 이름][[/target]]",
+            },
+            SourceSnapshot {
+                path: Path::new("target.maki"),
+                source: "--^ title: Target\n",
+            },
+        ]);
+        let link = &project
+            .document(Path::new("index.maki"))
+            .unwrap()
+            .note_links[0];
+
+        assert_eq!(link.title.as_deref(), Some("다른 이름"));
+        assert!(matches!(
+            link.resolution,
+            Some(LinkResolution::Found(DefinitionTarget {
+                ref path,
+                kind: DefinitionTargetKind::Document,
+                ..
+            })) if path == Path::new("target.maki")
+        ));
+    }
+
+    #[test]
+    fn url_link_occurrences_exclude_reference_definition_values() {
+        let source = r#"Visible <https://visible.example/>.
+
+[exact]: <https://exact.example/>
+[prose]: Before <https://prose.example/> after
+[note]: [[target]]"#;
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.url_links.len(), 1);
+        assert_eq!(analysis.url_links[0].target, "https://visible.example/");
+        assert_eq!(analysis.reference_links.len(), 1);
+        assert_eq!(
+            analysis.reference_links[0].target,
+            "https://visible.example/"
+        );
+        assert_eq!(analysis.note_links.len(), 1);
+        assert_eq!(analysis.note_links[0].target, "target");
+    }
+
+    #[test]
     fn document_analysis_marks_file_stem_fallback_titles() {
         let (analysis, title_origin) =
             analyze_document_with_title_origin(Path::new("docs/current.maki"), "body");
@@ -1708,8 +1892,8 @@ mod tests {
     }
 
     #[test]
-    fn reference_use_spans_distinguish_default_titles_and_direct_targets() {
-        let source = "[web][] [shown][web] [^web][] [^shown][web] [direct](target)\n\n[web]: <https://example.com>";
+    fn reference_use_spans_distinguish_default_titles_and_url_targets() {
+        let source = "[web][] [shown][web] [^web][] [^shown][web] [direct]<https://direct.example>\n\n[web]: <https://example.com>";
         let analysis = analyze_document(Path::new("index.maki"), source);
         let uses = &analysis.reference_graph.uses;
 
@@ -1726,14 +1910,11 @@ mod tests {
             Some("shown")
         );
 
-        let direct = analysis
-            .reference_links
-            .iter()
-            .find(|link| link.title == "direct")
-            .unwrap();
+        let direct = &analysis.url_links[0];
+        assert_eq!(direct.title.as_deref(), Some("direct"));
         assert_eq!(
             &source[direct.target_span.start..direct.target_span.end],
-            "target"
+            "https://direct.example"
         );
     }
 

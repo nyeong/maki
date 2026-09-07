@@ -191,40 +191,23 @@ pub(super) fn normalize_key(key: &str) -> String {
     key.to_lowercase()
 }
 
-fn uri_scheme(target: &str) -> Option<&str> {
-    let (scheme, _rest) = target.split_once(':')?;
-    (!scheme.is_empty()
-        && scheme
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')))
-    .then_some(scheme)
-}
-
 pub fn is_external_href(target: &str) -> bool {
     let target = target.trim();
 
-    target.starts_with("//") || uri_scheme(target).is_some()
+    target.starts_with("//") || parser::uri_scheme(target).is_some()
 }
 
 pub fn is_safe_direct_href(target: &str) -> bool {
-    let target = target.trim();
-    if target.is_empty() || target.chars().any(|ch| ch.is_ascii_control()) {
-        return false;
-    }
-
-    let Some(scheme) = uri_scheme(target) else {
-        return true;
-    };
-    matches!(
-        scheme.to_ascii_lowercase().as_str(),
-        "http" | "https" | "mailto" | "tel"
-    )
+    parser::is_local_link_target(target)
 }
 
 fn is_checkable_external_href(target: &str) -> bool {
     let target = target.trim();
-
-    target.starts_with("https://") || target.starts_with("http://")
+    let Some((scheme, body)) = target.split_once("://") else {
+        return false;
+    };
+    !body.is_empty()
+        && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,13 +308,7 @@ fn collect_inline_external_links(
 ) {
     for inline in inlines {
         match inline {
-            Inline::HyperLink { target } => {
-                external_links.insert(ExternalLinkRef {
-                    source_path: source_path.to_path_buf(),
-                    target: target.trim().to_string(),
-                });
-            }
-            Inline::DirectLink { target, .. } if is_checkable_external_href(target) => {
+            Inline::HyperLink { target, .. } => {
                 external_links.insert(ExternalLinkRef {
                     source_path: source_path.to_path_buf(),
                     target: target.trim().to_string(),

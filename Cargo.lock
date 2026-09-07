@@ -264,7 +264,9 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "maki-core",
+ "serde",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]

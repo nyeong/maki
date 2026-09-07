@@ -25,7 +25,7 @@ Maki source는 renderer 없이 읽을 때도 문서의 의미가 드러나는 �
 
 - Heading level은 `=` 개수로 보인다.
 - List와 quote marker는 line의 역할을 직접 표시한다.
-- `[[note]]`, `[reference][]`, `[date]`, `<date>`는 서로 다른 의미를 source에 보존한다.
+- `[[note]]`, `[title][[note]]`, `[reference][]`, `[title]<URL>`, `[date]`, `<date>`는 서로 다른 의미를 source에 보존한다.
 - Property는 연결된 document 또는 block 가까이에 둔다.
 - Reference Definition은 본문 display와 긴 target을 분리한다.
 

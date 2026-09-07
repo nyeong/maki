@@ -120,19 +120,11 @@ fn date_context_with_scope(
 fn push_inline_date_context(context: &mut String, inlines: &[Inline<'_>]) {
     for inline in inlines {
         match inline {
-            Inline::NoteLink { target } => {
-                context.push_str("[[");
-                context.push_str(target);
-                context.push_str("]]");
-            }
+            Inline::NoteLink { raw, .. } => context.push_str(raw),
             Inline::Reference { raw, .. }
             | Inline::Footnote { raw, .. }
             | Inline::DirectLink { raw, .. } => context.push_str(raw),
-            Inline::HyperLink { target } => {
-                context.push('<');
-                context.push_str(target);
-                context.push('>');
-            }
+            Inline::HyperLink { raw, .. } => context.push_str(raw),
             Inline::DateStamp(stamp) => context.push_str(&date_stamp_raw(*stamp)),
             Inline::DateRange(range) => context.push_str(&date_range_raw(*range)),
             Inline::Text(text) => context.push_str(text),

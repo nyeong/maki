@@ -1,20 +1,25 @@
 #![allow(deprecated)]
 
+mod code_actions;
+mod page_title;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
-    CompletionItem, CompletionOptions, CompletionParams, CompletionResponse, CompletionTextEdit,
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, InitializeParams, Location,
-    MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams,
-    Range, ReferenceParams, ServerCapabilities, SymbolInformation, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    CodeAction, CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
+    CodeActionResponse, CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
+    CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    InitializeParams, Location, MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind,
+    PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities, SymbolInformation,
+    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use maki_core::analysis::{
     AnalysisBlockKind, AnalysisDiagnosticKind, DateMarkerOccurrence, DateOrigin,
@@ -26,6 +31,7 @@ use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
 use maki_core::parser::DateStampKind;
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
 use maki_core::{Maki, MakiConfig, is_discoverable_maki_path, list_maki_files};
+use page_title::{HttpPageTitleProvider, PageTitleProvider};
 
 pub type LspResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -39,12 +45,54 @@ pub fn run_stdio_with_version(version: &str) -> LspResult<()> {
     connection.initialize_finish(initialize_id, initialize_result(version))?;
     let params: InitializeParams = serde_json::from_value(initialize)?;
     let root = workspace_root(&params)?;
-    let mut server = Server::new(root)?;
+    let edit_capabilities = client_edit_capabilities(&params.capabilities);
+    let mut server = Server::new(root, edit_capabilities)?;
 
     server.run(&connection)?;
     drop(connection);
     io_threads.join()?;
     Ok(())
+}
+
+fn client_edit_capabilities(
+    capabilities: &lsp_types::ClientCapabilities,
+) -> code_actions::ExtractionCapabilities {
+    let document_changes = capabilities
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.workspace_edit.as_ref())
+        .and_then(|edit| edit.document_changes)
+        .unwrap_or(false);
+    let code_action = capabilities
+        .text_document
+        .as_ref()
+        .and_then(|text_document| text_document.code_action.as_ref());
+    let code_action_literals =
+        code_action.is_some_and(|code_action| code_action.code_action_literal_support.is_some());
+    let resolves_property = |property: &str| {
+        code_action.is_some_and(|code_action| {
+            code_action.resolve_support.as_ref().is_some_and(|resolve| {
+                resolve
+                    .properties
+                    .iter()
+                    .any(|candidate| candidate == property)
+            })
+        })
+    };
+    let lazy_code_action_edits = code_action_literals
+        && code_action.is_some_and(|code_action| {
+            code_action.data_support == Some(true) && resolves_property("edit")
+        });
+    let disabled_code_actions = code_action.is_some_and(|code_action| {
+        code_action.disabled_support == Some(true) && resolves_property("disabled")
+    });
+
+    code_actions::ExtractionCapabilities {
+        document_changes,
+        code_action_literals,
+        lazy_code_action_edits,
+        disabled_code_actions,
+    }
 }
 
 fn initialize_result(version: &str) -> serde_json::Value {
@@ -67,6 +115,11 @@ fn server_capabilities() -> ServerCapabilities {
             resolve_provider: Some(false),
             work_done_progress_options: Default::default(),
         }),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::REFACTOR_EXTRACT]),
+            resolve_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
@@ -90,8 +143,10 @@ fn workspace_root(params: &InitializeParams) -> LspResult<PathBuf> {
 struct Server {
     source_root: PathBuf,
     documents: BTreeMap<PathBuf, String>,
-    open_documents: BTreeSet<PathBuf>,
+    document_versions: BTreeMap<PathBuf, i32>,
     analysis: ProjectAnalysis,
+    page_title_provider: Arc<dyn PageTitleProvider>,
+    extraction_capabilities: code_actions::ExtractionCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +157,10 @@ enum ReferenceIdentity {
 }
 
 impl Server {
-    fn new(workspace_root: PathBuf) -> LspResult<Self> {
+    fn new(
+        workspace_root: PathBuf,
+        extraction_capabilities: code_actions::ExtractionCapabilities,
+    ) -> LspResult<Self> {
         let source_root = source_root(&workspace_root)?;
         let documents = load_documents(&source_root)?;
         let analysis = analyze_documents(&documents);
@@ -110,8 +168,10 @@ impl Server {
         Ok(Self {
             source_root,
             documents,
-            open_documents: BTreeSet::new(),
+            document_versions: BTreeMap::new(),
             analysis,
+            page_title_provider: Arc::new(HttpPageTitleProvider::new()),
+            extraction_capabilities,
         })
     }
 
@@ -133,6 +193,10 @@ impl Server {
         Ok(())
     }
 
+    fn extraction_capabilities(&self) -> code_actions::ExtractionCapabilities {
+        self.extraction_capabilities
+    }
+
     fn handle_request(&self, connection: &Connection, request: Request) -> LspResult<()> {
         let result = match request.method.as_str() {
             "textDocument/definition" => {
@@ -146,6 +210,14 @@ impl Server {
             "textDocument/documentLink" => {
                 let params: DocumentLinkParams = serde_json::from_value(request.params)?;
                 serde_json::to_value(self.document_links(params))?
+            }
+            "textDocument/codeAction" => {
+                let params: CodeActionParams = serde_json::from_value(request.params)?;
+                serde_json::to_value(self.code_actions(params))?
+            }
+            "codeAction/resolve" => {
+                let action: CodeAction = serde_json::from_value(request.params)?;
+                serde_json::to_value(self.resolve_code_action(action))?
             }
             "textDocument/completion" => {
                 let params: CompletionParams = serde_json::from_value(request.params)?;
@@ -190,9 +262,10 @@ impl Server {
                 let params: DidOpenTextDocumentParams =
                     serde_json::from_value(notification.params)?;
                 if let Some(path) = self.relative_path(&params.text_document.uri) {
+                    self.document_versions
+                        .insert(path.clone(), params.text_document.version);
                     self.documents
                         .insert(path.clone(), params.text_document.text);
-                    self.open_documents.insert(path);
                     self.reanalyze();
                     self.publish_diagnostics(connection)?;
                 }
@@ -203,8 +276,10 @@ impl Server {
                 if let (Some(path), Some(change)) = (
                     self.relative_path(&params.text_document.uri),
                     params.content_changes.into_iter().last(),
-                ) && self.open_documents.contains(&path)
+                ) && self.document_versions.contains_key(&path)
                 {
+                    self.document_versions
+                        .insert(path.clone(), params.text_document.version);
                     self.documents.insert(path, change.text);
                     self.reanalyze();
                     self.publish_diagnostics(connection)?;
@@ -223,7 +298,7 @@ impl Server {
                             self.documents.remove(&path);
                         }
                     }
-                    self.open_documents.remove(&path);
+                    self.document_versions.remove(&path);
                     self.reanalyze();
                     self.publish_empty_diagnostics(connection, &path)?;
                     self.publish_diagnostics(connection)?;
@@ -257,7 +332,7 @@ impl Server {
     }
 
     fn publish_diagnostics(&self, connection: &Connection) -> LspResult<()> {
-        for path in &self.open_documents {
+        for path in self.document_versions.keys() {
             let Some(source) = self.documents.get(path) else {
                 continue;
             };
@@ -583,10 +658,28 @@ impl Server {
 
     fn document_links(&self, params: DocumentLinkParams) -> Option<Vec<DocumentLink>> {
         let (source, document) = self.document_for_uri(&params.text_document.uri)?;
+        let authored_url_spans = document
+            .url_links
+            .iter()
+            .map(|link| link.span)
+            .collect::<BTreeSet<_>>();
+        let hyper_link_target_spans = document
+            .reference_graph
+            .definitions
+            .iter()
+            .filter(|definition| {
+                definition.value_kind == maki_core::parser::ReferenceValueKind::HyperLink
+            })
+            .filter_map(|definition| definition.semantic_target_span)
+            .collect::<BTreeSet<_>>();
         Some(
             document
                 .reference_links
                 .iter()
+                .filter(|reference| {
+                    authored_url_spans.contains(&reference.span)
+                        || hyper_link_target_spans.contains(&reference.target_span)
+                })
                 .filter_map(|reference| {
                     let target = Url::parse(&reference.target).ok()?;
                     matches!(target.scheme(), "http" | "https").then_some(DocumentLink {
@@ -597,6 +690,34 @@ impl Server {
                     })
                 })
                 .collect(),
+        )
+    }
+
+    fn code_actions(&self, params: CodeActionParams) -> Option<CodeActionResponse> {
+        let uri = &params.text_document.uri;
+        let path = self.relative_path(uri)?;
+        let (source, document) = self.document_for_uri(uri)?;
+        Some(code_actions::extract_url_actions(
+            uri,
+            source,
+            document,
+            self.document_versions.get(&path).copied(),
+            self.extraction_capabilities(),
+            params.range,
+            &params.context,
+        ))
+    }
+
+    fn resolve_code_action(&self, action: CodeAction) -> CodeAction {
+        code_actions::resolve_extract_url_action(
+            action,
+            |uri| {
+                let path = self.relative_path(uri)?;
+                let (source, document) = self.document_for_uri(uri)?;
+                Some((source, document, self.document_versions.get(&path).copied()))
+            },
+            self.page_title_provider.as_ref(),
+            self.extraction_capabilities(),
         )
     }
 
@@ -1239,6 +1360,27 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    struct NoPageTitleProvider;
+
+    impl PageTitleProvider for NoPageTitleProvider {
+        fn page_title(&self, _url: &Url) -> Option<String> {
+            None
+        }
+    }
+
+    fn no_page_title_provider() -> Arc<dyn PageTitleProvider> {
+        Arc::new(NoPageTitleProvider)
+    }
+
+    fn all_extraction_capabilities() -> code_actions::ExtractionCapabilities {
+        code_actions::ExtractionCapabilities {
+            document_changes: true,
+            code_action_literals: true,
+            lazy_code_action_edits: true,
+            disabled_code_actions: true,
+        }
+    }
+
     struct TestWorkspace {
         root: PathBuf,
     }
@@ -1272,8 +1414,10 @@ mod tests {
         Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
+            document_versions: BTreeMap::new(),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         }
     }
 
@@ -1374,7 +1518,289 @@ mod tests {
             result["capabilities"]["documentLinkProvider"]["resolveProvider"],
             false
         );
+        assert_eq!(
+            result["capabilities"]["codeActionProvider"]["codeActionKinds"],
+            serde_json::json!(["refactor.extract"])
+        );
+        assert_eq!(
+            result["capabilities"]["codeActionProvider"]["resolveProvider"],
+            true
+        );
         assert_eq!(result["capabilities"]["referencesProvider"], true);
+    }
+
+    #[test]
+    fn title_fetch_capabilities_require_versioned_changes_and_lazy_edit_support() {
+        fn capabilities(value: serde_json::Value) -> code_actions::ExtractionCapabilities {
+            let capabilities: lsp_types::ClientCapabilities =
+                serde_json::from_value(value).unwrap();
+            client_edit_capabilities(&capabilities)
+        }
+
+        let document_changes = serde_json::json!({
+            "workspace": { "workspaceEdit": { "documentChanges": true } }
+        });
+        assert_eq!(
+            capabilities(document_changes),
+            code_actions::ExtractionCapabilities {
+                document_changes: true,
+                code_action_literals: false,
+                lazy_code_action_edits: false,
+                disabled_code_actions: false,
+            }
+        );
+
+        let lazy_edits = serde_json::json!({
+            "textDocument": {
+                "codeAction": {
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": { "valueSet": ["refactor.extract"] }
+                    },
+                    "dataSupport": true,
+                    "resolveSupport": { "properties": ["edit"] }
+                }
+            }
+        });
+        assert_eq!(
+            capabilities(lazy_edits.clone()),
+            code_actions::ExtractionCapabilities {
+                document_changes: false,
+                code_action_literals: true,
+                lazy_code_action_edits: true,
+                disabled_code_actions: false,
+            }
+        );
+
+        let both = serde_json::json!({
+            "workspace": { "workspaceEdit": { "documentChanges": true } },
+            "textDocument": lazy_edits["textDocument"].clone()
+        });
+        assert_eq!(
+            capabilities(both),
+            code_actions::ExtractionCapabilities {
+                document_changes: true,
+                code_action_literals: true,
+                lazy_code_action_edits: true,
+                disabled_code_actions: false,
+            }
+        );
+        assert_eq!(
+            capabilities(serde_json::json!({})),
+            code_actions::ExtractionCapabilities {
+                document_changes: false,
+                code_action_literals: false,
+                lazy_code_action_edits: false,
+                disabled_code_actions: false,
+            }
+        );
+
+        let disabled = serde_json::json!({
+            "textDocument": {
+                "codeAction": {
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": { "valueSet": ["refactor.extract"] }
+                    },
+                    "disabledSupport": true,
+                    "dataSupport": true,
+                    "resolveSupport": { "properties": ["edit", "disabled"] }
+                }
+            }
+        });
+        assert!(capabilities(disabled).disabled_code_actions);
+
+        for incomplete in [
+            serde_json::json!({
+                "textDocument": { "codeAction": {
+                    "dataSupport": true,
+                    "resolveSupport": { "properties": ["edit"] }
+                } }
+            }),
+            serde_json::json!({
+                "textDocument": { "codeAction": {
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": { "valueSet": ["refactor.extract"] }
+                    },
+                    "resolveSupport": { "properties": ["edit"] }
+                } }
+            }),
+            serde_json::json!({
+                "textDocument": { "codeAction": {
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": { "valueSet": ["refactor.extract"] }
+                    },
+                    "dataSupport": true,
+                    "resolveSupport": { "properties": ["disabled"] }
+                } }
+            }),
+        ] {
+            assert!(!capabilities(incomplete).lazy_code_action_edits);
+        }
+    }
+
+    #[test]
+    fn code_action_and_resolve_requests_are_dispatched() {
+        let source = "[site]<https://example.com/>";
+        let mut server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        server
+            .document_versions
+            .insert(PathBuf::from("index.maki"), 42);
+        let (server_connection, client_connection) = Connection::memory();
+        let params = CodeActionParams {
+            text_document: lsp_types::TextDocumentIdentifier::new(document_uri("index.maki")),
+            range: lsp_range(source, SourceSpan::new(0, source.len())).unwrap(),
+            context: lsp_types::CodeActionContext::default(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        server
+            .handle_request(
+                &server_connection,
+                Request {
+                    id: 1.into(),
+                    method: "textDocument/codeAction".to_string(),
+                    params: serde_json::to_value(params).unwrap(),
+                },
+            )
+            .unwrap();
+        let Message::Response(response) = client_connection.receiver.recv().unwrap() else {
+            panic!("expected a Code Action response");
+        };
+        let actions: CodeActionResponse = serde_json::from_value(response.result.unwrap()).unwrap();
+        let [lsp_types::CodeActionOrCommand::CodeAction(action)] = actions.as_slice() else {
+            panic!("expected one literal Code Action");
+        };
+        assert!(action.edit.is_some(), "named URL edits are eager");
+        let Some(lsp_types::DocumentChanges::Edits(document_edits)) = action
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.document_changes.as_ref())
+        else {
+            panic!("version-capable clients should receive TextDocumentEdit");
+        };
+        assert_eq!(document_edits[0].text_document.version, Some(42));
+
+        server
+            .handle_request(
+                &server_connection,
+                Request {
+                    id: 2.into(),
+                    method: "codeAction/resolve".to_string(),
+                    params: serde_json::to_value(action).unwrap(),
+                },
+            )
+            .unwrap();
+        let Message::Response(response) = client_connection.receiver.recv().unwrap() else {
+            panic!("expected a Code Action resolve response");
+        };
+        let resolved: CodeAction = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert!(resolved.disabled.is_none());
+        assert!(resolved.edit.is_some());
+        let Some(lsp_types::DocumentChanges::Edits(document_edits)) = resolved
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.document_changes.as_ref())
+        else {
+            panic!("resolved edits should preserve the current document version");
+        };
+        assert_eq!(document_edits[0].text_document.version, Some(42));
+    }
+
+    #[test]
+    fn document_versions_are_the_open_document_registry_across_lifecycle() {
+        let workspace = temp_workspace("open-document-registry");
+        write_workspace_file(&workspace, "index.maki", "disk");
+        let path = PathBuf::from("index.maki");
+        let uri = Url::from_file_path(workspace.root.join(&path)).unwrap();
+        let mut server =
+            Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
+        let (server_connection, _client_connection) = Connection::memory();
+        let change = |version, text: &str| Notification {
+            method: "textDocument/didChange".to_string(),
+            params: serde_json::to_value(DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier::new(
+                    uri.clone(),
+                    version,
+                ),
+                content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.to_string(),
+                }],
+            })
+            .unwrap(),
+        };
+
+        server
+            .handle_notification(&server_connection, change(0, "ignored-before-open"))
+            .unwrap();
+        assert!(!server.document_versions.contains_key(&path));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("disk")
+        );
+
+        server
+            .handle_notification(
+                &server_connection,
+                Notification {
+                    method: "textDocument/didOpen".to_string(),
+                    params: serde_json::to_value(DidOpenTextDocumentParams {
+                        text_document: lsp_types::TextDocumentItem::new(
+                            uri.clone(),
+                            "maki".to_string(),
+                            1,
+                            "first".to_string(),
+                        ),
+                    })
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        assert_eq!(server.document_versions.get(&path), Some(&1));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("first")
+        );
+
+        server
+            .handle_notification(&server_connection, change(2, "second"))
+            .unwrap();
+        assert_eq!(server.document_versions.get(&path), Some(&2));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("second")
+        );
+
+        server
+            .handle_notification(
+                &server_connection,
+                Notification {
+                    method: "textDocument/didClose".to_string(),
+                    params: serde_json::to_value(DidCloseTextDocumentParams {
+                        text_document: lsp_types::TextDocumentIdentifier::new(uri.clone()),
+                    })
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        assert!(!server.document_versions.contains_key(&path));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("disk")
+        );
+
+        server
+            .handle_notification(&server_connection, change(3, "ignored-after-close"))
+            .unwrap();
+        assert!(!server.document_versions.contains_key(&path));
+        assert_eq!(
+            server.documents.get(&path).map(String::as_str),
+            Some("disk")
+        );
     }
 
     #[test]
@@ -1397,7 +1823,7 @@ mod tests {
             }
         }
 
-        let server = Server::new(workspace.root.clone()).unwrap();
+        let server = Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
 
         assert_eq!(
             server.documents.keys().cloned().collect::<Vec<_>>(),
@@ -1585,8 +2011,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
+            document_versions: BTreeMap::new(),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let params = DocumentLinkParams {
             text_document: lsp_types::TextDocumentIdentifier {
@@ -1760,7 +2188,7 @@ mod tests {
 
     #[test]
     fn document_links_require_an_exact_hyperlink_value() {
-        let source = "[url][] [prose][]\n\n[url]: <https://example.com/path>\n[prose]: <https://example.com> has details\n";
+        let source = "[url][] [prose][] [note][]\n\n[url]: <https://example.com/path>\n[prose]: <https://example.com> has details\n[note]: [[https://internal.example]]\n";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1780,8 +2208,8 @@ mod tests {
     }
 
     #[test]
-    fn document_links_include_direct_http_links_with_the_full_construct_range() {
-        let source = "[site](https://example.com) [local](page)";
+    fn document_links_include_titled_and_bare_urls_with_the_full_construct_range() {
+        let source = "[site]<https://example.com> [local](page) <https://bare.example/>";
         let server = test_server(BTreeMap::from([(
             PathBuf::from("index.maki"),
             source.to_string(),
@@ -1789,7 +2217,7 @@ mod tests {
 
         let links = document_links_for(&server, "index.maki");
 
-        assert_eq!(links.len(), 1);
+        assert_eq!(links.len(), 2);
         assert_eq!(
             links[0].target.as_ref().map(Url::as_str),
             Some("https://example.com/")
@@ -1797,6 +2225,10 @@ mod tests {
         assert_eq!(
             links[0].range,
             Range::new(Position::new(0, 0), Position::new(0, 27))
+        );
+        assert_eq!(
+            links[1].target.as_ref().map(Url::as_str),
+            Some("https://bare.example/")
         );
     }
 
@@ -2166,8 +2598,8 @@ mod tests {
 
         let unsaved = "😀 <2026-W37-1>\n";
         server
-            .open_documents
-            .insert(PathBuf::from("declaration.maki"));
+            .document_versions
+            .insert(PathBuf::from("declaration.maki"), 1);
         server
             .documents
             .insert(PathBuf::from("declaration.maki"), unsaved.to_string());
@@ -2336,8 +2768,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
+            document_versions: BTreeMap::new(),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let plans_uri = Url::parse("file:///workspace/plans.maki").unwrap();
 
@@ -2435,8 +2869,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
+            document_versions: BTreeMap::new(),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let document = server.analysis.document(Path::new("current.maki")).unwrap();
 
@@ -2472,8 +2908,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
             documents,
+            document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let (server_connection, client_connection) = Connection::memory();
 
@@ -2503,8 +2941,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
             documents,
+            document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let (server_connection, client_connection) = Connection::memory();
 
@@ -2541,8 +2981,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::from([PathBuf::from("open.maki")]),
             documents,
+            document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let (server_connection, client_connection) = Connection::memory();
 
@@ -2616,8 +3058,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
+            document_versions: BTreeMap::new(),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let params = WorkspaceSymbolParams {
             query: "DETAIL".to_string(),
@@ -2652,8 +3096,10 @@ mod tests {
         let server = Server {
             source_root: PathBuf::from("/workspace"),
             analysis: analyze_documents(&documents),
-            open_documents: BTreeSet::new(),
             documents,
+            document_versions: BTreeMap::new(),
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
         };
         let params = WorkspaceSymbolParams {
             query: "SCHEDULE".to_string(),
