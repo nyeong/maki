@@ -149,9 +149,6 @@ pub(crate) fn run_serve(source: ServeSource, options: ServeOptions) -> Result<()
 }
 
 fn run_build(file: PathBuf) -> Result<(), RunError> {
-    let content = std::fs::read_to_string(&file).map_err(|e| RunError::IoError { source: e })?;
-    let parsed = parser::parse(&content);
-
     let html = match Maki::find_project_root(&file)? {
         Some(root) => {
             let config = MakiConfig::load_project(&root)?;
@@ -161,18 +158,21 @@ fn run_build(file: PathBuf) -> Result<(), RunError> {
                 emit_project_diagnostic_summary(&maki.diagnostics());
                 maki.render_file_html(&file)?
             } else {
-                emit_parse_warnings(&file, &parsed.diagnostics);
-                html::render_document(&parsed.document)
+                render_standalone_file(&file)?
             }
         }
-        None => {
-            emit_parse_warnings(&file, &parsed.diagnostics);
-            html::render_document(&parsed.document)
-        }
+        None => render_standalone_file(&file)?,
     };
 
     println!("{html}");
     Ok(())
+}
+
+fn render_standalone_file(file: &Path) -> Result<String, RunError> {
+    let content = std::fs::read_to_string(file).map_err(|source| RunError::IoError { source })?;
+    let parsed = parser::parse(&content);
+    emit_parse_warnings(file, &parsed.diagnostics);
+    Ok(html::render_document(&parsed.document))
 }
 
 fn same_path(left: &Path, right: &Path) -> Result<bool, RunError> {

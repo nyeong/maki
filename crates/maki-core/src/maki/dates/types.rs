@@ -191,7 +191,7 @@ impl DateIndex {
         self.by_period.entry(period).or_default().push(backlink);
     }
 
-    pub(in crate::maki::dates) fn sort_backlinks(&mut self) {
+    pub(crate) fn sort_backlinks(&mut self) {
         for backlinks in self.by_date.values_mut() {
             backlinks.sort_by_key(|backlink| backlink.relation.priority());
         }

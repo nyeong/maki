@@ -1,9 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::Path;
 
+use crate::analysis::MappedSource;
 use crate::parser::{self, BlockKind, DateRange, DateStamp, Inline};
 
-use super::super::note::{Note, NoteRef};
+use super::super::note::NoteRef;
 use super::super::quote_mode_is_raw;
 use super::context::{
     DateTraversalContext, block_date_context, document_date_context, list_item_line_date_context,
@@ -20,6 +21,17 @@ struct DateIndexCollector<'a> {
     note_title: String,
     inline_ordinal: usize,
     property_ordinal: usize,
+}
+
+pub(crate) trait NestedDocumentVisitor {
+    fn enter(&mut self, coordinates: &MappedSource, parsed: &parser::ParseResult<'_>);
+    fn exit(&mut self);
+}
+
+struct NestedTraversal<'source, 'visitor> {
+    source: &'source str,
+    coordinates: Option<&'source MappedSource>,
+    visitor: &'visitor mut dyn NestedDocumentVisitor,
 }
 
 #[derive(Default)]
@@ -199,6 +211,7 @@ fn collect_list_item_dates(
     context: &DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
     footnote_order: &mut FootnoteDefinitionOrder,
+    nested: &mut NestedTraversal<'_, '_>,
 ) {
     let item_line_context = list_item_line_date_context(item);
     let mut item_context = context.with_top_list_item(item_line_context.clone());
@@ -213,6 +226,7 @@ fn collect_list_item_dates(
             &mut item_context,
             references,
             footnote_order,
+            nested,
         );
     }
 }
@@ -240,6 +254,7 @@ fn collect_block_dates(
     context: &mut DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
     footnote_order: &mut FootnoteDefinitionOrder,
+    nested: &mut NestedTraversal<'_, '_>,
 ) {
     let local_context = block_date_context(block);
     let block_context = match &block.kind {
@@ -264,11 +279,18 @@ fn collect_block_dates(
         }
         BlockKind::List { items } => {
             for item in items {
-                collect_list_item_dates(collector, item, context, references, footnote_order);
+                collect_list_item_dates(
+                    collector,
+                    item,
+                    context,
+                    references,
+                    footnote_order,
+                    nested,
+                );
             }
         }
         BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
-            collect_maki_lines_dates(collector, lines, context, references)
+            collect_maki_lines_dates(collector, lines, context, references, nested)
         }
         BlockKind::Table { header, rows, .. } => {
             let table_header_context = table_row_date_context(header);
@@ -289,7 +311,7 @@ fn collect_block_dates(
         BlockKind::Container { kind, lines, .. }
             if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
         {
-            collect_maki_lines_dates(collector, lines, context, references)
+            collect_maki_lines_dates(collector, lines, context, references, nested)
         }
         BlockKind::Quote { .. }
         | BlockKind::Code { .. }
@@ -303,17 +325,33 @@ fn collect_maki_lines_dates(
     lines: &[&str],
     context: &DateTraversalContext,
     references: &parser::ReferenceDefinitions<'_>,
+    nested: &mut NestedTraversal<'_, '_>,
 ) {
-    let source = lines.join("\n");
-    let parsed = parser::parse_with_references(&source, references);
+    let Some(mapped) = MappedSource::from_lines(nested.source, lines, nested.coordinates) else {
+        return;
+    };
+    let parsed = parser::parse_with_references(&mapped.text, references);
+    nested.visitor.enter(&mapped, &parsed);
     let mut nested_context = context.clone();
-    collect_document_dates_with_context(collector, &parsed.document, &mut nested_context);
+    let mut child = NestedTraversal {
+        source: &mapped.text,
+        coordinates: Some(&mapped),
+        visitor: nested.visitor,
+    };
+    collect_document_dates_with_context(
+        collector,
+        &parsed.document,
+        &mut nested_context,
+        &mut child,
+    );
+    nested.visitor.exit();
 }
 
 fn collect_document_dates_with_context(
     collector: &mut DateIndexCollector<'_>,
     document: &parser::Document<'_>,
     context: &mut DateTraversalContext,
+    nested: &mut NestedTraversal<'_, '_>,
 ) {
     let document_context =
         context.contextualize(&document_date_context(document, &collector.note_title));
@@ -327,6 +365,7 @@ fn collect_document_dates_with_context(
             context,
             document.reference_definitions(),
             &mut footnote_order,
+            nested,
         );
     }
 
@@ -353,33 +392,30 @@ fn collect_document_dates_with_context(
     }
 }
 
-fn collect_document_dates(collector: &mut DateIndexCollector<'_>, document: &parser::Document<'_>) {
+fn collect_document_dates(
+    collector: &mut DateIndexCollector<'_>,
+    source: &str,
+    document: &parser::Document<'_>,
+    nested_visitor: &mut dyn NestedDocumentVisitor,
+) {
     let mut context = DateTraversalContext::default();
-    collect_document_dates_with_context(collector, document, &mut context);
+    let mut nested = NestedTraversal {
+        source,
+        coordinates: None,
+        visitor: nested_visitor,
+    };
+    collect_document_dates_with_context(collector, document, &mut context, &mut nested);
 }
 
-pub(in crate::maki) fn collect_date_index(
-    notes: &BTreeMap<NoteRef, Note>,
-    sources: &BTreeMap<PathBuf, String>,
-) -> DateIndex {
-    let mut date_index = DateIndex::default();
-
-    for note in notes.values() {
-        let Some(source) = sources.get(note.source_path()) else {
-            continue;
-        };
-        let parsed = parser::parse(source);
-        let note_ref = note.note_ref();
-        let note_title = parsed
-            .document
-            .title()
-            .unwrap_or(note.file_stem())
-            .to_string();
-        let mut collector =
-            DateIndexCollector::new(&mut date_index, note.source_path(), note_ref, note_title);
-        collect_document_dates(&mut collector, &parsed.document);
-    }
-
-    date_index.sort_backlinks();
-    date_index
+pub(crate) fn collect_parsed_document_dates(
+    date_index: &mut DateIndex,
+    source_path: &Path,
+    note_ref: NoteRef,
+    note_title: String,
+    source: &str,
+    document: &parser::Document<'_>,
+    nested_visitor: &mut dyn NestedDocumentVisitor,
+) {
+    let mut collector = DateIndexCollector::new(date_index, source_path, note_ref, note_title);
+    collect_document_dates(&mut collector, source, document, nested_visitor);
 }

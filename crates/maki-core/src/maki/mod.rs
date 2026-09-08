@@ -43,8 +43,8 @@ pub use dates::{
     DatePeriod, DateRelation,
 };
 pub(crate) use dates::{
-    date_occurrence_href, date_page_path, date_year_page_path, inline_date_occurrence_id,
-    property_date_occurrence_id,
+    NestedDocumentVisitor, collect_parsed_document_dates, date_occurrence_href, date_page_path,
+    date_year_page_path, inline_date_occurrence_id, property_date_occurrence_id,
 };
 pub use diagnostics::{ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary};
 pub use error::Error;

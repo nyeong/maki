@@ -4,11 +4,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::{
     analysis::{
-        self, AnalysisBlockKind, BlockIdOccurrence, DocumentTitleOrigin, HeadingOccurrence,
-        ProjectAnalysis, SourceSnapshot,
+        self, AnalysisBlockKind, BlockIdOccurrence, DefinitionTargetKind, DocumentTitleOrigin,
+        HeadingOccurrence, LinkResolution, ProjectAnalysis, SnapshotRevision,
     },
     html::{self, AssetMode, DocumentNavigation, DocumentNavigationItem, NoteInfo, RenderContext},
-    link_target::{InnerSelector, NoteLinkTarget},
     parser,
 };
 
@@ -16,11 +15,9 @@ use super::{
     Error, MAKI_SOURCE_EXTENSION, NoopProjectLoadMeter, PROJECT_FILE_NAME, ProjectLoadMeter,
     SearchEntryKind, SitemapEntry,
     config::{MakiConfig, PublishPolicy},
-    dates::{DateIndex, collect_date_index},
+    dates::DateIndex,
     files::{get_relative_path, list_maki_files},
-    links::{
-        ExternalLinkRef, NoteIndex, NoteLinkResolution, collect_external_links, normalize_key,
-    },
+    links::{NoteIndex, NoteLinkResolution, normalize_key},
     note::{
         Note, NoteMetadataEntry, NoteRef, RecentEntry, SearchEntry, collect_recent_entries,
         search_match_rank,
@@ -32,9 +29,6 @@ pub struct Maki {
     pub(super) notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     pub(super) index: NoteIndex,
     pub(super) snapshot: ProjectSnapshot,
-    #[allow(dead_code)]
-    pub(super) date_index: DateIndex,
-    pub(super) external_links: Vec<ExternalLinkRef>,
     pub(super) search_entries: Vec<SearchEntry>,
     pub(super) recent_entries: Vec<RecentEntry>,
     pub(super) sitemap_entries: Vec<SitemapEntry>,
@@ -43,48 +37,28 @@ pub struct Maki {
 }
 
 pub(super) struct ProjectSnapshot {
-    sources: BTreeMap<PathBuf, String>,
+    compiled: analysis::ProjectSnapshot,
     read_failures: Vec<PathBuf>,
-    analysis: ProjectAnalysis,
-    title_origins: BTreeMap<PathBuf, DocumentTitleOrigin>,
 }
 
 impl ProjectSnapshot {
     fn new(sources: BTreeMap<PathBuf, String>, read_failures: Vec<PathBuf>) -> Self {
-        let snapshots = sources
-            .iter()
-            .map(|(path, source)| SourceSnapshot {
-                path: path.as_path(),
-                source,
-            })
-            .collect::<Vec<_>>();
-        let (analysis, title_origins) = analysis::analyze_project_with_title_origins(&snapshots);
-
         Self {
-            sources,
+            compiled: analysis::ProjectSnapshot::compile(sources),
             read_failures,
-            analysis,
-            title_origins,
         }
     }
 
     pub(super) fn source(&self, path: &Path) -> Option<&str> {
-        self.sources.get(path).map(String::as_str)
-    }
-
-    pub(super) fn sources(&self) -> &BTreeMap<PathBuf, String> {
-        &self.sources
+        self.compiled.source(path)
     }
 
     pub(super) fn analysis(&self) -> &ProjectAnalysis {
-        &self.analysis
+        self.compiled.analysis()
     }
 
     fn title_origin(&self, path: &Path) -> DocumentTitleOrigin {
-        self.title_origins
-            .get(path)
-            .copied()
-            .unwrap_or(DocumentTitleOrigin::FileStem)
+        self.compiled.title_origin(path)
     }
 
     fn first_read_failure(&self) -> Option<&Path> {
@@ -155,93 +129,39 @@ impl Maki {
     }
 
     pub fn resolve_note_link(&self, current: &NoteRef, target: &str) -> NoteLinkResolution {
-        let target = NoteLinkTarget::parse(target);
-        let note_resolution = self.index.resolve_document(current, target.document);
-        let NoteLinkResolution::Found(note_ref) = note_resolution else {
-            return note_resolution;
-        };
-
-        match target.inner {
-            None => NoteLinkResolution::Found(note_ref),
-            Some(InnerSelector::Heading(heading)) => self.resolve_heading_target(note_ref, heading),
-            Some(InnerSelector::Id(id)) => self.resolve_id_target(note_ref, id),
-        }
-    }
-
-    fn resolve_heading_target(
-        &self,
-        note_ref: NoteRef,
-        heading_anchor: &str,
-    ) -> NoteLinkResolution {
-        let Some(note) = self.note(&note_ref) else {
+        let Some(current_note) = self.note(current) else {
             return NoteLinkResolution::Broken;
         };
-        let Some(document) = self.snapshot.analysis().document(note.source_path()) else {
-            return NoteLinkResolution::Broken;
-        };
-        let headings = document.headings.iter();
-        let exact = headings
-            .clone()
-            .filter(|heading| heading.anchor == heading_anchor)
-            .collect::<Vec<_>>();
-        let matches = if exact.is_empty() {
-            let normalized = normalize_key(heading_anchor);
-            headings
-                .filter(|heading| normalize_key(&heading.anchor) == normalized)
-                .collect::<Vec<_>>()
-        } else {
-            exact
-        };
+        let resolution = self
+            .snapshot
+            .analysis()
+            .resolve_note_link(current_note.source_path(), target);
 
-        match matches.as_slice() {
-            [heading]
-                if document
-                    .block_ids
-                    .iter()
-                    .any(|block_id| block_id_conflicts_with_heading(block_id, heading)) =>
-            {
-                NoteLinkResolution::Ambiguous
+        match resolution {
+            LinkResolution::Found(target) => {
+                let Some(note) = self.note_by_source_path(&target.path) else {
+                    return NoteLinkResolution::Broken;
+                };
+                let note = note.note_ref();
+                match (target.kind, target.fragment) {
+                    (DefinitionTargetKind::Document, _) => NoteLinkResolution::Found(note),
+                    (DefinitionTargetKind::Heading, Some(anchor)) => {
+                        NoteLinkResolution::FoundHeading { note, anchor }
+                    }
+                    (DefinitionTargetKind::Id, Some(id)) => {
+                        NoteLinkResolution::FoundId { note, id }
+                    }
+                    (DefinitionTargetKind::Heading | DefinitionTargetKind::Id, None) => {
+                        NoteLinkResolution::Broken
+                    }
+                }
             }
-            [heading] => NoteLinkResolution::FoundHeading {
-                note: note_ref,
-                anchor: heading.anchor.clone(),
-            },
-            [] => NoteLinkResolution::Broken,
-            _ => NoteLinkResolution::Ambiguous,
-        }
-    }
-
-    fn resolve_id_target(&self, note_ref: NoteRef, id: &str) -> NoteLinkResolution {
-        if id.is_empty() {
-            return NoteLinkResolution::Broken;
-        }
-        let Some(note) = self.note(&note_ref) else {
-            return NoteLinkResolution::Broken;
-        };
-        let Some(document) = self.snapshot.analysis().document(note.source_path()) else {
-            return NoteLinkResolution::Broken;
-        };
-        let matches = document
-            .block_ids
-            .iter()
-            .filter(|block_id| block_id.id == id)
-            .collect::<Vec<_>>();
-
-        match matches.as_slice() {
-            [block_id]
-                if document
-                    .headings
-                    .iter()
-                    .any(|heading| block_id_conflicts_with_heading(block_id, heading)) =>
-            {
-                NoteLinkResolution::Ambiguous
-            }
-            [block_id] => NoteLinkResolution::FoundId {
-                note: note_ref,
-                id: block_id.id.clone(),
-            },
-            [] => NoteLinkResolution::Broken,
-            _ => NoteLinkResolution::Ambiguous,
+            LinkResolution::BrokenNote
+            | LinkResolution::BrokenHeading
+            | LinkResolution::BrokenId => NoteLinkResolution::Broken,
+            LinkResolution::AmbiguousNote
+            | LinkResolution::AmbiguousHeading
+            | LinkResolution::AmbiguousId => NoteLinkResolution::Ambiguous,
         }
     }
 
@@ -322,7 +242,7 @@ impl Maki {
 
     #[allow(dead_code)]
     pub fn date_index(&self) -> &DateIndex {
-        &self.date_index
+        self.snapshot.analysis().date_index()
     }
 
     pub fn analysis(&self) -> Result<ProjectAnalysis, Error> {
@@ -331,6 +251,10 @@ impl Maki {
         }
 
         Ok(self.snapshot.analysis().clone())
+    }
+
+    pub fn snapshot_revision(&self) -> SnapshotRevision {
+        self.snapshot.compiled.revision()
     }
 
     pub fn published_analysis(&self) -> Result<ProjectAnalysis, Error> {
@@ -422,8 +346,6 @@ impl Maki {
         metrics.record_project_load_phase("index", started.elapsed());
 
         let started = Instant::now();
-        let date_index = collect_date_index(&notes, snapshot.sources());
-        let external_links = collect_external_links(snapshot.sources());
         let note_metadata_entries = notes
             .values()
             .map(|note| snapshot_note_metadata_entry(&snapshot, note))
@@ -445,8 +367,6 @@ impl Maki {
             notes,
             index,
             snapshot,
-            date_index,
-            external_links,
             search_entries,
             recent_entries,
             sitemap_entries,

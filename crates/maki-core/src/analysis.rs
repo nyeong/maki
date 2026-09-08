@@ -1,7 +1,12 @@
-use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title};
+use crate::maki::{
+    DateIndex, NestedDocumentVisitor, NoteRef, collect_parsed_document_dates, quote_mode_is_raw,
+};
 use crate::parser::{
     self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Inline, IsoWeek,
@@ -12,6 +17,74 @@ use crate::source::{SourceMap, SourceSpan};
 pub struct SourceSnapshot<'a> {
     pub path: &'a Path,
     pub source: &'a str,
+}
+
+static NEXT_SNAPSHOT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SnapshotRevision(u64);
+
+impl SnapshotRevision {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSnapshot {
+    revision: SnapshotRevision,
+    sources: BTreeMap<PathBuf, String>,
+    analysis: ProjectAnalysis,
+    title_origins: BTreeMap<PathBuf, DocumentTitleOrigin>,
+}
+
+impl ProjectSnapshot {
+    pub fn compile(sources: BTreeMap<PathBuf, String>) -> Self {
+        let snapshots = sources
+            .iter()
+            .map(|(path, source)| SourceSnapshot {
+                path: path.as_path(),
+                source,
+            })
+            .collect::<Vec<_>>();
+        let (analysis, title_origins) = analyze_project_with_title_origins(&snapshots);
+
+        Self {
+            revision: SnapshotRevision(NEXT_SNAPSHOT_REVISION.fetch_add(1, Ordering::Relaxed)),
+            sources,
+            analysis,
+            title_origins,
+        }
+    }
+
+    pub fn revision(&self) -> SnapshotRevision {
+        self.revision
+    }
+
+    pub fn source(&self, path: &Path) -> Option<&str> {
+        self.sources.get(path).map(String::as_str)
+    }
+
+    pub fn sources(&self) -> &BTreeMap<PathBuf, String> {
+        &self.sources
+    }
+
+    pub fn analysis(&self) -> &ProjectAnalysis {
+        &self.analysis
+    }
+
+    pub(crate) fn title_origin(&self, path: &Path) -> DocumentTitleOrigin {
+        self.title_origins
+            .get(path)
+            .copied()
+            .unwrap_or(DocumentTitleOrigin::FileStem)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProjectExternalLink {
+    pub path: PathBuf,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +106,7 @@ pub struct DocumentAnalysis {
     pub reference_graph: DocumentReferenceGraph,
     pub reference_links: Vec<ReferenceLinkOccurrence>,
     pub url_links: Vec<UrlLinkOccurrence>,
+    pub external_links: Vec<String>,
     pub properties: Vec<PropertyOccurrence>,
     pub date_markers: Vec<DateMarkerOccurrence>,
     pub dates: Vec<DateOccurrence>,
@@ -42,8 +116,24 @@ pub struct DocumentAnalysis {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectAnalysis {
     documents: BTreeMap<PathBuf, DocumentAnalysis>,
+    document_index: DocumentIndex,
     pub diagnostics: Vec<AnalysisDiagnostic>,
     date_marker_index: BTreeMap<DateTargetIdentity, Vec<DateMarkerLocation>>,
+    date_index: DateIndex,
+    external_links: Vec<ProjectExternalLink>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentSelection<'a> {
+    Found(&'a DocumentAnalysis),
+    Broken,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentDescendant<'a> {
+    pub document: &'a DocumentAnalysis,
+    pub relative_coordinate: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +243,7 @@ pub struct ReferenceDefinitionOccurrence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceUseOccurrence {
     pub key: String,
+    pub scope: ReferenceScope,
     pub title: Option<String>,
     pub presentation: ReferencePresentation,
     pub span: SourceSpan,
@@ -160,6 +251,12 @@ pub struct ReferenceUseOccurrence {
     pub title_span: Option<SourceSpan>,
     pub key_span: SourceSpan,
     pub definition_id: Option<ReferenceDefinitionId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceScope {
+    Document,
+    Nested,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -276,6 +373,7 @@ impl ReferenceGraphBuilder {
         let definition_id = self.winners.get(key).copied();
         self.uses.push(ReferenceUseOccurrence {
             key: key.to_string(),
+            scope: ReferenceScope::Document,
             title: title.map(str::to_owned),
             presentation,
             span,
@@ -306,6 +404,28 @@ impl ReferenceGraphBuilder {
     }
 }
 
+fn map_reference_graph(
+    mut graph: DocumentReferenceGraph,
+    coordinates: &MappedSource,
+) -> Option<DocumentReferenceGraph> {
+    for definition in &mut graph.definitions {
+        definition.semantic_target_span = definition
+            .semantic_target_span
+            .and_then(|span| coordinates.map_span(span));
+        definition.definition_span = coordinates.map_span(definition.definition_span)?;
+        definition.key_span = coordinates.map_span(definition.key_span)?;
+        definition.value_span = coordinates.map_span(definition.value_span)?;
+    }
+    for usage in &mut graph.uses {
+        usage.scope = ReferenceScope::Nested;
+        usage.span = coordinates.map_span(usage.span)?;
+        usage.marker_span = coordinates.map_span(usage.marker_span)?;
+        usage.title_span = usage.title_span.and_then(|span| coordinates.map_span(span));
+        usage.key_span = coordinates.map_span(usage.key_span)?;
+    }
+    Some(graph)
+}
+
 #[derive(Default)]
 struct DocumentOccurrences {
     blocks: Vec<BlockOccurrence>,
@@ -315,6 +435,8 @@ struct DocumentOccurrences {
     references: ReferenceGraphBuilder,
     reference_links: Vec<ReferenceLinkOccurrence>,
     url_links: Vec<UrlLinkOccurrence>,
+    external_links: BTreeSet<String>,
+    properties: Vec<PropertyOccurrence>,
     date_markers: Vec<DateMarkerOccurrence>,
     dates: Vec<DateOccurrence>,
 }
@@ -328,11 +450,21 @@ pub enum PropertyDirection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyOccurrence {
     pub direction: PropertyDirection,
+    pub owner: PropertyOwner,
     pub key: String,
     pub value: String,
     pub span: SourceSpan,
     pub key_span: SourceSpan,
     pub value_span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyOwner {
+    Document,
+    Block {
+        kind: AnalysisBlockKind,
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,6 +476,7 @@ pub enum DateOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateOccurrence {
     pub kind: DateStampKind,
+    pub target: DateTargetIdentity,
     pub body: String,
     pub origin: DateOrigin,
     pub span: SourceSpan,
@@ -385,7 +518,16 @@ pub struct AnalysisDiagnostic {
     pub path: PathBuf,
     pub span: SourceSpan,
     pub kind: AnalysisDiagnosticKind,
+    pub subject: AnalysisDiagnosticSubject,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisDiagnosticSubject {
+    None,
+    Id(String),
+    Reference(String),
+    Link(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,22 +564,32 @@ pub enum DefinitionTargetKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinitionTarget {
     pub path: PathBuf,
+    pub canonical_path: String,
     pub selection_span: SourceSpan,
     pub kind: DefinitionTargetKind,
     pub fragment: Option<String>,
 }
 
 pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
-    analyze_document_with_title_origin(path, source).0
+    let parsed = parser::parse(source);
+    analyze_parsed_document_with_title_origin(path, source, &parsed, true).0
 }
 
+#[cfg(test)]
 fn analyze_document_with_title_origin(
     path: &Path,
     source: &str,
 ) -> (DocumentAnalysis, DocumentTitleOrigin) {
     let parsed = parser::parse(source);
-    let source_map = SourceMap::new(source);
-    let properties = collect_properties(source, &source_map);
+    analyze_parsed_document_with_title_origin(path, source, &parsed, true)
+}
+
+fn analyze_parsed_document_with_title_origin(
+    path: &Path,
+    source: &str,
+    parsed: &parser::ParseResult<'_>,
+    include_nested: bool,
+) -> (DocumentAnalysis, DocumentTitleOrigin) {
     let (title, title_origin, document_span) = match parsed.document.title() {
         Some(title) => (
             title.to_owned(),
@@ -450,58 +602,25 @@ fn analyze_document_with_title_origin(
             SourceSpan::default(),
         ),
     };
-    let mut occurrences = DocumentOccurrences::default();
-
-    collect_reference_definitions(
-        source,
-        &source_map,
-        &parsed.document.blocks,
-        &mut occurrences.references,
-    );
-    collect_reference_definition_date_markers(
-        source,
-        &parsed.document.blocks,
-        &mut occurrences.date_markers,
-    );
-    for block in &parsed.document.blocks {
-        collect_block(source, &source_map, block, &mut occurrences);
-    }
-    for definition in parsed.document.reference_definitions().iter() {
-        if matches!(
-            definition.value_kind(),
-            parser::ReferenceValueKind::Prose | parser::ReferenceValueKind::NoteLink
-        ) {
-            collect_inlines(
-                source,
-                &definition.value,
-                DateOrigin::VisibleInline,
-                InlineCollectionScope::ReferenceValue,
-                &mut occurrences,
-            );
-        }
-    }
-    for property in &properties {
-        let value_source = &source[property.value_span.start..property.value_span.end];
-        let parsed_value = parser::parse_inline(value_source);
-        collect_property_dates(
+    let mut occurrences = collect_document_occurrences(source, &parsed.document);
+    let root_reference_graph = std::mem::take(&mut occurrences.references).finish();
+    let mut nested_diagnostics = Vec::new();
+    let reference_graph = if include_nested {
+        let mut nested = NestedOccurrenceCollector::new(path, root_reference_graph);
+        collect_nested_occurrences(
             source,
-            &parsed_value,
-            DateOrigin::PropertyValue {
-                key: property.key.clone(),
-            },
-            &mut occurrences.dates,
+            &parsed.document.blocks,
+            parsed.document.reference_definitions(),
+            None,
+            &mut nested,
         );
-        if !property_occurs_in_container(property, &occurrences.blocks) {
-            collect_date_markers(
-                source,
-                &parsed_value,
-                DateMarkerOrigin::PropertyValue {
-                    key: property.key.clone(),
-                },
-                &mut occurrences.date_markers,
-            );
-        }
-    }
+        let collected = nested.finish();
+        append_occurrences(&mut occurrences, collected.occurrences);
+        nested_diagnostics = collected.diagnostics;
+        collected.reference_graph
+    } else {
+        root_reference_graph
+    };
     occurrences.blocks.sort_by_key(|block| block.span);
     occurrences
         .block_ids
@@ -511,9 +630,8 @@ fn analyze_document_with_title_origin(
         .sort_by_key(|reference| reference.span);
     occurrences.url_links.sort_by_key(|link| link.span);
     occurrences.note_links.sort_by_key(|link| link.span);
+    occurrences.properties.sort_by_key(|property| property.span);
     occurrences.date_markers.sort_by_key(|marker| marker.span);
-    let reference_graph = std::mem::take(&mut occurrences.references).finish();
-
     let mut diagnostics = parsed
         .diagnostics
         .iter()
@@ -521,9 +639,11 @@ fn analyze_document_with_title_origin(
             path: path.to_path_buf(),
             span: diagnostic.span,
             kind: AnalysisDiagnosticKind::ParseWarning,
+            subject: AnalysisDiagnosticSubject::None,
             message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
         })
         .collect::<Vec<_>>();
+    diagnostics.extend(nested_diagnostics);
     diagnostics.extend(duplicate_id_diagnostics(
         path,
         &occurrences.block_ids,
@@ -533,11 +653,14 @@ fn analyze_document_with_title_origin(
         reference_graph
             .uses
             .iter()
-            .filter(|usage| usage.definition_id.is_none())
+            .filter(|usage| {
+                usage.scope == ReferenceScope::Document && usage.definition_id.is_none()
+            })
             .map(|usage| AnalysisDiagnostic {
                 path: path.to_path_buf(),
                 span: usage.key_span,
                 kind: AnalysisDiagnosticKind::UnresolvedReference,
+                subject: AnalysisDiagnosticSubject::Reference(usage.key.clone()),
                 message: format!("unresolved reference: {}", usage.key),
             }),
     );
@@ -556,7 +679,8 @@ fn analyze_document_with_title_origin(
             reference_graph,
             reference_links: occurrences.reference_links,
             url_links: occurrences.url_links,
-            properties,
+            external_links: occurrences.external_links.into_iter().collect(),
+            properties: occurrences.properties,
             date_markers: occurrences.date_markers,
             dates: occurrences.dates,
             diagnostics,
@@ -574,53 +698,104 @@ pub(crate) fn analyze_project_with_title_origins(
 ) -> (ProjectAnalysis, BTreeMap<PathBuf, DocumentTitleOrigin>) {
     let mut documents = BTreeMap::new();
     let mut title_origins = BTreeMap::new();
+    let mut date_index = DateIndex::default();
+    let mut external_links = BTreeSet::new();
     for snapshot in snapshots {
-        let (document, title_origin) =
-            analyze_document_with_title_origin(snapshot.path, snapshot.source);
+        let parsed = parser::parse(snapshot.source);
+        let (mut document, title_origin) = analyze_parsed_document_with_title_origin(
+            snapshot.path,
+            snapshot.source,
+            &parsed,
+            false,
+        );
+        let root_reference_graph = std::mem::take(&mut document.reference_graph);
+        let mut visit_nested = NestedOccurrenceCollector::new(snapshot.path, root_reference_graph);
+        collect_parsed_document_dates(
+            &mut date_index,
+            &document.path,
+            NoteRef::new(&document.canonical_path),
+            document.title.clone(),
+            snapshot.source,
+            &parsed.document,
+            &mut visit_nested,
+        );
+        let collected = visit_nested.finish();
+        document.reference_graph = collected.reference_graph;
+        merge_nested_into_document(&mut document, collected.occurrences, collected.diagnostics);
+        external_links.extend(
+            document
+                .external_links
+                .iter()
+                .map(|target| ProjectExternalLink {
+                    path: document.path.clone(),
+                    target: target.clone(),
+                }),
+        );
         title_origins.insert(document.path.clone(), title_origin);
         documents.insert(document.path.clone(), document);
     }
-    let lookup = ProjectLookup::new(&documents);
-    let mut semantic_diagnostics = Vec::new();
-
-    for document in documents.values_mut() {
-        let current_path = document.path.clone();
-        for occurrence in &mut document.note_links {
-            let resolution = lookup.resolve(&current_path, &occurrence.target);
-            if let Some((kind, message)) =
-                diagnostic_for_resolution(&occurrence.target, &resolution)
-            {
-                semantic_diagnostics.push(AnalysisDiagnostic {
-                    path: document.path.clone(),
-                    span: occurrence.target_span,
-                    kind,
-                    message,
-                });
-            }
-            occurrence.resolution = Some(resolution);
-        }
-    }
-
+    date_index.sort_backlinks();
+    let document_index = DocumentIndex::new(&documents);
     let mut diagnostics = documents
         .values()
         .flat_map(|document| document.diagnostics.iter().cloned())
         .collect::<Vec<_>>();
-    diagnostics.extend(semantic_diagnostics);
+    let date_marker_index = build_date_marker_index(&documents);
+    let mut analysis = ProjectAnalysis {
+        documents,
+        document_index,
+        diagnostics: Vec::new(),
+        date_marker_index,
+        date_index,
+        external_links: external_links.into_iter().collect(),
+    };
+    let resolutions = analysis
+        .documents
+        .values()
+        .flat_map(|document| {
+            document
+                .note_links
+                .iter()
+                .enumerate()
+                .map(|(index, occurrence)| {
+                    (
+                        document.path.clone(),
+                        index,
+                        occurrence.target_span,
+                        occurrence.target.clone(),
+                        analysis.resolve_note_link(&document.path, &occurrence.target),
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+
+    for (path, index, target_span, target, resolution) in resolutions {
+        if let Some((kind, message)) = diagnostic_for_resolution(&target, &resolution) {
+            diagnostics.push(AnalysisDiagnostic {
+                path: path.clone(),
+                span: target_span,
+                kind,
+                subject: AnalysisDiagnosticSubject::Link(target.clone()),
+                message,
+            });
+        }
+        if let Some(occurrence) = analysis
+            .documents
+            .get_mut(&path)
+            .and_then(|document| document.note_links.get_mut(index))
+        {
+            occurrence.resolution = Some(resolution);
+        }
+    }
+
     diagnostics.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
             .then_with(|| left.span.cmp(&right.span))
     });
-    let date_marker_index = build_date_marker_index(&documents);
+    analysis.diagnostics = diagnostics;
 
-    (
-        ProjectAnalysis {
-            documents,
-            diagnostics,
-            date_marker_index,
-        },
-        title_origins,
-    )
+    (analysis, title_origins)
 }
 
 fn build_date_marker_index(
@@ -666,11 +841,72 @@ impl ProjectAnalysis {
         self.documents.values()
     }
 
+    pub fn select_document(
+        &self,
+        current_path: &Path,
+        selector: DocumentSelector<'_>,
+    ) -> DocumentSelection<'_> {
+        match self.document_index.select(current_path, selector) {
+            PathSelection::Found(path) => self
+                .documents
+                .get(&path)
+                .map_or(DocumentSelection::Broken, DocumentSelection::Found),
+            PathSelection::Broken => DocumentSelection::Broken,
+            PathSelection::Ambiguous => DocumentSelection::Ambiguous,
+        }
+    }
+
+    pub fn resolve_note_link(&self, current_path: &Path, target: &str) -> LinkResolution {
+        let target = NoteLinkTarget::parse(target);
+        let document = match self.select_document(current_path, target.document) {
+            DocumentSelection::Found(document) => document,
+            DocumentSelection::Broken => return LinkResolution::BrokenNote,
+            DocumentSelection::Ambiguous => return LinkResolution::AmbiguousNote,
+        };
+
+        match target.inner {
+            None => LinkResolution::Found(DefinitionTarget {
+                path: document.path.clone(),
+                canonical_path: document.canonical_path.clone(),
+                selection_span: document.document_span,
+                kind: DefinitionTargetKind::Document,
+                fragment: None,
+            }),
+            Some(InnerSelector::Heading(heading)) => resolve_heading(document, heading),
+            Some(InnerSelector::Id(id)) => resolve_id(document, id),
+        }
+    }
+
+    pub fn descendant_documents(
+        &self,
+        current_path: &Path,
+    ) -> impl Iterator<Item = DocumentDescendant<'_>> {
+        let prefix = self
+            .document(current_path)
+            .map(|document| format!("{}/", document.canonical_path));
+
+        self.documents.values().filter_map(move |document| {
+            let relative_coordinate = document.canonical_path.strip_prefix(prefix.as_deref()?)?;
+            Some(DocumentDescendant {
+                document,
+                relative_coordinate,
+            })
+        })
+    }
+
     pub fn date_marker_locations(&self, target: &DateTargetIdentity) -> &[DateMarkerLocation] {
         self.date_marker_index
             .get(target)
             .map(Vec::as_slice)
             .unwrap_or_default()
+    }
+
+    pub fn date_index(&self) -> &DateIndex {
+        &self.date_index
+    }
+
+    pub fn external_links(&self) -> &[ProjectExternalLink] {
+        &self.external_links
     }
 
     pub fn property_keys(&self) -> Vec<String> {
@@ -706,6 +942,550 @@ pub fn property_description(key: &str) -> Option<&'static str> {
         "status" => Some("Conventional workflow status."),
         _ => None,
     }
+}
+
+fn collect_document_occurrences(
+    source: &str,
+    document: &parser::Document<'_>,
+) -> DocumentOccurrences {
+    let source_map = SourceMap::new(source);
+    let mut occurrences = DocumentOccurrences::default();
+    collect_attached_properties(
+        source,
+        &source_map,
+        document.property_declarations(),
+        PropertyOwner::Document,
+        &mut occurrences.properties,
+    );
+    collect_reference_definitions(
+        source,
+        &source_map,
+        &document.blocks,
+        &mut occurrences.references,
+    );
+    collect_reference_definition_date_markers(
+        source,
+        &document.blocks,
+        &mut occurrences.date_markers,
+    );
+    for block in &document.blocks {
+        collect_block(source, &source_map, block, &mut occurrences);
+    }
+    for definition in document.reference_definitions().iter() {
+        if matches!(
+            definition.value_kind(),
+            parser::ReferenceValueKind::Prose
+                | parser::ReferenceValueKind::NoteLink
+                | parser::ReferenceValueKind::HyperLink
+        ) {
+            collect_inlines(
+                source,
+                &definition.value,
+                DateOrigin::VisibleInline,
+                InlineCollectionScope::ReferenceValue,
+                &mut occurrences,
+            );
+        }
+    }
+    for property in &occurrences.properties {
+        let value_source = &source[property.value_span.start..property.value_span.end];
+        let parsed_value = parser::parse_inline(value_source);
+        collect_property_dates(
+            source,
+            &parsed_value,
+            DateOrigin::PropertyValue {
+                key: property.key.clone(),
+            },
+            &mut occurrences.dates,
+        );
+        collect_date_markers(
+            source,
+            &parsed_value,
+            DateMarkerOrigin::PropertyValue {
+                key: property.key.clone(),
+            },
+            &mut occurrences.date_markers,
+        );
+    }
+    occurrences
+}
+
+#[derive(Debug)]
+pub(crate) struct MappedSource {
+    pub(crate) text: String,
+    segments: Vec<MappedSourceSegment>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MappedSourceSegment {
+    synthetic: SourceSpan,
+    root: SourceSpan,
+}
+
+impl MappedSource {
+    pub(crate) fn from_lines(
+        current_source: &str,
+        lines: &[&str],
+        current_coordinates: Option<&Self>,
+    ) -> Option<Self> {
+        let mut text = String::new();
+        let mut segments = Vec::with_capacity(lines.len());
+
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            let start = text.len();
+            text.push_str(line);
+            let current_span = slice_span(current_source, line)?;
+            let root = match current_coordinates {
+                Some(coordinates) => coordinates.map_span(current_span)?,
+                None => current_span,
+            };
+            segments.push(MappedSourceSegment {
+                synthetic: SourceSpan::new(start, text.len()),
+                root,
+            });
+        }
+
+        Some(Self { text, segments })
+    }
+
+    pub(crate) fn map_span(&self, span: SourceSpan) -> Option<SourceSpan> {
+        let touches = |segment: &&MappedSourceSegment| {
+            if span.start == span.end {
+                segment.synthetic.start <= span.start && span.start <= segment.synthetic.end
+            } else {
+                segment.synthetic.start < span.end && span.start < segment.synthetic.end
+            }
+        };
+        let first = self.segments.iter().find(touches)?;
+        let last = self.segments.iter().rev().find(touches)?;
+        let start = first.root.start
+            + span
+                .start
+                .saturating_sub(first.synthetic.start)
+                .min(first.synthetic.end - first.synthetic.start);
+        let end = last.root.start
+            + span
+                .end
+                .saturating_sub(last.synthetic.start)
+                .min(last.synthetic.end - last.synthetic.start);
+        Some(SourceSpan::new(start, end))
+    }
+}
+
+struct NestedCollection {
+    occurrences: DocumentOccurrences,
+    diagnostics: Vec<AnalysisDiagnostic>,
+    reference_graph: DocumentReferenceGraph,
+}
+
+struct NestedOccurrenceCollector<'a> {
+    path: &'a Path,
+    occurrences: DocumentOccurrences,
+    diagnostics: Vec<AnalysisDiagnostic>,
+    reference_graph: DocumentReferenceGraph,
+    reference_scopes: Vec<BTreeMap<String, ReferenceDefinitionId>>,
+}
+
+impl<'a> NestedOccurrenceCollector<'a> {
+    fn new(path: &'a Path, reference_graph: DocumentReferenceGraph) -> Self {
+        let root_scope = reference_graph.winners.clone();
+        Self {
+            path,
+            occurrences: DocumentOccurrences::default(),
+            diagnostics: Vec::new(),
+            reference_graph,
+            reference_scopes: vec![root_scope],
+        }
+    }
+
+    fn finish(mut self) -> NestedCollection {
+        debug_assert_eq!(self.reference_scopes.len(), 1);
+        self.reference_graph.uses.sort_by_key(|usage| usage.span);
+        self.reference_graph.uses_by_definition.clear();
+        for (index, usage) in self.reference_graph.uses.iter().enumerate() {
+            if let Some(definition_id) = usage.definition_id {
+                self.reference_graph
+                    .uses_by_definition
+                    .entry(definition_id)
+                    .or_default()
+                    .push(index);
+            }
+        }
+
+        NestedCollection {
+            occurrences: self.occurrences,
+            diagnostics: self.diagnostics,
+            reference_graph: self.reference_graph,
+        }
+    }
+
+    fn inherited_definition_id(&self, key: &str) -> Option<ReferenceDefinitionId> {
+        self.reference_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(key).copied())
+    }
+
+    fn enter_reference_scope(&mut self, mut graph: DocumentReferenceGraph) {
+        let offset = self.reference_graph.definitions.len();
+        let local_scope = graph
+            .winners
+            .iter()
+            .map(|(key, id)| (key.clone(), ReferenceDefinitionId(id.0 + offset)))
+            .collect::<BTreeMap<_, _>>();
+
+        for definition in &mut graph.definitions {
+            definition.id.0 += offset;
+            if let ReferenceDefinitionState::Duplicate { winner } = &mut definition.state {
+                winner.0 += offset;
+            }
+        }
+
+        let mut inherited_semantics = Vec::new();
+        for usage in &mut graph.uses {
+            if let Some(definition_id) = &mut usage.definition_id {
+                definition_id.0 += offset;
+                continue;
+            }
+
+            let Some(definition_id) = self.inherited_definition_id(&usage.key) else {
+                continue;
+            };
+            usage.definition_id = Some(definition_id);
+            if let Some(definition) = self.reference_graph.definition(definition_id) {
+                inherited_semantics.push((usage.clone(), definition.clone()));
+            }
+        }
+
+        self.reference_graph
+            .definitions
+            .append(&mut graph.definitions);
+        self.reference_graph.uses.append(&mut graph.uses);
+        for (usage, definition) in inherited_semantics {
+            collect_resolved_reference_semantics(&usage, &definition, &mut self.occurrences);
+        }
+        self.reference_scopes.push(local_scope);
+    }
+}
+
+impl NestedDocumentVisitor for NestedOccurrenceCollector<'_> {
+    fn enter(&mut self, mapped: &MappedSource, parsed: &parser::ParseResult<'_>) {
+        let mut nested = collect_document_occurrences(&mapped.text, &parsed.document);
+        self.diagnostics
+            .extend(parsed.diagnostics.iter().filter_map(|diagnostic| {
+                Some(AnalysisDiagnostic {
+                    path: self.path.to_path_buf(),
+                    span: mapped.map_span(diagnostic.span)?,
+                    kind: AnalysisDiagnosticKind::ParseWarning,
+                    subject: AnalysisDiagnosticSubject::None,
+                    message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
+                })
+            }));
+
+        let nested_reference_graph = std::mem::take(&mut nested.references).finish();
+        self.diagnostics.extend(
+            nested_reference_graph
+                .uses
+                .iter()
+                .filter(|usage| parsed.document.reference(&usage.key).is_none())
+                .filter_map(|usage| {
+                    Some(AnalysisDiagnostic {
+                        path: self.path.to_path_buf(),
+                        span: mapped.map_span(usage.key_span)?,
+                        kind: AnalysisDiagnosticKind::UnresolvedReference,
+                        subject: AnalysisDiagnosticSubject::Reference(usage.key.clone()),
+                        message: format!("unresolved reference: {}", usage.key),
+                    })
+                }),
+        );
+
+        match map_reference_graph(nested_reference_graph, mapped) {
+            Some(reference_graph) => self.enter_reference_scope(reference_graph),
+            None => self.reference_scopes.push(BTreeMap::new()),
+        }
+        merge_mapped_occurrences(&mut self.occurrences, nested, mapped);
+    }
+
+    fn exit(&mut self) {
+        debug_assert!(self.reference_scopes.len() > 1);
+        self.reference_scopes.pop();
+    }
+}
+
+fn collect_resolved_reference_semantics(
+    usage: &ReferenceUseOccurrence,
+    definition: &ReferenceDefinitionOccurrence,
+    occurrences: &mut DocumentOccurrences,
+) {
+    if usage.presentation != ReferencePresentation::Link {
+        return;
+    }
+
+    if matches!(
+        definition.value_kind,
+        parser::ReferenceValueKind::HyperLink | parser::ReferenceValueKind::NoteLink
+    ) && let (Some(target), Some(target_span)) = (
+        definition.semantic_target.as_ref(),
+        definition.semantic_target_span,
+    ) {
+        occurrences.reference_links.push(ReferenceLinkOccurrence {
+            title: usage.title.clone().unwrap_or_else(|| usage.key.clone()),
+            target: target.clone(),
+            span: usage.span,
+            title_span: usage.title_span.unwrap_or(usage.key_span),
+            target_span,
+        });
+    }
+
+    let Some(target) = definition.semantic_target.as_deref() else {
+        return;
+    };
+    let parsed_target = parser::parse_inline(target);
+    match (definition.value_kind, parsed_target.as_slice()) {
+        (parser::ReferenceValueKind::DateStamp, [Inline::DateStamp(stamp)]) => {
+            push_date_occurrence(
+                *stamp,
+                DateOrigin::VisibleInline,
+                usage.span,
+                &mut occurrences.dates,
+            );
+        }
+        (parser::ReferenceValueKind::DateRange, [Inline::DateRange(range)])
+            if usage.title_span.is_none() =>
+        {
+            push_date_range_occurrence(
+                *range,
+                DateOrigin::VisibleInline,
+                usage.span,
+                &mut occurrences.dates,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn append_occurrences(target: &mut DocumentOccurrences, mut nested: DocumentOccurrences) {
+    target.blocks.append(&mut nested.blocks);
+    target.block_ids.append(&mut nested.block_ids);
+    target.headings.append(&mut nested.headings);
+    target.note_links.append(&mut nested.note_links);
+    target.reference_links.append(&mut nested.reference_links);
+    target.url_links.append(&mut nested.url_links);
+    target.external_links.append(&mut nested.external_links);
+    target.properties.append(&mut nested.properties);
+    target.date_markers.append(&mut nested.date_markers);
+    target.dates.append(&mut nested.dates);
+}
+
+fn collect_nested_occurrences(
+    current_source: &str,
+    blocks: &[Block<'_>],
+    references: &parser::ReferenceDefinitions<'_>,
+    current_coordinates: Option<&MappedSource>,
+    visitor: &mut dyn NestedDocumentVisitor,
+) {
+    for block in blocks {
+        match &block.kind {
+            BlockKind::List { items } => {
+                for item in items {
+                    collect_nested_occurrences(
+                        current_source,
+                        &item.children,
+                        references,
+                        current_coordinates,
+                        visitor,
+                    );
+                }
+            }
+            BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
+                collect_mapped_nested_document(
+                    current_source,
+                    lines,
+                    references,
+                    current_coordinates,
+                    visitor,
+                );
+            }
+            BlockKind::Container { kind, lines, .. }
+                if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
+            {
+                collect_mapped_nested_document(
+                    current_source,
+                    lines,
+                    references,
+                    current_coordinates,
+                    visitor,
+                );
+            }
+            BlockKind::Paragraph { .. }
+            | BlockKind::Code { .. }
+            | BlockKind::Heading { .. }
+            | BlockKind::Quote { .. }
+            | BlockKind::Table { .. }
+            | BlockKind::Container { .. }
+            | BlockKind::ReferenceDefinition { .. } => {}
+        }
+    }
+}
+
+fn collect_mapped_nested_document(
+    current_source: &str,
+    lines: &[&str],
+    references: &parser::ReferenceDefinitions<'_>,
+    current_coordinates: Option<&MappedSource>,
+    visitor: &mut dyn NestedDocumentVisitor,
+) {
+    let Some(mapped) = MappedSource::from_lines(current_source, lines, current_coordinates) else {
+        return;
+    };
+    let parsed = parser::parse_with_references(&mapped.text, references);
+    visitor.enter(&mapped, &parsed);
+    collect_nested_occurrences(
+        &mapped.text,
+        &parsed.document.blocks,
+        parsed.document.reference_definitions(),
+        Some(&mapped),
+        visitor,
+    );
+    visitor.exit();
+}
+
+fn merge_mapped_occurrences(
+    target: &mut DocumentOccurrences,
+    mut nested: DocumentOccurrences,
+    coordinates: &MappedSource,
+) {
+    target
+        .blocks
+        .extend(nested.blocks.drain(..).filter_map(|mut block| {
+            block.span = coordinates.map_span(block.span)?;
+            block.body_spans = block
+                .body_spans
+                .into_iter()
+                .filter_map(|span| coordinates.map_span(span))
+                .collect();
+            Some(block)
+        }));
+    target
+        .block_ids
+        .extend(nested.block_ids.drain(..).filter_map(|mut block_id| {
+            block_id.owner_span = coordinates.map_span(block_id.owner_span)?;
+            block_id.declaration_span = coordinates.map_span(block_id.declaration_span)?;
+            block_id.value_span = coordinates.map_span(block_id.value_span)?;
+            Some(block_id)
+        }));
+    target
+        .headings
+        .extend(nested.headings.drain(..).filter_map(|mut heading| {
+            heading.span = coordinates.map_span(heading.span)?;
+            heading.marker_span = coordinates.map_span(heading.marker_span)?;
+            heading.title_span = coordinates.map_span(heading.title_span)?;
+            Some(heading)
+        }));
+    target
+        .note_links
+        .extend(nested.note_links.drain(..).filter_map(|mut link| {
+            link.span = coordinates.map_span(link.span)?;
+            link.title_span = link.title_span.and_then(|span| coordinates.map_span(span));
+            link.target_span = coordinates.map_span(link.target_span)?;
+            Some(link)
+        }));
+    target.reference_links.extend(
+        nested
+            .reference_links
+            .drain(..)
+            .filter_map(|mut reference| {
+                reference.span = coordinates.map_span(reference.span)?;
+                reference.title_span = coordinates.map_span(reference.title_span)?;
+                reference.target_span = coordinates.map_span(reference.target_span)?;
+                Some(reference)
+            }),
+    );
+    target
+        .url_links
+        .extend(nested.url_links.drain(..).filter_map(|mut link| {
+            link.span = coordinates.map_span(link.span)?;
+            link.title_span = link.title_span.and_then(|span| coordinates.map_span(span));
+            link.target_span = coordinates.map_span(link.target_span)?;
+            Some(link)
+        }));
+    target.external_links.append(&mut nested.external_links);
+    target
+        .properties
+        .extend(nested.properties.drain(..).filter_map(|mut property| {
+            property.span = coordinates.map_span(property.span)?;
+            property.key_span = coordinates.map_span(property.key_span)?;
+            property.value_span = coordinates.map_span(property.value_span)?;
+            if let PropertyOwner::Block { kind, span } = property.owner {
+                property.owner = PropertyOwner::Block {
+                    kind,
+                    span: coordinates.map_span(span)?,
+                };
+            }
+            Some(property)
+        }));
+    target
+        .date_markers
+        .extend(nested.date_markers.drain(..).filter_map(|mut marker| {
+            marker.span = coordinates.map_span(marker.span)?;
+            Some(marker)
+        }));
+    target
+        .dates
+        .extend(nested.dates.drain(..).filter_map(|mut date| {
+            date.span = coordinates.map_span(date.span)?;
+            Some(date)
+        }));
+}
+
+fn merge_nested_into_document(
+    document: &mut DocumentAnalysis,
+    mut nested: DocumentOccurrences,
+    nested_diagnostics: Vec<AnalysisDiagnostic>,
+) {
+    document.blocks.append(&mut nested.blocks);
+    document.block_ids.append(&mut nested.block_ids);
+    document.headings.append(&mut nested.headings);
+    document.note_links.append(&mut nested.note_links);
+    document.reference_links.append(&mut nested.reference_links);
+    document.url_links.append(&mut nested.url_links);
+    document.properties.append(&mut nested.properties);
+    document.date_markers.append(&mut nested.date_markers);
+    document.dates.append(&mut nested.dates);
+
+    let mut external_links = document.external_links.drain(..).collect::<BTreeSet<_>>();
+    external_links.append(&mut nested.external_links);
+    document.external_links = external_links.into_iter().collect();
+
+    document.blocks.sort_by_key(|block| block.span);
+    document
+        .block_ids
+        .sort_by_key(|block_id| block_id.value_span);
+    document.headings.sort_by_key(|heading| heading.span);
+    document.note_links.sort_by_key(|link| link.span);
+    document
+        .reference_links
+        .sort_by_key(|reference| reference.span);
+    document.url_links.sort_by_key(|link| link.span);
+    document.properties.sort_by_key(|property| property.span);
+    document.date_markers.sort_by_key(|marker| marker.span);
+    document.dates.sort_by_key(|date| date.span);
+
+    document
+        .diagnostics
+        .retain(|diagnostic| diagnostic.kind != AnalysisDiagnosticKind::DuplicateId);
+    document.diagnostics.extend(nested_diagnostics);
+    document.diagnostics.extend(duplicate_id_diagnostics(
+        &document.path,
+        &document.block_ids,
+        &document.headings,
+    ));
+    document
+        .diagnostics
+        .sort_by_key(|diagnostic| diagnostic.span);
 }
 
 fn collect_reference_definitions(
@@ -860,6 +1640,18 @@ fn collect_block(
         });
     }
 
+    let property_owner_span = owner_span.unwrap_or_default();
+    collect_attached_properties(
+        source,
+        source_map,
+        block.property_declarations(),
+        PropertyOwner::Block {
+            kind,
+            span: property_owner_span,
+        },
+        &mut occurrences.properties,
+    );
+
     if kind != AnalysisBlockKind::ReferenceDefinition
         && let Some(id) = block.property("id").filter(|id| !id.is_empty())
         && let Some(value_span) = slice_span(source, id)
@@ -977,14 +1769,12 @@ fn collect_inlines(
                         (parser::ReferenceValueKind::DateRange, [Inline::DateRange(range)])
                             if default_title =>
                         {
-                            for stamp in [range.start(), range.end()] {
-                                push_date_occurrence(
-                                    stamp,
-                                    origin.clone(),
-                                    span,
-                                    &mut occurrences.dates,
-                                );
-                            }
+                            push_date_range_occurrence(
+                                *range,
+                                origin.clone(),
+                                span,
+                                &mut occurrences.dates,
+                            );
                         }
                         _ => {}
                     }
@@ -1020,7 +1810,11 @@ fn collect_inlines(
                     key_span,
                 });
             }
-            Inline::HyperLink { raw, title, target } if scope == InlineCollectionScope::Visible => {
+            Inline::HyperLink { raw, title, target } => {
+                occurrences.external_links.insert(target.trim().to_string());
+                if scope != InlineCollectionScope::Visible {
+                    continue;
+                }
                 if let (Some(span), Some(target_span)) =
                     (slice_span(source, raw), slice_span(source, target))
                 {
@@ -1065,9 +1859,7 @@ fn collect_inlines(
                 collect_date(source, *stamp, origin.clone(), &mut occurrences.dates)
             }
             Inline::DateRange(range) => {
-                for stamp in [range.start(), range.end()] {
-                    collect_date(source, stamp, origin.clone(), &mut occurrences.dates);
-                }
+                collect_date_range(source, *range, origin.clone(), &mut occurrences.dates);
             }
             _ => {
                 if let Some(children) = inline.nested_inlines() {
@@ -1102,7 +1894,39 @@ fn push_date_occurrence(
 ) {
     dates.push(DateOccurrence {
         kind: stamp.kind(),
+        target: date_target_identity(stamp.target()),
         body: stamp.body().to_string(),
+        origin,
+        span,
+    });
+}
+
+fn collect_date_range(
+    source: &str,
+    range: DateRange<'_>,
+    origin: DateOrigin,
+    dates: &mut Vec<DateOccurrence>,
+) {
+    let start = date_stamp_span(source, range.start());
+    let end = date_stamp_span(source, range.end());
+    if let (Some(start), Some(end)) = (start, end) {
+        push_date_range_occurrence(range, origin, SourceSpan::new(start.start, end.end), dates);
+    }
+}
+
+fn push_date_range_occurrence(
+    range: DateRange<'_>,
+    origin: DateOrigin,
+    span: SourceSpan,
+    dates: &mut Vec<DateOccurrence>,
+) {
+    let (Some(start), Some(end)) = (range.start().date(), range.end().date()) else {
+        return;
+    };
+    dates.push(DateOccurrence {
+        kind: range.kind(),
+        target: DateTargetIdentity::Range { start, end },
+        body: format!("{}--{}", range.start().body(), range.end().body()),
         origin,
         span,
     });
@@ -1118,9 +1942,7 @@ fn collect_property_dates(
         match inline {
             Inline::DateStamp(stamp) => collect_date(source, *stamp, origin.clone(), dates),
             Inline::DateRange(range) => {
-                for stamp in [range.start(), range.end()] {
-                    collect_date(source, stamp, origin.clone(), dates);
-                }
+                collect_date_range(source, *range, origin.clone(), dates);
             }
             _ => {
                 if let Some(children) = inline.nested_inlines() {
@@ -1229,44 +2051,32 @@ fn collect_inline_source_spans(source: &str, inlines: &[Inline<'_>], spans: &mut
     }
 }
 
-fn collect_properties(source: &str, source_map: &SourceMap<'_>) -> Vec<PropertyOccurrence> {
-    (0..source_map.line_count())
-        .filter_map(|line| {
-            let span = source_map.line_span(line)?;
-            let raw_line = &source[span.start..span.end];
-            let indent = raw_line.len() - raw_line.trim_start_matches(' ').len();
-            let content = &raw_line[indent..];
-            let (direction, body) = if let Some(body) = content.strip_prefix("--^ ") {
-                (PropertyDirection::Previous, body)
-            } else if let Some(body) = content.strip_prefix("--v ") {
-                (PropertyDirection::Next, body)
-            } else {
-                return None;
-            };
-            let (raw_key, raw_value) = body.split_once(':')?;
-            let body_start = span.start + indent + "--^ ".len();
-            let key_span = trimmed_subspan(raw_key, body_start);
-            let value_start = body_start + raw_key.len() + ':'.len_utf8();
-            let value_span = trimmed_subspan(raw_value, value_start);
+fn collect_attached_properties(
+    source: &str,
+    source_map: &SourceMap<'_>,
+    declarations: &[parser::PropertyDeclaration<'_>],
+    owner: PropertyOwner,
+    properties: &mut Vec<PropertyOccurrence>,
+) {
+    properties.extend(declarations.iter().filter_map(|declaration| {
+        let raw_span = slice_span(source, declaration.raw_line())?;
+        let key_span = slice_span(source, declaration.key())?;
+        let value_span = slice_span(source, declaration.value())?;
+        let direction = match declaration.direction() {
+            parser::PropertyDirection::Previous => PropertyDirection::Previous,
+            parser::PropertyDirection::Next => PropertyDirection::Next,
+        };
 
-            Some(PropertyOccurrence {
-                direction,
-                key: source[key_span.start..key_span.end].to_string(),
-                value: source[value_span.start..value_span.end].to_string(),
-                span,
-                key_span,
-                value_span,
-            })
+        Some(PropertyOccurrence {
+            direction,
+            owner,
+            key: declaration.key().to_string(),
+            value: declaration.value().to_string(),
+            span: whole_line_span(source_map, raw_span),
+            key_span,
+            value_span,
         })
-        .collect()
-}
-
-fn property_occurs_in_container(property: &PropertyOccurrence, blocks: &[BlockOccurrence]) -> bool {
-    blocks.iter().any(|block| {
-        block.kind == AnalysisBlockKind::Container
-            && block.span.start <= property.span.start
-            && property.span.end <= block.span.end
-    })
+    }));
 }
 
 fn duplicate_id_diagnostics(
@@ -1286,6 +2096,7 @@ fn duplicate_id_diagnostics(
                 path: path.to_path_buf(),
                 span: occurrence.value_span,
                 kind: AnalysisDiagnosticKind::DuplicateId,
+                subject: AnalysisDiagnosticSubject::Id((*id).to_string()),
                 message: format!("duplicate id: {id}"),
             }));
         }
@@ -1300,6 +2111,7 @@ fn duplicate_id_diagnostics(
                 path: path.to_path_buf(),
                 span: block_id.value_span,
                 kind: AnalysisDiagnosticKind::DuplicateId,
+                subject: AnalysisDiagnosticSubject::Id(block_id.id.clone()),
                 message: format!("id conflicts with heading anchor: {}", block_id.id),
             });
         }
@@ -1314,13 +2126,6 @@ fn block_id_conflicts_with_heading(
     block_id.id == heading.anchor
         && !(block_id.owner_kind == AnalysisBlockKind::Heading
             && block_id.owner_span == heading.span)
-}
-
-fn trimmed_subspan(source: &str, absolute_start: usize) -> SourceSpan {
-    let leading = source.len() - source.trim_start().len();
-    let trimmed = source.trim();
-    let start = absolute_start + leading;
-    SourceSpan::new(start, start + trimmed.len())
 }
 
 fn slice_span(source: &str, slice: &str) -> Option<SourceSpan> {
@@ -1365,235 +2170,236 @@ fn file_stem(path: &Path) -> String {
         .to_string()
 }
 
-struct ProjectLookup {
-    by_exact: BTreeMap<String, PathBuf>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DocumentIndex {
+    canonical_by_source: BTreeMap<PathBuf, String>,
+    by_exact: BTreeMap<String, Vec<PathBuf>>,
     by_canonical: BTreeMap<String, Vec<PathBuf>>,
     by_stem: BTreeMap<String, Vec<PathBuf>>,
-    headings: BTreeMap<PathBuf, Vec<HeadingOccurrence>>,
-    block_ids: BTreeMap<PathBuf, Vec<BlockIdOccurrence>>,
-    document_spans: BTreeMap<PathBuf, SourceSpan>,
 }
 
-impl ProjectLookup {
+impl DocumentIndex {
     fn new(documents: &BTreeMap<PathBuf, DocumentAnalysis>) -> Self {
-        let mut by_exact = BTreeMap::new();
+        let mut canonical_by_source = BTreeMap::new();
+        let mut by_exact: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         let mut by_canonical: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         let mut by_stem: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-        let mut headings = BTreeMap::new();
-        let mut block_ids = BTreeMap::new();
-        let mut document_spans = BTreeMap::new();
 
         for document in documents.values() {
-            by_exact.insert(document.canonical_path.clone(), document.path.clone());
+            canonical_by_source.insert(document.path.clone(), document.canonical_path.clone());
+            by_exact
+                .entry(document.canonical_path.clone())
+                .or_default()
+                .push(document.path.clone());
             by_canonical
                 .entry(normalize_key(&document.canonical_path))
                 .or_default()
                 .push(document.path.clone());
+            let stem = document
+                .canonical_path
+                .rsplit_once('/')
+                .map_or(document.canonical_path.as_str(), |(_, stem)| stem);
             by_stem
-                .entry(normalize_key(&file_stem(&document.path)))
+                .entry(normalize_key(stem))
                 .or_default()
                 .push(document.path.clone());
-            headings.insert(document.path.clone(), document.headings.clone());
-            block_ids.insert(document.path.clone(), document.block_ids.clone());
-            document_spans.insert(document.path.clone(), document.document_span);
         }
 
         Self {
+            canonical_by_source,
             by_exact,
             by_canonical,
             by_stem,
-            headings,
-            block_ids,
-            document_spans,
         }
     }
 
-    fn resolve(&self, current_path: &Path, target: &str) -> LinkResolution {
-        let target = NoteLinkTarget::parse(target);
-        let note = match self.resolve_document(current_path, target.document) {
-            CandidateResolution::Found(path) => path,
-            CandidateResolution::Broken => return LinkResolution::BrokenNote,
-            CandidateResolution::Ambiguous => return LinkResolution::AmbiguousNote,
-        };
-
-        match target.inner {
-            None => LinkResolution::Found(DefinitionTarget {
-                selection_span: self.document_spans.get(&note).copied().unwrap_or_default(),
-                path: note,
-                kind: DefinitionTargetKind::Document,
-                fragment: None,
-            }),
-            Some(InnerSelector::Heading(heading)) => self.resolve_heading(note, heading),
-            Some(InnerSelector::Id(id)) => self.resolve_id(note, id),
-        }
-    }
-
-    fn resolve_document(
-        &self,
-        current_path: &Path,
-        selector: DocumentSelector<'_>,
-    ) -> CandidateResolution {
+    fn select(&self, current_path: &Path, selector: DocumentSelector<'_>) -> PathSelection {
         match selector {
-            DocumentSelector::Current => CandidateResolution::Found(current_path.to_path_buf()),
-            DocumentSelector::Legacy(target) => self.resolve_legacy_note(current_path, target),
+            DocumentSelector::Current => {
+                if self.canonical_by_source.contains_key(current_path) {
+                    PathSelection::Found(current_path.to_path_buf())
+                } else {
+                    PathSelection::Broken
+                }
+            }
+            DocumentSelector::Legacy(target) => self.resolve_legacy(current_path, target),
             DocumentSelector::Root(target) => self.resolve_coordinate(target),
             DocumentSelector::Child(target) => self.resolve_child(current_path, target),
         }
     }
 
-    fn resolve_heading(&self, note: PathBuf, heading_target: &str) -> LinkResolution {
-        if heading_target.is_empty() {
-            return LinkResolution::BrokenHeading;
-        }
-
-        let headings = self.headings.get(&note).map(Vec::as_slice).unwrap_or(&[]);
-        let mut matches = headings
-            .iter()
-            .filter(|heading| heading.anchor == heading_target)
-            .collect::<Vec<_>>();
-        if matches.is_empty() {
-            let normalized = normalize_key(heading_target);
-            matches = headings
-                .iter()
-                .filter(|heading| normalize_key(&heading.anchor) == normalized)
-                .collect();
-        }
-
-        match matches.as_slice() {
-            [heading]
-                if self.block_ids.get(&note).is_some_and(|block_ids| {
-                    block_ids
-                        .iter()
-                        .any(|block_id| block_id_conflicts_with_heading(block_id, heading))
-                }) =>
-            {
-                LinkResolution::AmbiguousHeading
-            }
-            [heading] => LinkResolution::Found(DefinitionTarget {
-                path: note,
-                selection_span: heading.title_span,
-                kind: DefinitionTargetKind::Heading,
-                fragment: Some(heading.anchor.clone()),
-            }),
-            [] => LinkResolution::BrokenHeading,
-            _ => LinkResolution::AmbiguousHeading,
-        }
-    }
-
-    fn resolve_id(&self, note: PathBuf, id_target: &str) -> LinkResolution {
-        if id_target.is_empty() {
-            return LinkResolution::BrokenId;
-        }
-
-        let ids = self.block_ids.get(&note).map(Vec::as_slice).unwrap_or(&[]);
-        let matches = ids
-            .iter()
-            .filter(|block_id| block_id.id == id_target)
-            .collect::<Vec<_>>();
-
-        match matches.as_slice() {
-            [block_id]
-                if self.headings.get(&note).is_some_and(|headings| {
-                    headings
-                        .iter()
-                        .any(|heading| block_id_conflicts_with_heading(block_id, heading))
-                }) =>
-            {
-                LinkResolution::AmbiguousId
-            }
-            [block_id] => LinkResolution::Found(DefinitionTarget {
-                path: note,
-                selection_span: block_id.value_span,
-                kind: DefinitionTargetKind::Id,
-                fragment: Some(block_id.id.clone()),
-            }),
-            [] => LinkResolution::BrokenId,
-            _ => LinkResolution::AmbiguousId,
-        }
-    }
-
-    fn resolve_child(&self, current_path: &Path, target: &str) -> CandidateResolution {
+    fn resolve_child(&self, current_path: &Path, target: &str) -> PathSelection {
         let normalized = normalize_document_target(target);
-        if !is_normal_relative_target(normalized) {
-            return CandidateResolution::Broken;
+        if !is_normal_document_coordinate(&normalized) {
+            return PathSelection::Broken;
         }
+        let Some(current) = self.canonical_by_source.get(current_path) else {
+            return PathSelection::Broken;
+        };
 
-        let child = Path::new(&canonical_path(current_path)).join(normalized);
-        self.resolve_coordinate(&child.to_string_lossy())
+        self.resolve_coordinate(&format!("{current}/{normalized}"))
     }
 
-    fn resolve_coordinate(&self, target: &str) -> CandidateResolution {
+    fn resolve_coordinate(&self, target: &str) -> PathSelection {
         let normalized = normalize_document_target(target);
-        if normalized.is_empty() {
-            return CandidateResolution::Broken;
+        if !is_normal_document_coordinate(&normalized) {
+            return PathSelection::Broken;
         }
 
-        if let Some(path) = self.by_exact.get(normalized) {
-            return CandidateResolution::Found(path.clone());
+        if let Some(paths) = self.by_exact.get(normalized.as_ref()) {
+            return select_paths(paths);
         }
-        if let Some(paths) = self.by_canonical.get(&normalize_key(normalized)) {
-            return resolve_paths(paths);
+        if let Some(paths) = self.by_canonical.get(&normalize_key(&normalized)) {
+            return select_paths(paths);
         }
 
-        CandidateResolution::Broken
+        PathSelection::Broken
     }
 
-    fn resolve_legacy_note(&self, current_path: &Path, target: &str) -> CandidateResolution {
+    fn resolve_legacy(&self, current_path: &Path, target: &str) -> PathSelection {
         let normalized = normalize_document_target(target);
+        if !is_normal_document_coordinate(&normalized) {
+            return PathSelection::Broken;
+        }
 
-        if let Some(path) = self.by_exact.get(normalized) {
-            return CandidateResolution::Found(path.clone());
+        if let Some(paths) = self.by_exact.get(normalized.as_ref()) {
+            return select_paths(paths);
         }
         if normalized.contains('/') {
             return self
                 .by_canonical
-                .get(&normalize_key(normalized))
-                .map_or(CandidateResolution::Broken, |paths| resolve_paths(paths));
+                .get(&normalize_key(&normalized))
+                .map_or(PathSelection::Broken, |paths| select_paths(paths));
         }
 
-        let sibling = current_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join(format!("{normalized}.maki"));
-        if let Some(paths) = self
-            .by_canonical
-            .get(&normalize_key(&canonical_path(&sibling)))
-        {
-            return resolve_paths(paths);
+        let Some(current) = self.canonical_by_source.get(current_path) else {
+            return PathSelection::Broken;
+        };
+        let sibling = current.rsplit_once('/').map_or_else(
+            || normalized.to_string(),
+            |(parent, _)| format!("{parent}/{normalized}"),
+        );
+        match self.resolve_coordinate(&sibling) {
+            PathSelection::Broken => {}
+            resolution => return resolution,
         }
         self.by_stem
-            .get(&normalize_key(normalized))
-            .map_or(CandidateResolution::Broken, |paths| resolve_paths(paths))
+            .get(&normalize_key(&normalized))
+            .map_or(PathSelection::Broken, |paths| select_paths(paths))
     }
 }
 
-fn normalize_document_target(target: &str) -> &str {
-    target.strip_suffix(".maki").unwrap_or(target)
+fn resolve_heading(document: &DocumentAnalysis, heading_target: &str) -> LinkResolution {
+    if heading_target.is_empty() {
+        return LinkResolution::BrokenHeading;
+    }
+
+    let mut matches = document
+        .headings
+        .iter()
+        .filter(|heading| heading.anchor == heading_target)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        let normalized = normalize_key(heading_target);
+        matches = document
+            .headings
+            .iter()
+            .filter(|heading| normalize_key(&heading.anchor) == normalized)
+            .collect();
+    }
+
+    match matches.as_slice() {
+        [heading]
+            if document
+                .block_ids
+                .iter()
+                .any(|block_id| block_id_conflicts_with_heading(block_id, heading)) =>
+        {
+            LinkResolution::AmbiguousHeading
+        }
+        [heading] => LinkResolution::Found(DefinitionTarget {
+            path: document.path.clone(),
+            canonical_path: document.canonical_path.clone(),
+            selection_span: heading.title_span,
+            kind: DefinitionTargetKind::Heading,
+            fragment: Some(heading.anchor.clone()),
+        }),
+        [] => LinkResolution::BrokenHeading,
+        _ => LinkResolution::AmbiguousHeading,
+    }
 }
 
-fn is_normal_relative_target(target: &str) -> bool {
-    !target.is_empty()
-        && target
-            .split('/')
-            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
-        && Path::new(target)
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
+fn resolve_id(document: &DocumentAnalysis, id_target: &str) -> LinkResolution {
+    if id_target.is_empty() {
+        return LinkResolution::BrokenId;
+    }
+
+    let matches = document
+        .block_ids
+        .iter()
+        .filter(|block_id| block_id.id == id_target)
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [block_id]
+            if document
+                .headings
+                .iter()
+                .any(|heading| block_id_conflicts_with_heading(block_id, heading)) =>
+        {
+            LinkResolution::AmbiguousId
+        }
+        [block_id] => LinkResolution::Found(DefinitionTarget {
+            path: document.path.clone(),
+            canonical_path: document.canonical_path.clone(),
+            selection_span: block_id.value_span,
+            kind: DefinitionTargetKind::Id,
+            fragment: Some(block_id.id.clone()),
+        }),
+        [] => LinkResolution::BrokenId,
+        _ => LinkResolution::AmbiguousId,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CandidateResolution {
+enum PathSelection {
     Found(PathBuf),
     Broken,
     Ambiguous,
 }
 
-fn resolve_paths(paths: &[PathBuf]) -> CandidateResolution {
+fn select_paths(paths: &[PathBuf]) -> PathSelection {
     match paths {
-        [path] => CandidateResolution::Found(path.clone()),
-        [] => CandidateResolution::Broken,
-        _ => CandidateResolution::Ambiguous,
+        [path] => PathSelection::Found(path.clone()),
+        [] => PathSelection::Broken,
+        _ => PathSelection::Ambiguous,
     }
+}
+
+fn normalize_document_target(target: &str) -> Cow<'_, str> {
+    let target = target.strip_suffix(".maki").unwrap_or(target);
+    if target.contains('\\') {
+        Cow::Owned(target.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(target)
+    }
+}
+
+fn is_normal_document_coordinate(target: &str) -> bool {
+    if target.is_empty() || target.starts_with('/') {
+        return false;
+    }
+
+    target.split('/').all(is_normal_document_component)
+}
+
+fn is_normal_document_component(component: &str) -> bool {
+    if component.is_empty() || matches!(component, "." | "..") {
+        return false;
+    }
+
+    let bytes = component.as_bytes();
+    !(bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
 fn normalize_key(value: &str) -> String {
@@ -1637,6 +2443,26 @@ mod tests {
         let source = String::from("source");
 
         assert_eq!(slice_span(&source, ""), None);
+    }
+
+    #[test]
+    fn project_snapshot_keeps_sources_analysis_and_revision_in_one_value() {
+        let path = PathBuf::from("index.maki");
+        let first = ProjectSnapshot::compile(BTreeMap::from([(
+            path.clone(),
+            "--^ title: First\n".to_string(),
+        )]));
+        let cloned = first.clone();
+        let second = ProjectSnapshot::compile(BTreeMap::from([(
+            path.clone(),
+            "--^ title: Second\n".to_string(),
+        )]));
+
+        assert_eq!(first.source(&path), Some("--^ title: First\n"));
+        assert_eq!(first.analysis().document(&path).unwrap().title, "First");
+        assert_eq!(cloned.revision(), first.revision());
+        assert_ne!(second.revision(), first.revision());
+        assert_eq!(second.analysis().document(&path).unwrap().title, "Second");
     }
 
     #[test]
@@ -1790,6 +2616,14 @@ mod tests {
         );
         assert_eq!(analysis.note_links.len(), 1);
         assert_eq!(analysis.note_links[0].target, "target");
+        assert_eq!(
+            analysis.external_links,
+            vec![
+                "https://exact.example/",
+                "https://prose.example/",
+                "https://visible.example/",
+            ]
+        );
     }
 
     #[test]
@@ -1807,13 +2641,36 @@ mod tests {
 
         let analysis = analyze_document(Path::new("index.maki"), source);
 
-        assert_eq!(analysis.properties.len(), 2);
+        assert_eq!(analysis.properties.len(), 1);
         assert_eq!(analysis.properties[0].key, "title");
         assert_eq!(analysis.properties[0].value, "");
-        assert_eq!(analysis.properties[0].value_span, SourceSpan::new(11, 11));
-        assert_eq!(analysis.properties[1].key, "");
-        assert_eq!(analysis.properties[1].key_span, SourceSpan::new(18, 18));
-        assert_eq!(analysis.properties[1].value, "value");
+        assert_eq!(analysis.properties[0].value_span, SourceSpan::new(10, 10));
+        assert_eq!(analysis.properties[0].owner, PropertyOwner::Document);
+    }
+
+    #[test]
+    fn document_analysis_records_parser_authoritative_property_owners() {
+        let source = "--^ title: Project\n= First\n--v status: todo\n= Second\n--^ status: done\n";
+
+        let analysis = analyze_document(Path::new("index.maki"), source);
+
+        assert_eq!(analysis.properties.len(), 3);
+        assert_eq!(analysis.properties[0].owner, PropertyOwner::Document);
+        let block = &analysis.blocks[1];
+        for property in &analysis.properties[1..] {
+            assert_eq!(
+                property.owner,
+                PropertyOwner::Block {
+                    kind: AnalysisBlockKind::Heading,
+                    span: block.span,
+                }
+            );
+        }
+        assert_eq!(analysis.properties[1].direction, PropertyDirection::Next);
+        assert_eq!(
+            analysis.properties[2].direction,
+            PropertyDirection::Previous
+        );
     }
 
     #[test]
@@ -1837,34 +2694,165 @@ mod tests {
     }
 
     #[test]
-    fn authored_date_markers_ignore_raw_scanned_properties_inside_containers() {
+    fn nested_date_markers_use_parser_attached_properties_with_root_spans() {
         let source = "---quote\n--^ deadline: [2026-09-07]\nbody <2026-09-08>\n---\n\noutside\n--^ deadline: [2026-09-09]\n";
         let analysis = analyze_document(Path::new("index.maki"), source);
 
         assert_eq!(analysis.properties.len(), 2);
-        assert_eq!(analysis.dates.len(), 2);
-        assert_eq!(analysis.date_markers.len(), 1);
+        assert_eq!(analysis.dates.len(), 3);
         assert_eq!(
-            &source[analysis.date_markers[0].span.start..analysis.date_markers[0].span.end],
-            "[2026-09-09]"
-        );
-        assert_eq!(
-            analysis.date_markers[0].origin,
-            DateMarkerOrigin::PropertyValue {
-                key: "deadline".to_string()
-            }
+            analysis
+                .date_markers
+                .iter()
+                .map(|marker| &source[marker.span.start..marker.span.end])
+                .collect::<Vec<_>>(),
+            vec!["[2026-09-07]", "<2026-09-08>", "[2026-09-09]"]
         );
     }
 
     #[test]
-    fn authored_date_markers_ignore_reparsed_quote_bodies() {
+    fn authored_date_markers_map_reparsed_quote_bodies_to_root_spans() {
         let source = "> [2026-09-07]\n\n---quote\n<2026-09-08>\n---\n\noutside [2026-09-09]\n";
         let analysis = analyze_document(Path::new("index.maki"), source);
 
-        assert_eq!(analysis.date_markers.len(), 1);
         assert_eq!(
-            &source[analysis.date_markers[0].span.start..analysis.date_markers[0].span.end],
-            "[2026-09-09]"
+            analysis
+                .date_markers
+                .iter()
+                .map(|marker| &source[marker.span.start..marker.span.end])
+                .collect::<Vec<_>>(),
+            vec!["[2026-09-07]", "<2026-09-08>", "[2026-09-09]"]
+        );
+    }
+
+    #[test]
+    fn nested_quote_navigation_and_diagnostics_use_root_source_spans() {
+        let source = "intro\r\n> = 인용 😀\r\n> See [[missing]] and [unknown][]\r\n> [local][]\r\n> [local]: [[local-target]]\r\n\r\n---quote\r\n= Container\r\n--^ id: nested-id\r\n[[#nested-id]] [[@nested-id]]\r\n---\r\n";
+        let project = analyze_project(&[SourceSnapshot {
+            path: Path::new("index.maki"),
+            source,
+        }]);
+        let document = project.document(Path::new("index.maki")).unwrap();
+
+        assert_eq!(
+            document
+                .headings
+                .iter()
+                .map(|heading| &source[heading.title_span.start..heading.title_span.end])
+                .collect::<Vec<_>>(),
+            vec!["인용 😀", "Container"]
+        );
+        let nested_id = document
+            .block_ids
+            .iter()
+            .find(|block_id| block_id.id == "nested-id")
+            .unwrap();
+        assert_eq!(
+            &source[nested_id.value_span.start..nested_id.value_span.end],
+            "nested-id"
+        );
+        assert_eq!(
+            &source[nested_id.owner_span.start..nested_id.owner_span.end],
+            "= Container"
+        );
+        assert!(document.note_links.iter().any(|link| {
+            link.target == "#nested-id"
+                && matches!(
+                    link.resolution,
+                    Some(LinkResolution::Found(DefinitionTarget {
+                        kind: DefinitionTargetKind::Heading,
+                        ..
+                    }))
+                )
+        }));
+        assert!(project.diagnostics.iter().any(|diagnostic| {
+            diagnostic.subject == AnalysisDiagnosticSubject::Link("missing".to_string())
+                && &source[diagnostic.span.start..diagnostic.span.end] == "missing"
+        }));
+        assert!(project.diagnostics.iter().any(|diagnostic| {
+            diagnostic.subject == AnalysisDiagnosticSubject::Reference("unknown".to_string())
+                && &source[diagnostic.span.start..diagnostic.span.end] == "unknown"
+        }));
+        let local_use = document
+            .reference_graph
+            .uses
+            .iter()
+            .find(|usage| usage.key == "local")
+            .unwrap();
+        assert_eq!(local_use.scope, ReferenceScope::Nested);
+        assert!(local_use.definition_id.is_some());
+        assert_eq!(
+            &source[local_use.key_span.start..local_use.key_span.end],
+            "local"
+        );
+        assert!(document.reference_graph.winner("local").is_none());
+    }
+
+    #[test]
+    fn nested_reference_scopes_resolve_the_nearest_definition_without_leaking_to_siblings() {
+        let source = concat!(
+            "> [shared][]\r\n",
+            "> > [shared][] [day][] [site][]\r\n",
+            "> [shared]: [[outer-target]]\r\n",
+            "\r\n",
+            "[shared]: [[root-target]]\r\n",
+            "[day]: [2026-09-07]\r\n",
+            "[site]: <https://root.example/>\r\n",
+            "\r\n",
+            "> [shared][]\r\n",
+        );
+        let analysis = analyze_document(Path::new("index.maki"), source);
+        let graph = &analysis.reference_graph;
+
+        let root_shared = graph.winner_id("shared").unwrap();
+        let outer_shared = graph
+            .definitions
+            .iter()
+            .find(|definition| definition.key == "shared" && definition.id != root_shared)
+            .unwrap()
+            .id;
+        let shared_uses = graph
+            .uses
+            .iter()
+            .filter(|usage| usage.key == "shared")
+            .collect::<Vec<_>>();
+
+        assert_eq!(shared_uses.len(), 3);
+        assert_eq!(shared_uses[0].definition_id, Some(outer_shared));
+        assert_eq!(shared_uses[1].definition_id, Some(outer_shared));
+        assert_eq!(shared_uses[2].definition_id, Some(root_shared));
+        assert_eq!(graph.uses_for(outer_shared).count(), 2);
+        assert!(shared_uses.iter().all(|usage| {
+            &source[usage.key_span.start..usage.key_span.end] == "shared"
+                && usage.scope == ReferenceScope::Nested
+        }));
+
+        let day_use = graph.uses.iter().find(|usage| usage.key == "day").unwrap();
+        assert_eq!(day_use.definition_id, graph.winner_id("day"));
+        assert_eq!(analysis.dates.len(), 1);
+        assert_eq!(analysis.dates[0].body, "2026-09-07");
+        assert_eq!(
+            &source[analysis.dates[0].span.start..analysis.dates[0].span.end],
+            "[day][]"
+        );
+
+        let site_link = analysis
+            .reference_links
+            .iter()
+            .find(|link| link.target == "https://root.example/")
+            .unwrap();
+        assert_eq!(
+            &source[site_link.span.start..site_link.span.end],
+            "[site][]"
+        );
+        assert_eq!(
+            &source[site_link.target_span.start..site_link.target_span.end],
+            "https://root.example/"
+        );
+        assert!(
+            analysis.diagnostics.iter().all(|diagnostic| {
+                diagnostic.kind != AnalysisDiagnosticKind::UnresolvedReference
+            })
         );
     }
 
@@ -1931,8 +2919,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("2026-08-31", "[day][]"),
-                ("2026-09-01", "[range][]"),
-                ("2026-09-02", "[range][]"),
+                ("2026-09-01--2026-09-02", "[range][]"),
             ]
         );
     }
@@ -2036,7 +3023,8 @@ mod tests {
             &source[analysis.date_markers[0].span.start..analysis.date_markers[0].span.end],
             "<2026-W37-1 Mon>--<2026-09-11 Fri>"
         );
-        assert_eq!(analysis.dates.len(), 2);
+        assert_eq!(analysis.dates.len(), 1);
+        assert_eq!(analysis.dates[0].target, analysis.date_markers[0].target);
     }
 
     #[test]
@@ -2056,7 +3044,7 @@ mod tests {
             marker.origin,
             DateMarkerOrigin::ReferenceDefinitionValue { .. }
         )));
-        assert_eq!(analysis.dates.len(), 4);
+        assert_eq!(analysis.dates.len(), 3);
         assert_eq!(
             &source[analysis.dates[0].span.start..analysis.dates[0].span.end],
             "[day][]"
@@ -2432,6 +3420,94 @@ mod tests {
             Some(LinkResolution::Found(DefinitionTarget { ref path, .. }))
                 if path == Path::new("nix.maki")
         ));
+    }
+
+    #[test]
+    fn document_selection_contract_is_host_independent_and_exact_first() {
+        #[derive(Debug, Clone, Copy)]
+        enum Expected<'a> {
+            Found(&'a str),
+            Broken,
+            Ambiguous,
+        }
+
+        let sources = [
+            ("docs/current.maki", "current"),
+            ("docs/current/child.maki", "child"),
+            ("docs/current/deep/page.maki", "deep"),
+            ("docs/local.maki", "local sibling"),
+            ("other/local.maki", "local elsewhere"),
+            ("docs/page.maki", "page"),
+            ("root.maki", "root"),
+            ("unique.maki", "unique"),
+            ("case/path.maki", "lower"),
+            ("CASE/path.maki", "upper"),
+        ];
+        let snapshots = sources
+            .iter()
+            .map(|(path, source)| SourceSnapshot {
+                path: Path::new(path),
+                source,
+            })
+            .collect::<Vec<_>>();
+        let project = analyze_project(&snapshots);
+        let current = Path::new("docs/current.maki");
+
+        let cases = [
+            (
+                DocumentSelector::Current,
+                Expected::Found("docs/current.maki"),
+            ),
+            (DocumentSelector::Root("root"), Expected::Found("root.maki")),
+            (
+                DocumentSelector::Root("docs\\page.maki"),
+                Expected::Found("docs/page.maki"),
+            ),
+            (
+                DocumentSelector::Child("CHILD"),
+                Expected::Found("docs/current/child.maki"),
+            ),
+            (
+                DocumentSelector::Child("deep\\page.maki"),
+                Expected::Found("docs/current/deep/page.maki"),
+            ),
+            (
+                DocumentSelector::Legacy("LOCAL"),
+                Expected::Found("docs/local.maki"),
+            ),
+            (
+                DocumentSelector::Legacy("UNIQUE"),
+                Expected::Found("unique.maki"),
+            ),
+            (
+                DocumentSelector::Root("case/path"),
+                Expected::Found("case/path.maki"),
+            ),
+            (DocumentSelector::Root("CaSe/PaTh"), Expected::Ambiguous),
+            (DocumentSelector::Legacy("path"), Expected::Ambiguous),
+            (DocumentSelector::Root(""), Expected::Broken),
+            (DocumentSelector::Root("/root"), Expected::Broken),
+            (DocumentSelector::Root("docs//page"), Expected::Broken),
+            (DocumentSelector::Child("../page"), Expected::Broken),
+            (DocumentSelector::Child("./page"), Expected::Broken),
+            (DocumentSelector::Child("C:\\page"), Expected::Broken),
+            (DocumentSelector::Root("docs/C:/page"), Expected::Broken),
+            (DocumentSelector::Legacy("missing"), Expected::Broken),
+        ];
+
+        for (selector, expected) in cases {
+            let actual = project.select_document(current, selector);
+            match (actual, expected) {
+                (DocumentSelection::Found(document), Expected::Found(path)) => {
+                    assert_eq!(document.path, Path::new(path), "selector: {selector:?}");
+                }
+                (DocumentSelection::Broken, Expected::Broken)
+                | (DocumentSelection::Ambiguous, Expected::Ambiguous) => {}
+                (actual, expected) => {
+                    panic!("unexpected selection for {selector:?}: {actual:?}, wanted {expected:?}")
+                }
+            }
+        }
     }
 
     #[test]

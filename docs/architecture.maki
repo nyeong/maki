@@ -87,9 +87,10 @@ crate 경계는 protocol·IO와 Maki 의미를 분리한다.
 기존 parser AST는 HTML renderer의 compatibility surface로 유지한다.
 `maki-core::analysis`는 AST가 빌린 원문 slice와 `SourceMap`을 사용해 block, heading, block ID, note link, property, date occurrence의 byte span을 계산한다.
 `analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 document/heading/explicit-ID link와 explicit reference를 resolve하고 semantic diagnostic을 만든다.
+`ProjectSnapshot`은 source map, analysis와 고유 revision을 한 immutable 값으로 소유한다. Runtime과 LSP는 이 값을 통째로 교체하므로 서로 다른 세대의 source와 index를 함께 관찰할 수 없다.
 
 Internal link target은 renderer나 protocol adapter마다 제각각 문자열을 나누지 않는다.
-Core의 공통 target parser가 `/`·`+` document selector와 `#`·`@` internal selector를 구조화하고, runtime과 sans-IO analysis의 index adapter가 같은 selection contract로 target을 결정한다.
+Core의 공통 target parser가 `/`·`+` document selector와 `#`·`@` internal selector를 구조화하고, `ProjectAnalysis`의 한 selection contract가 runtime과 LSP target을 결정한다.
 Explicit ID index는 `(DocumentRef, LocalId)`를 key로 사용한다.
 Runtime rendering·diagnostics와 LSP는 각 adapter의 resolution result를 사용하고, search는 같은 document-qualified ID destination을 index한다.
 
@@ -97,7 +98,10 @@ Runtime rendering·diagnostics와 LSP는 각 adapter의 resolution result를 사
 현재는 snapshot 전체를 다시 분석하며 incremental index는 아직 없다.
 
 List item child block은 원본 Document source 좌표를 유지하므로 top-level block과 같은 located analysis 대상이다.
-Quote와 quote container의 Maki body는 별도 source를 만들어 다시 파싱하므로 그 안의 occurrence를 원본 Document 위치 기반 기능에 합치지 않는다.
+Quote와 quote container의 semantic Maki body는 line별 coordinate map으로 원본 source span에 투영한다. 그 안의 heading, ID, property, link, date와 diagnostic도 navigation과 LSP에서 root Document 좌표를 사용한다.
+
+Snapshot compile은 각 root source를 한 번 parse하고 analysis, date index, external-link metadata와 runtime diagnostics가 결과를 공유한다.
+HTML renderer는 source를 빌리는 AST의 lifetime 경계를 안전하게 유지하기 위해 request마다 한 번 parse한다.
 
 = 표현
 

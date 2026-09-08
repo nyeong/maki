@@ -1,5 +1,5 @@
 --^ title: Web Server and Routes
---^ updated: [2026-09-05]
+--^ updated: [2026-09-08]
 
 = Local source serve
 
@@ -97,7 +97,7 @@ range-only 날짜는 직접 언급으로 세지 않는다.
 
 - `/.maki/search?q=<query>`: HTML 검색 page
 - `/.maki/search-index.json`: note, heading, explicit ID와 file 검색 entry
-- `/.maki/project-index.json`: `schema_version`이 있는 document analysis JSON
+- `/.maki/project-index.json`: `schema_version`과 snapshot `revision`이 있는 document analysis JSON
 
 Search box와 HTML page는 같은 search index를 사용한다.
 Explicit ID search entry는 `@id`로 표시하며 destination은 document-qualified `/<canonical-path>#<id>`다.
@@ -105,7 +105,8 @@ Explicit ID search entry는 `@id`로 표시하며 destination은 document-qualif
 같은 Document에서 중복되거나 Heading fragment와 충돌해 ambiguous인 ID는 navigation destination으로 index하지 않는다.
 Search나 다른 Project-wide discovery가 source Note Link를 생성할 때는 `/canonical/path@id`를 사용하고 bare `@id`를 생성하지 않는다.
 
-Project index에는 document, block, block ID owner/declaration, heading, raw note link target와 structured resolution, property, date occurrence와 diagnostic의 source span이 포함된다.
+Project index schema version 2에는 document, block, block ID owner/declaration, heading, raw note link target와 structured resolution이 포함된다.
+Property에는 parser가 확정한 Document/Block owner가, date occurrence에는 normalized target identity가, diagnostic에는 typed subject가 포함되며 모든 located 값은 원본 source span을 사용한다.
 
 = Runtime asset과 live reload
 

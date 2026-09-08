@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt};
 
-use super::draft::PropertyItemDraft;
+use super::draft::{PropertyDirection, PropertyItemDraft};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inline<'a> {
@@ -556,18 +556,51 @@ fn iso_week_one_monday(year: u16) -> Option<Date> {
 #[derive(Debug, PartialEq, Default)]
 pub(super) struct Properties<'a> {
     values: BTreeMap<String, &'a str>,
+    declarations: Vec<PropertyDeclaration<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PropertyDeclaration<'a> {
+    direction: PropertyDirection,
+    raw_line: &'a str,
+    key: &'a str,
+    value: &'a str,
+}
+
+impl<'a> PropertyDeclaration<'a> {
+    pub(crate) fn direction(&self) -> PropertyDirection {
+        self.direction
+    }
+
+    pub(crate) fn raw_line(&self) -> &'a str {
+        self.raw_line
+    }
+
+    pub(crate) fn key(&self) -> &'a str {
+        self.key
+    }
+
+    pub(crate) fn value(&self) -> &'a str {
+        self.value
+    }
 }
 
 impl<'a> Properties<'a> {
     pub(super) fn new() -> Self {
         Self {
             values: BTreeMap::new(),
+            declarations: Vec::new(),
         }
     }
 
-    // TODO: PropertyDraft만 받도록 바꾸기
-    pub(super) fn extend(&mut self, props: &[PropertyItemDraft<'a>]) {
+    pub(super) fn extend(&mut self, direction: PropertyDirection, props: &[PropertyItemDraft<'a>]) {
         for prop in props {
+            self.declarations.push(PropertyDeclaration {
+                direction,
+                raw_line: prop.raw_line,
+                key: prop.key,
+                value: prop.value,
+            });
             let key = prop.key.to_lowercase();
             let value = prop.value;
             self.values.insert(key, value);
@@ -582,6 +615,10 @@ impl<'a> Properties<'a> {
         self.values
             .iter()
             .map(|(key, value)| (key.as_str(), *value))
+    }
+
+    fn declarations(&self) -> &[PropertyDeclaration<'a>] {
+        &self.declarations
     }
 }
 
@@ -599,6 +636,10 @@ impl<'a> Document<'a> {
 
     pub fn properties(&self) -> impl Iterator<Item = (&str, &'a str)> {
         self.props.iter()
+    }
+
+    pub(crate) fn property_declarations(&self) -> &[PropertyDeclaration<'a>] {
+        self.props.declarations()
     }
 
     pub fn reference_definitions(&self) -> &ReferenceDefinitions<'a> {
@@ -623,6 +664,10 @@ impl<'a> Block<'a> {
 
     pub fn property(&self, key: &str) -> Option<&'a str> {
         self.props.get_one(key)
+    }
+
+    pub(crate) fn property_declarations(&self) -> &[PropertyDeclaration<'a>] {
+        self.props.declarations()
     }
 }
 
