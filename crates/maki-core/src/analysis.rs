@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title};
-use crate::maki::{
-    DateIndex, NestedDocumentVisitor, NoteRef, collect_parsed_document_dates, quote_mode_is_raw,
-};
+use crate::maki::{DateIndex, NestedDocumentVisitor, NoteRef, collect_parsed_document_dates};
 use crate::parser::{
     self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Inline, IsoWeek,
@@ -33,18 +34,27 @@ impl SnapshotRevision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectSnapshot {
     revision: SnapshotRevision,
-    sources: BTreeMap<PathBuf, String>,
+    sources: BTreeMap<PathBuf, Arc<str>>,
     analysis: ProjectAnalysis,
     title_origins: BTreeMap<PathBuf, DocumentTitleOrigin>,
 }
 
 impl ProjectSnapshot {
     pub fn compile(sources: BTreeMap<PathBuf, String>) -> Self {
+        Self::compile_shared(
+            sources
+                .into_iter()
+                .map(|(path, source)| (path, Arc::<str>::from(source)))
+                .collect(),
+        )
+    }
+
+    fn compile_shared(sources: BTreeMap<PathBuf, Arc<str>>) -> Self {
         let snapshots = sources
             .iter()
             .map(|(path, source)| SourceSnapshot {
                 path: path.as_path(),
-                source,
+                source: source.as_ref(),
             })
             .collect::<Vec<_>>();
         let (analysis, title_origins) = analyze_project_with_title_origins(&snapshots);
@@ -62,11 +72,24 @@ impl ProjectSnapshot {
     }
 
     pub fn source(&self, path: &Path) -> Option<&str> {
-        self.sources.get(path).map(String::as_str)
+        self.sources.get(path).map(Arc::as_ref)
     }
 
-    pub fn sources(&self) -> &BTreeMap<PathBuf, String> {
-        &self.sources
+    pub fn source_paths(&self) -> impl Iterator<Item = &Path> {
+        self.sources.keys().map(PathBuf::as_path)
+    }
+
+    pub fn with_source(&self, path: PathBuf, source: Option<String>) -> Self {
+        let mut sources = self.sources.clone();
+        match source {
+            Some(source) => {
+                sources.insert(path, Arc::<str>::from(source));
+            }
+            None => {
+                sources.remove(&path);
+            }
+        }
+        Self::compile_shared(sources)
     }
 
     pub fn analysis(&self) -> &ProjectAnalysis {
@@ -572,7 +595,10 @@ pub struct DefinitionTarget {
 
 pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
     let parsed = parser::parse(source);
-    analyze_parsed_document_with_title_origin(path, source, &parsed, true).0
+    let (mut document, _) = analyze_parsed_document_with_title_origin(path, source, &parsed);
+    let mut ignored_date_index = DateIndex::default();
+    enrich_document_with_nested_analysis(&mut ignored_date_index, source, &parsed, &mut document);
+    document
 }
 
 #[cfg(test)]
@@ -581,14 +607,17 @@ fn analyze_document_with_title_origin(
     source: &str,
 ) -> (DocumentAnalysis, DocumentTitleOrigin) {
     let parsed = parser::parse(source);
-    analyze_parsed_document_with_title_origin(path, source, &parsed, true)
+    let (mut document, title_origin) =
+        analyze_parsed_document_with_title_origin(path, source, &parsed);
+    let mut ignored_date_index = DateIndex::default();
+    enrich_document_with_nested_analysis(&mut ignored_date_index, source, &parsed, &mut document);
+    (document, title_origin)
 }
 
 fn analyze_parsed_document_with_title_origin(
     path: &Path,
     source: &str,
     parsed: &parser::ParseResult<'_>,
-    include_nested: bool,
 ) -> (DocumentAnalysis, DocumentTitleOrigin) {
     let (title, title_origin, document_span) = match parsed.document.title() {
         Some(title) => (
@@ -603,24 +632,7 @@ fn analyze_parsed_document_with_title_origin(
         ),
     };
     let mut occurrences = collect_document_occurrences(source, &parsed.document);
-    let root_reference_graph = std::mem::take(&mut occurrences.references).finish();
-    let mut nested_diagnostics = Vec::new();
-    let reference_graph = if include_nested {
-        let mut nested = NestedOccurrenceCollector::new(path, root_reference_graph);
-        collect_nested_occurrences(
-            source,
-            &parsed.document.blocks,
-            parsed.document.reference_definitions(),
-            None,
-            &mut nested,
-        );
-        let collected = nested.finish();
-        append_occurrences(&mut occurrences, collected.occurrences);
-        nested_diagnostics = collected.diagnostics;
-        collected.reference_graph
-    } else {
-        root_reference_graph
-    };
+    let reference_graph = std::mem::take(&mut occurrences.references).finish();
     occurrences.blocks.sort_by_key(|block| block.span);
     occurrences
         .block_ids
@@ -643,7 +655,6 @@ fn analyze_parsed_document_with_title_origin(
             message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
         })
         .collect::<Vec<_>>();
-    diagnostics.extend(nested_diagnostics);
     diagnostics.extend(duplicate_id_diagnostics(
         path,
         &occurrences.block_ids,
@@ -702,26 +713,14 @@ pub(crate) fn analyze_project_with_title_origins(
     let mut external_links = BTreeSet::new();
     for snapshot in snapshots {
         let parsed = parser::parse(snapshot.source);
-        let (mut document, title_origin) = analyze_parsed_document_with_title_origin(
-            snapshot.path,
+        let (mut document, title_origin) =
+            analyze_parsed_document_with_title_origin(snapshot.path, snapshot.source, &parsed);
+        enrich_document_with_nested_analysis(
+            &mut date_index,
             snapshot.source,
             &parsed,
-            false,
+            &mut document,
         );
-        let root_reference_graph = std::mem::take(&mut document.reference_graph);
-        let mut visit_nested = NestedOccurrenceCollector::new(snapshot.path, root_reference_graph);
-        collect_parsed_document_dates(
-            &mut date_index,
-            &document.path,
-            NoteRef::new(&document.canonical_path),
-            document.title.clone(),
-            snapshot.source,
-            &parsed.document,
-            &mut visit_nested,
-        );
-        let collected = visit_nested.finish();
-        document.reference_graph = collected.reference_graph;
-        merge_nested_into_document(&mut document, collected.occurrences, collected.diagnostics);
         external_links.extend(
             document
                 .external_links
@@ -1267,92 +1266,6 @@ fn collect_resolved_reference_semantics(
     }
 }
 
-fn append_occurrences(target: &mut DocumentOccurrences, mut nested: DocumentOccurrences) {
-    target.blocks.append(&mut nested.blocks);
-    target.block_ids.append(&mut nested.block_ids);
-    target.headings.append(&mut nested.headings);
-    target.note_links.append(&mut nested.note_links);
-    target.reference_links.append(&mut nested.reference_links);
-    target.url_links.append(&mut nested.url_links);
-    target.external_links.append(&mut nested.external_links);
-    target.properties.append(&mut nested.properties);
-    target.date_markers.append(&mut nested.date_markers);
-    target.dates.append(&mut nested.dates);
-}
-
-fn collect_nested_occurrences(
-    current_source: &str,
-    blocks: &[Block<'_>],
-    references: &parser::ReferenceDefinitions<'_>,
-    current_coordinates: Option<&MappedSource>,
-    visitor: &mut dyn NestedDocumentVisitor,
-) {
-    for block in blocks {
-        match &block.kind {
-            BlockKind::List { items } => {
-                for item in items {
-                    collect_nested_occurrences(
-                        current_source,
-                        &item.children,
-                        references,
-                        current_coordinates,
-                        visitor,
-                    );
-                }
-            }
-            BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
-                collect_mapped_nested_document(
-                    current_source,
-                    lines,
-                    references,
-                    current_coordinates,
-                    visitor,
-                );
-            }
-            BlockKind::Container { kind, lines, .. }
-                if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
-            {
-                collect_mapped_nested_document(
-                    current_source,
-                    lines,
-                    references,
-                    current_coordinates,
-                    visitor,
-                );
-            }
-            BlockKind::Paragraph { .. }
-            | BlockKind::Code { .. }
-            | BlockKind::Heading { .. }
-            | BlockKind::Quote { .. }
-            | BlockKind::Table { .. }
-            | BlockKind::Container { .. }
-            | BlockKind::ReferenceDefinition { .. } => {}
-        }
-    }
-}
-
-fn collect_mapped_nested_document(
-    current_source: &str,
-    lines: &[&str],
-    references: &parser::ReferenceDefinitions<'_>,
-    current_coordinates: Option<&MappedSource>,
-    visitor: &mut dyn NestedDocumentVisitor,
-) {
-    let Some(mapped) = MappedSource::from_lines(current_source, lines, current_coordinates) else {
-        return;
-    };
-    let parsed = parser::parse_with_references(&mapped.text, references);
-    visitor.enter(&mapped, &parsed);
-    collect_nested_occurrences(
-        &mapped.text,
-        &parsed.document.blocks,
-        parsed.document.reference_definitions(),
-        Some(&mapped),
-        visitor,
-    );
-    visitor.exit();
-}
-
 fn merge_mapped_occurrences(
     target: &mut DocumentOccurrences,
     mut nested: DocumentOccurrences,
@@ -1439,6 +1352,28 @@ fn merge_mapped_occurrences(
             date.span = coordinates.map_span(date.span)?;
             Some(date)
         }));
+}
+
+fn enrich_document_with_nested_analysis(
+    date_index: &mut DateIndex,
+    source: &str,
+    parsed: &parser::ParseResult<'_>,
+    document: &mut DocumentAnalysis,
+) {
+    let root_reference_graph = std::mem::take(&mut document.reference_graph);
+    let mut visitor = NestedOccurrenceCollector::new(&document.path, root_reference_graph);
+    collect_parsed_document_dates(
+        date_index,
+        &document.path,
+        NoteRef::new(&document.canonical_path),
+        document.title.clone(),
+        source,
+        &parsed.document,
+        &mut visitor,
+    );
+    let collected = visitor.finish();
+    document.reference_graph = collected.reference_graph;
+    merge_nested_into_document(document, collected.occurrences, collected.diagnostics);
 }
 
 fn merge_nested_into_document(
@@ -2448,21 +2383,58 @@ mod tests {
     #[test]
     fn project_snapshot_keeps_sources_analysis_and_revision_in_one_value() {
         let path = PathBuf::from("index.maki");
-        let first = ProjectSnapshot::compile(BTreeMap::from([(
-            path.clone(),
-            "--^ title: First\n".to_string(),
-        )]));
+        let retained_path = PathBuf::from("retained.maki");
+        let first = ProjectSnapshot::compile(BTreeMap::from([
+            (path.clone(), "--^ title: First\n".to_string()),
+            (retained_path.clone(), "= Retained\n".to_string()),
+        ]));
         let cloned = first.clone();
         let second = ProjectSnapshot::compile(BTreeMap::from([(
             path.clone(),
             "--^ title: Second\n".to_string(),
         )]));
+        let updated = first.with_source(path.clone(), Some("--^ title: Updated\n".to_string()));
 
         assert_eq!(first.source(&path), Some("--^ title: First\n"));
         assert_eq!(first.analysis().document(&path).unwrap().title, "First");
         assert_eq!(cloned.revision(), first.revision());
         assert_ne!(second.revision(), first.revision());
         assert_eq!(second.analysis().document(&path).unwrap().title, "Second");
+        assert_eq!(updated.source(&path), Some("--^ title: Updated\n"));
+        assert_eq!(updated.analysis().document(&path).unwrap().title, "Updated");
+        assert_ne!(updated.revision(), first.revision());
+        assert!(Arc::ptr_eq(
+            first.sources.get(&retained_path).unwrap(),
+            updated.sources.get(&retained_path).unwrap(),
+        ));
+
+        let removed = updated.with_source(retained_path.clone(), None);
+        assert_eq!(removed.source(&retained_path), None);
+        assert_eq!(
+            removed
+                .source_paths()
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>(),
+            vec![path]
+        );
+    }
+
+    #[test]
+    fn standalone_and_project_analysis_share_nested_document_traversal() {
+        let path = Path::new("index.maki");
+        let source = r#"> = Nested
+> --^ id: nested
+> [2026-09-09] <https://example.com>
+
+--- quote
+== Deeper
+--^ status: active
+---"#;
+
+        let standalone = analyze_document(path, source);
+        let project = analyze_project(&[SourceSnapshot { path, source }]);
+
+        assert_eq!(project.document(path), Some(&standalone));
     }
 
     #[test]

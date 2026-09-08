@@ -78,6 +78,28 @@ See [[container-missing]].
 }
 
 #[test]
+fn diagnostics_preserve_note_order_when_source_paths_sort_differently() {
+    let project = temp_project("diagnostic-order");
+    write_note_with_content(&project, "foo.maki", "[[missing-parent]]");
+    write_note_with_content(&project, "foo/bar.maki", "[[missing-child]]");
+
+    let maki = Maki::load(&project.root).unwrap();
+    let paths = maki
+        .diagnostics_without_external_links()
+        .into_iter()
+        .filter_map(|diagnostic| {
+            matches!(diagnostic.kind(), ProjectDiagnosticKind::BrokenLink { .. })
+                .then(|| diagnostic.source_path().to_path_buf())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![PathBuf::from("foo.maki"), PathBuf::from("foo/bar.maki")]
+    );
+}
+
+#[test]
 fn diagnostics_without_external_links_skips_external_link_checks() {
     let project = temp_project("local-diagnostics");
     write_note_with_content(

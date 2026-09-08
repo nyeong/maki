@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    analysis::{AnalysisDiagnosticKind, AnalysisDiagnosticSubject},
+    analysis::{AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisDiagnosticSubject},
     source::SourceMap,
 };
 
@@ -37,6 +37,14 @@ impl Maki {
     fn collect_note_diagnostics(&self) -> Vec<ProjectDiagnostic> {
         let mut diagnostics = vec![];
 
+        let mut diagnostics_by_path = BTreeMap::<&Path, Vec<&AnalysisDiagnostic>>::new();
+        for diagnostic in &self.snapshot.analysis().diagnostics {
+            diagnostics_by_path
+                .entry(&diagnostic.path)
+                .or_default()
+                .push(diagnostic);
+        }
+
         for note in self.notes.values() {
             let source_path = note.source_path();
             let Some(source) = self.snapshot.source(source_path) else {
@@ -47,63 +55,18 @@ impl Maki {
                 ));
                 continue;
             };
-
-            if self.snapshot.analysis().document(source_path).is_some() {
-                let source_map = SourceMap::new(source);
-                for diagnostic in self
-                    .snapshot
-                    .analysis()
-                    .diagnostics
-                    .iter()
-                    .filter(|diagnostic| diagnostic.path == source_path)
-                {
-                    let kind = match diagnostic.kind {
-                        AnalysisDiagnosticKind::ParseWarning => {
-                            ProjectDiagnosticKind::ParseWarning {
-                                message: diagnostic.message.clone(),
-                            }
-                        }
-                        AnalysisDiagnosticKind::DuplicateId => {
-                            let AnalysisDiagnosticSubject::Id(id) = &diagnostic.subject else {
-                                continue;
-                            };
-                            ProjectDiagnosticKind::DuplicateId { id: id.clone() }
-                        }
-                        AnalysisDiagnosticKind::UnresolvedReference => {
-                            let AnalysisDiagnosticSubject::Reference(key) = &diagnostic.subject
-                            else {
-                                continue;
-                            };
-                            ProjectDiagnosticKind::UnresolvedReference { key: key.clone() }
-                        }
-                        AnalysisDiagnosticKind::BrokenNoteLink
-                        | AnalysisDiagnosticKind::BrokenHeadingLink
-                        | AnalysisDiagnosticKind::BrokenIdLink => {
-                            let AnalysisDiagnosticSubject::Link(target) = &diagnostic.subject
-                            else {
-                                continue;
-                            };
-                            ProjectDiagnosticKind::BrokenLink {
-                                target: target.clone(),
-                            }
-                        }
-                        AnalysisDiagnosticKind::AmbiguousNoteLink
-                        | AnalysisDiagnosticKind::AmbiguousHeadingLink
-                        | AnalysisDiagnosticKind::AmbiguousIdLink => {
-                            let AnalysisDiagnosticSubject::Link(target) = &diagnostic.subject
-                            else {
-                                continue;
-                            };
-                            ProjectDiagnosticKind::AmbiguousLink {
-                                target: target.clone(),
-                            }
-                        }
-                    };
-                    let line = source_map
-                        .position(diagnostic.span.start)
-                        .map(|position| position.line + 1);
-                    diagnostics.push(ProjectDiagnostic::new(source_path, line, kind));
-                }
+            let Some(source_diagnostics) = diagnostics_by_path.get(&source_path) else {
+                continue;
+            };
+            let source_map = SourceMap::new(source);
+            for &diagnostic in source_diagnostics {
+                let Some(kind) = project_diagnostic_kind(diagnostic) else {
+                    continue;
+                };
+                let line = source_map
+                    .position(diagnostic.span.start)
+                    .map(|position| position.line + 1);
+                diagnostics.push(ProjectDiagnostic::new(source_path, line, kind));
             }
         }
 
@@ -133,6 +96,46 @@ impl Maki {
                     },
                 ));
             }
+        }
+    }
+}
+
+fn project_diagnostic_kind(diagnostic: &AnalysisDiagnostic) -> Option<ProjectDiagnosticKind> {
+    match diagnostic.kind {
+        AnalysisDiagnosticKind::ParseWarning => Some(ProjectDiagnosticKind::ParseWarning {
+            message: diagnostic.message.clone(),
+        }),
+        AnalysisDiagnosticKind::DuplicateId => {
+            let AnalysisDiagnosticSubject::Id(id) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::DuplicateId { id: id.clone() })
+        }
+        AnalysisDiagnosticKind::UnresolvedReference => {
+            let AnalysisDiagnosticSubject::Reference(key) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::UnresolvedReference { key: key.clone() })
+        }
+        AnalysisDiagnosticKind::BrokenNoteLink
+        | AnalysisDiagnosticKind::BrokenHeadingLink
+        | AnalysisDiagnosticKind::BrokenIdLink => {
+            let AnalysisDiagnosticSubject::Link(target) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::BrokenLink {
+                target: target.clone(),
+            })
+        }
+        AnalysisDiagnosticKind::AmbiguousNoteLink
+        | AnalysisDiagnosticKind::AmbiguousHeadingLink
+        | AnalysisDiagnosticKind::AmbiguousIdLink => {
+            let AnalysisDiagnosticSubject::Link(target) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::AmbiguousLink {
+                target: target.clone(),
+            })
         }
     }
 }

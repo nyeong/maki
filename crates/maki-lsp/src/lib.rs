@@ -298,16 +298,7 @@ impl Server {
     }
 
     fn replace_document(&mut self, path: PathBuf, source: Option<String>) {
-        let mut documents = self.snapshot.sources().clone();
-        match source {
-            Some(source) => {
-                documents.insert(path, source);
-            }
-            None => {
-                documents.remove(&path);
-            }
-        }
-        self.snapshot = ProjectSnapshot::compile(documents);
+        self.snapshot = self.snapshot.with_source(path, source);
     }
 
     fn relative_path(&self, uri: &Url) -> Option<PathBuf> {
@@ -1720,9 +1711,8 @@ mod tests {
         assert_eq!(
             server
                 .snapshot
-                .sources()
-                .keys()
-                .cloned()
+                .source_paths()
+                .map(Path::to_path_buf)
                 .collect::<Vec<_>>(),
             vec![PathBuf::from("index.maki")]
         );
