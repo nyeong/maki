@@ -14,10 +14,6 @@ pub const PROJECT_FILE_NAME: &str = "maki.toml";
 pub(super) const MAKI_EXTENSION: &str = "maki";
 pub(super) const MAKI_SOURCE_EXTENSION: &str = ".maki";
 
-pub(crate) fn quote_mode_is_raw(mode: Option<&str>) -> bool {
-    matches!(mode, Some("pre" | "text"))
-}
-
 pub trait ProjectLoadMeter {
     fn record_project_load_phase(&self, phase: &'static str, duration: Duration);
 }
@@ -43,8 +39,8 @@ pub use dates::{
     DatePeriod, DateRelation,
 };
 pub(crate) use dates::{
-    NestedDocumentVisitor, collect_parsed_document_dates, date_occurrence_href, date_page_path,
-    date_year_page_path, inline_date_occurrence_id, property_date_occurrence_id,
+    collect_parsed_document_dates, date_occurrence_href, date_page_path, date_year_page_path,
+    inline_date_occurrence_id, property_date_occurrence_id,
 };
 pub use diagnostics::{ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary};
 pub use error::Error;

@@ -12,4 +12,4 @@ pub use types::{
     DateRelation,
 };
 
-pub(crate) use collector::{NestedDocumentVisitor, collect_parsed_document_dates};
+pub(crate) use collector::collect_parsed_document_dates;

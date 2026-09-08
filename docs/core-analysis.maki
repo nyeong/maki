@@ -111,6 +111,7 @@ External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이
 - List item의 child block은 원본 Document source를 빌리므로 top-level block과 같은 located occurrence 및 explicit ID surface를 제공한다.
 - Quote와 quote container에서 Maki로 해석하는 body는 line별 synthetic-to-root mapping을 거쳐 원본 Document의 located occurrence surface에 합친다.
   Quote prefix 제거, CRLF, UTF-8 text가 있어도 block, heading, ID, property, link, date와 diagnostic span은 원본 source byte range다.
+- Neutral nested traversal이 body discovery, source mapping과 nested parse를 소유한다. Analysis observer와 date visitor는 같은 traversal event를 소비하므로 어느 한 consumer도 nested 문서 경계를 별도로 재구성하지 않는다.
 - `mode: pre`와 `mode: text`인 raw Quote body는 nested Maki occurrence로 해석하지 않는다.
 - Reference Definition과 Reference Use는 원본 source 좌표가 있는 root/list/table/nested Inline에서 located graph를 제공한다.
 - Nested Maki의 local Reference Use/Definition도 원본 span과 고유 definition ID로 Document reference graph에 합친다. 각 use는 가장 가까운 lexical scope의 definition을 가리키고 sibling scope로 local definition을 누출하지 않으며, root `winner(key)` lookup은 Document-level definition만 반환한다.

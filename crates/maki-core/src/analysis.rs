@@ -7,12 +7,13 @@ use std::sync::{
 };
 
 use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title};
-use crate::maki::{DateIndex, NestedDocumentVisitor, NoteRef, collect_parsed_document_dates};
+use crate::maki::{DateIndex, NoteRef, collect_parsed_document_dates};
+use crate::nested::{MappedSource, NestedDocumentObserver, traverse_nested_documents};
 use crate::parser::{
     self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Inline, IsoWeek,
 };
-use crate::source::{SourceMap, SourceSpan};
+use crate::source::{SourceMap, SourceSpan, slice_span};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SourceSnapshot<'a> {
@@ -596,8 +597,9 @@ pub struct DefinitionTarget {
 pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
     let parsed = parser::parse(source);
     let (mut document, _) = analyze_parsed_document_with_title_origin(path, source, &parsed);
-    let mut ignored_date_index = DateIndex::default();
-    enrich_document_with_nested_analysis(&mut ignored_date_index, source, &parsed, &mut document);
+    enrich_document_with_nested_analysis(&mut document, |_, observer| {
+        traverse_nested_documents(source, &parsed, observer);
+    });
     document
 }
 
@@ -609,8 +611,9 @@ fn analyze_document_with_title_origin(
     let parsed = parser::parse(source);
     let (mut document, title_origin) =
         analyze_parsed_document_with_title_origin(path, source, &parsed);
-    let mut ignored_date_index = DateIndex::default();
-    enrich_document_with_nested_analysis(&mut ignored_date_index, source, &parsed, &mut document);
+    enrich_document_with_nested_analysis(&mut document, |_, observer| {
+        traverse_nested_documents(source, &parsed, observer);
+    });
     (document, title_origin)
 }
 
@@ -715,12 +718,17 @@ pub(crate) fn analyze_project_with_title_origins(
         let parsed = parser::parse(snapshot.source);
         let (mut document, title_origin) =
             analyze_parsed_document_with_title_origin(snapshot.path, snapshot.source, &parsed);
-        enrich_document_with_nested_analysis(
-            &mut date_index,
-            snapshot.source,
-            &parsed,
-            &mut document,
-        );
+        enrich_document_with_nested_analysis(&mut document, |document, observer| {
+            collect_parsed_document_dates(
+                &mut date_index,
+                &document.path,
+                NoteRef::new(&document.canonical_path),
+                &document.title,
+                snapshot.source,
+                &parsed,
+                observer,
+            );
+        });
         external_links.extend(
             document
                 .external_links
@@ -1009,71 +1017,6 @@ fn collect_document_occurrences(
     occurrences
 }
 
-#[derive(Debug)]
-pub(crate) struct MappedSource {
-    pub(crate) text: String,
-    segments: Vec<MappedSourceSegment>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MappedSourceSegment {
-    synthetic: SourceSpan,
-    root: SourceSpan,
-}
-
-impl MappedSource {
-    pub(crate) fn from_lines(
-        current_source: &str,
-        lines: &[&str],
-        current_coordinates: Option<&Self>,
-    ) -> Option<Self> {
-        let mut text = String::new();
-        let mut segments = Vec::with_capacity(lines.len());
-
-        for (index, line) in lines.iter().enumerate() {
-            if index > 0 {
-                text.push('\n');
-            }
-            let start = text.len();
-            text.push_str(line);
-            let current_span = slice_span(current_source, line)?;
-            let root = match current_coordinates {
-                Some(coordinates) => coordinates.map_span(current_span)?,
-                None => current_span,
-            };
-            segments.push(MappedSourceSegment {
-                synthetic: SourceSpan::new(start, text.len()),
-                root,
-            });
-        }
-
-        Some(Self { text, segments })
-    }
-
-    pub(crate) fn map_span(&self, span: SourceSpan) -> Option<SourceSpan> {
-        let touches = |segment: &&MappedSourceSegment| {
-            if span.start == span.end {
-                segment.synthetic.start <= span.start && span.start <= segment.synthetic.end
-            } else {
-                segment.synthetic.start < span.end && span.start < segment.synthetic.end
-            }
-        };
-        let first = self.segments.iter().find(touches)?;
-        let last = self.segments.iter().rev().find(touches)?;
-        let start = first.root.start
-            + span
-                .start
-                .saturating_sub(first.synthetic.start)
-                .min(first.synthetic.end - first.synthetic.start);
-        let end = last.root.start
-            + span
-                .end
-                .saturating_sub(last.synthetic.start)
-                .min(last.synthetic.end - last.synthetic.start);
-        Some(SourceSpan::new(start, end))
-    }
-}
-
 struct NestedCollection {
     occurrences: DocumentOccurrences,
     diagnostics: Vec<AnalysisDiagnostic>,
@@ -1170,7 +1113,7 @@ impl<'a> NestedOccurrenceCollector<'a> {
     }
 }
 
-impl NestedDocumentVisitor for NestedOccurrenceCollector<'_> {
+impl NestedDocumentObserver for NestedOccurrenceCollector<'_> {
     fn enter(&mut self, mapped: &MappedSource, parsed: &parser::ParseResult<'_>) {
         let mut nested = collect_document_occurrences(&mapped.text, &parsed.document);
         self.diagnostics
@@ -1355,22 +1298,12 @@ fn merge_mapped_occurrences(
 }
 
 fn enrich_document_with_nested_analysis(
-    date_index: &mut DateIndex,
-    source: &str,
-    parsed: &parser::ParseResult<'_>,
     document: &mut DocumentAnalysis,
+    traverse_nested: impl FnOnce(&DocumentAnalysis, &mut dyn NestedDocumentObserver),
 ) {
     let root_reference_graph = std::mem::take(&mut document.reference_graph);
     let mut visitor = NestedOccurrenceCollector::new(&document.path, root_reference_graph);
-    collect_parsed_document_dates(
-        date_index,
-        &document.path,
-        NoteRef::new(&document.canonical_path),
-        document.title.clone(),
-        source,
-        &parsed.document,
-        &mut visitor,
-    );
+    traverse_nested(document, &mut visitor);
     let collected = visitor.finish();
     document.reference_graph = collected.reference_graph;
     merge_nested_into_document(document, collected.occurrences, collected.diagnostics);
@@ -2063,16 +1996,6 @@ fn block_id_conflicts_with_heading(
             && block_id.owner_span == heading.span)
 }
 
-fn slice_span(source: &str, slice: &str) -> Option<SourceSpan> {
-    let source_start = source.as_ptr() as usize;
-    let source_end = source_start + source.len();
-    let slice_start = slice.as_ptr() as usize;
-    let slice_end = slice_start + slice.len();
-
-    (source_start <= slice_start && slice_end <= source_end)
-        .then(|| SourceSpan::new(slice_start - source_start, slice_end - source_start))
-}
-
 fn whole_line_span(source_map: &SourceMap<'_>, span: SourceSpan) -> SourceSpan {
     let line = source_map
         .position(span.start)
@@ -2372,13 +2295,6 @@ fn diagnostic_for_resolution(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn slice_span_rejects_an_unrelated_empty_slice_without_panicking() {
-        let source = String::from("source");
-
-        assert_eq!(slice_span(&source, ""), None);
-    }
 
     #[test]
     fn project_snapshot_keeps_sources_analysis_and_revision_in_one_value() {
