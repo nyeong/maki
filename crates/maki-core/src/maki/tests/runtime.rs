@@ -5,9 +5,8 @@ use crate::parser;
 fn project_compile_reuses_root_parses_until_render() {
     const SOURCE_COUNT: usize = 3;
 
-    let project = test_project("parse-once-runtime");
-    add_source(
-        &project,
+    let mut project = test_project("parse-once-runtime");
+    project.add_source(
         "index.maki",
         r#"--^ title: Home
 --^ date: [2026-09-08]
@@ -16,12 +15,11 @@ See [[/notes/child]] and <https://example.com/docs>.
 
 > Quoted [2026-09-09]."#,
     );
-    add_source(
-        &project,
+    project.add_source(
         "notes/child.maki",
         "--^ title: Child\n\nBack to [[/index]].",
     );
-    add_source(&project, "archive.maki", "--^ title: Archive\n\nStored.");
+    project.add_source("archive.maki", "--^ title: Archive\n\nStored.");
 
     parser::reset_parse_counters();
     let mut maki = project.compile();
@@ -63,9 +61,9 @@ See [[/notes/child]] and <https://example.com/docs>.
 
 #[test]
 fn project_compile_uses_supplied_source_metadata() {
-    let project = test_project("source-metadata");
+    let mut project = test_project("source-metadata");
     let modified = UNIX_EPOCH + Duration::from_secs(1_000);
-    add_source_with_modified(&project, "index.maki", "--^ title: Home\n\nBody", modified);
+    project.add_source_with_modified("index.maki", "--^ title: Home\n\nBody", modified);
 
     let maki = project.compile();
 
@@ -75,9 +73,9 @@ fn project_compile_uses_supplied_source_metadata() {
 
 #[test]
 fn project_compile_preserves_read_failures_as_snapshot_data() {
-    let project = test_project("read-failure");
-    add_empty_source(&project, "index.maki");
-    add_read_failure(&project, "broken.maki");
+    let mut project = test_project("read-failure");
+    project.add_empty_source("index.maki");
+    project.add_read_failure("broken.maki");
 
     let maki = project.compile();
 

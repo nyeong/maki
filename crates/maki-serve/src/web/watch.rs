@@ -40,11 +40,8 @@ pub(super) fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, st
     let note_paths =
         list_maki_files(root).map_err(|error| std::io::Error::other(error.to_string()))?;
     for relative_path in note_paths {
-        insert_file_stamp(
-            &mut snapshot,
-            relative_path.clone(),
-            &root.join(relative_path),
-        )?;
+        let path = root.join(&relative_path);
+        insert_file_stamp(&mut snapshot, relative_path, &path)?;
     }
 
     let project_file = root.join(PROJECT_FILE_NAME);

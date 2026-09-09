@@ -19,46 +19,42 @@ impl std::fmt::Display for ExternalLinkCheckError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExternalLinkCheckMethod {
-    Head,
-    Get,
-}
-
 pub(crate) fn diagnostics_with_external_links(maki: &Maki) -> Vec<ProjectDiagnostic> {
-    let mut diagnostics = maki.diagnostics();
-    diagnostics.extend(diagnostics_for_external_links(maki.external_links()));
-    diagnostics
+    let checks = check_external_links(maki.external_links());
+    maki.diagnostics_with_external_link_checks(&checks)
 }
 
 pub(crate) fn diagnostics_for_external_links(
     external_links: &[ProjectExternalLink],
 ) -> Vec<ProjectDiagnostic> {
-    let mut checks = BTreeMap::new();
-    for external_link in external_links {
-        checks
-            .entry(external_link.target.clone())
-            .or_insert_with(|| check_external_link(&external_link.target));
-    }
-
+    let checks = check_external_links(external_links);
     external_link_diagnostics(external_links, &checks)
 }
 
-fn check_external_link(target: &str) -> ExternalLinkCheck {
-    if !is_checkable_external_href(target) {
-        return ExternalLinkCheck::Ok;
-    }
-
+fn check_external_links(
+    external_links: &[ProjectExternalLink],
+) -> BTreeMap<String, ExternalLinkCheck> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(3))
         .redirects(5)
         .build();
+    let mut checks = BTreeMap::new();
+    for external_link in external_links {
+        checks
+            .entry(external_link.target.clone())
+            .or_insert_with(|| check_external_link(&agent, &external_link.target));
+    }
+    checks
+}
 
-    let result = match request_external_link(&agent, ExternalLinkCheckMethod::Head, target) {
+fn check_external_link(agent: &ureq::Agent, target: &str) -> ExternalLinkCheck {
+    if !is_checkable_external_href(target) {
+        return ExternalLinkCheck::Ok;
+    }
+
+    let result = match external_link_response(agent.head(target).call()) {
         Ok(()) => return ExternalLinkCheck::Ok,
-        Err(ExternalLinkCheckError::Status(_)) => {
-            request_external_link(&agent, ExternalLinkCheckMethod::Get, target)
-        }
+        Err(ExternalLinkCheckError::Status(_)) => external_link_response(agent.get(target).call()),
         Err(error) => Err(error),
     };
 
@@ -79,16 +75,9 @@ fn is_checkable_external_href(target: &str) -> bool {
         && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
 }
 
-fn request_external_link(
-    agent: &ureq::Agent,
-    method: ExternalLinkCheckMethod,
-    target: &str,
+fn external_link_response(
+    response: Result<ureq::Response, ureq::Error>,
 ) -> Result<(), ExternalLinkCheckError> {
-    let response = match method {
-        ExternalLinkCheckMethod::Head => agent.head(target).call(),
-        ExternalLinkCheckMethod::Get => agent.get(target).call(),
-    };
-
     match response {
         Ok(response) if response.status() < 400 => Ok(()),
         Ok(response) => Err(ExternalLinkCheckError::Status(response.status())),

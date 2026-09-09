@@ -161,12 +161,12 @@ fn maki_build_checks_each_external_target_once_when_explicitly_requested() {
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    server_methods.lock().unwrap().push(method.clone());
                     let status = if method == "HEAD" {
                         "405 Method Not Allowed"
                     } else {
                         "404 Not Found"
                     };
+                    server_methods.lock().unwrap().push(method);
                     write!(
                         stream,
                         "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

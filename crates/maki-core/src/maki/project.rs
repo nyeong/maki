@@ -319,11 +319,16 @@ impl Maki {
         let mut sources = BTreeMap::new();
         let mut read_failures = Vec::new();
 
-        for project_source in project_sources {
-            let note = Note::new(&root, &project_source.path, project_source.modified);
-            match project_source.source {
+        for ProjectSource {
+            path,
+            source,
+            modified,
+        } in project_sources
+        {
+            let note = Note::new(&root, &path, modified);
+            match source {
                 Some(source) => {
-                    sources.insert(project_source.path, source);
+                    sources.insert(path, source);
                 }
                 None => read_failures.push(note.absolute_path.clone()),
             }

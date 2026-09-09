@@ -115,8 +115,8 @@ pub fn read_maki_sources(root: &Path) -> Result<BTreeMap<PathBuf, String>, Error
     list_maki_files(root)?
         .into_iter()
         .map(|path| {
-            let source = std::fs::read_to_string(root.join(&path))
-                .map_err(|_| Error::ReadNoteFailed(root.join(&path)))?;
+            let file = root.join(&path);
+            let source = std::fs::read_to_string(&file).map_err(|_| Error::ReadNoteFailed(file))?;
             Ok((path, source))
         })
         .collect()
@@ -135,7 +135,7 @@ pub fn load_project_with_config_metered(
     config: MakiConfig,
     metrics: &impl ProjectLoadMeter,
 ) -> Result<Maki, Error> {
-    let snapshot_compile_started = Instant::now();
+    let project_load_started = Instant::now();
 
     if !root.exists() {
         return Err(Error::RootNotFound(root.to_path_buf()));
@@ -174,7 +174,7 @@ pub fn load_project_with_config_metered(
     let started = Instant::now();
     let mut maki = Maki::compile(root, config, project_sources);
     metrics.record_project_load_phase("compile", started.elapsed());
-    maki.extend_snapshot_compile_duration(snapshot_compile_started.elapsed());
+    maki.extend_snapshot_compile_duration(project_load_started.elapsed());
     Ok(maki)
 }
 

@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn diagnostics_collect_parse_warnings_and_link_resolution_issues() {
-    let project = test_project("diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("diagnostics");
+    project.add_source(
         "start.maki",
         r#"--^ invalid-property
 
@@ -20,8 +19,8 @@ See [[missing]], [Ghost][], and [[same]].
 See [[container-missing]].
 ---"#,
     );
-    add_empty_source(&project, "alpha/same.maki");
-    add_empty_source(&project, "beta/same.maki");
+    project.add_empty_source("alpha/same.maki");
+    project.add_empty_source("beta/same.maki");
 
     let maki = project.compile();
     let diagnostics = maki.diagnostics();
@@ -79,9 +78,9 @@ See [[container-missing]].
 
 #[test]
 fn diagnostics_preserve_note_order_when_source_paths_sort_differently() {
-    let project = test_project("diagnostic-order");
-    add_source(&project, "foo.maki", "[[missing-parent]]");
-    add_source(&project, "foo/bar.maki", "[[missing-child]]");
+    let mut project = test_project("diagnostic-order");
+    project.add_source("foo.maki", "[[missing-parent]]");
+    project.add_source("foo/bar.maki", "[[missing-child]]");
 
     let maki = project.compile();
     let paths = maki
@@ -101,9 +100,8 @@ fn diagnostics_preserve_note_order_when_source_paths_sort_differently() {
 
 #[test]
 fn pure_diagnostics_do_not_include_external_link_results() {
-    let project = test_project("local-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("local-diagnostics");
+    project.add_source(
         "start.maki",
         "See [Down][] and [[missing]].\n\n[Down]: <https://down.example/path>",
     );
@@ -125,9 +123,8 @@ fn pure_diagnostics_do_not_include_external_link_results() {
 
 #[test]
 fn diagnostics_compose_supplied_broken_external_link_results() {
-    let project = test_project("external-link-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("external-link-diagnostics");
+    project.add_source(
         "start.maki",
         r#"See [Down][], <https://ok.example/docs>, and `https://code.example`.
 
@@ -180,9 +177,8 @@ See <https://down.example/path>.
 
 #[test]
 fn diagnostics_collect_links_inside_strong_inline() {
-    let project = test_project("strong-link-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("strong-link-diagnostics");
+    project.add_source(
         "start.maki",
         r#"See *[[missing]] and [Missing][] and <https://down.example/path>*.
 
@@ -220,8 +216,8 @@ fn diagnostics_collect_links_inside_strong_inline() {
 
 #[test]
 fn diagnostics_do_not_report_missing_footnote_definitions() {
-    let project = test_project("missing-footnote-diagnostics");
-    add_source(&project, "start.maki", "Missing [^note] stays text.");
+    let mut project = test_project("missing-footnote-diagnostics");
+    project.add_source("start.maki", "Missing [^note] stays text.");
 
     let maki = project.compile();
 
@@ -230,9 +226,8 @@ fn diagnostics_do_not_report_missing_footnote_definitions() {
 
 #[test]
 fn diagnostics_report_unresolved_explicit_references_but_not_bare_markers() {
-    let project = test_project("unresolved-reference-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("unresolved-reference-diagnostics");
+    project.add_source(
         "start.maki",
         "[missing] [^missing] [missing][] [title][ missing ] [^missing][] [^][ missing ]",
     );
@@ -261,9 +256,8 @@ fn diagnostics_report_unresolved_explicit_references_but_not_bare_markers() {
 
 #[test]
 fn reference_values_contribute_one_external_link_for_their_shared_shape() {
-    let project = test_project("reference-value-shape-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("reference-value-shape-diagnostics");
+    project.add_source(
         "start.maki",
         r#"[raw][] [prose][]
 
@@ -303,9 +297,8 @@ fn reference_values_contribute_one_external_link_for_their_shared_shape() {
 
 #[test]
 fn diagnostics_report_every_duplicate_id_declaration_with_its_line() {
-    let project = test_project("duplicate-id-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("duplicate-id-diagnostics");
+    project.add_source(
         "start.maki",
         "First\n--^ id: shared\n\nSecond\n--^ id: shared",
     );
@@ -327,9 +320,8 @@ fn diagnostics_report_every_duplicate_id_declaration_with_its_line() {
 
 #[test]
 fn diagnostics_ignore_links_inside_raw_quotes() {
-    let project = test_project("raw-quote-diagnostics");
-    add_source(
-        &project,
+    let mut project = test_project("raw-quote-diagnostics");
+    project.add_source(
         "start.maki",
         r#"--v mode: pre
 > [[not-a-link]]
