@@ -14,6 +14,7 @@ pub(crate) enum Command {
     },
     Build {
         file: PathBuf,
+        check_external_links: bool,
     },
     Lsp,
 }
@@ -220,6 +221,28 @@ fn parse_serve_args(args: &[String]) -> Result<Command, CliError> {
     Ok(Command::Serve { source, options })
 }
 
+fn parse_build_args(args: &[String]) -> Result<Command, CliError> {
+    let mut file = None;
+    let mut check_external_links = false;
+
+    for argument in args.iter().skip(2) {
+        match argument.as_str() {
+            "--check-external-links" => check_external_links = true,
+            option if option.starts_with("--") => {
+                return Err(CliError::UnknownOption(option.to_string()));
+            }
+            path if file.is_none() => file = Some(PathBuf::from(path)),
+            argument => return Err(CliError::UnexpectedArgument(argument.to_string())),
+        }
+    }
+
+    let file = file.ok_or(CliError::MissingCommand)?;
+    Ok(Command::Build {
+        file,
+        check_external_links,
+    })
+}
+
 pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
     // 0 is the binary name
     let command = args.get(1).ok_or(CliError::MissingCommand)?;
@@ -240,13 +263,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
             Ok(Command::Version { format })
         }
         "serve" => parse_serve_args(args),
-        "build" => {
-            // TODO: 에러 유형 바꾸기
-            let file = args.get(2).ok_or(CliError::MissingCommand)?;
-            Ok(Command::Build {
-                file: PathBuf::from(file),
-            })
-        }
+        "build" => parse_build_args(args),
         "lsp" => {
             if let Some(argument) = args.get(2) {
                 return Err(CliError::UnexpectedArgument(argument.clone()));

@@ -1,5 +1,5 @@
 [package]
-name = "maki-serve"
+name = "maki-fs"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -7,10 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 publish.workspace = true
-description = "Web serving and Git-backed project support for Maki"
+description = "Filesystem adapter for Maki projects"
 
 [dependencies]
 maki-core = { version = "0.1.0", path = "../maki-core" }
-maki-fs = { version = "0.1.0", path = "../maki-fs" }
-maki-http = { version = "0.1.0", path = "../maki-http" }
-percent-encoding = "2.3.2"

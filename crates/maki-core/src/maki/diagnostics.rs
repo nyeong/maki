@@ -2,12 +2,19 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    analysis::{AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisDiagnosticSubject},
+    analysis::{
+        AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisDiagnosticSubject, ProjectExternalLink,
+    },
     source::SourceMap,
 };
 
 use super::Maki;
-use super::links::{ExternalLinkCheck, check_external_link};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalLinkCheck {
+    Ok,
+    Broken { reason: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDiagnostic {
@@ -18,19 +25,18 @@ pub struct ProjectDiagnostic {
 
 impl Maki {
     pub fn diagnostics(&self) -> Vec<ProjectDiagnostic> {
-        self.diagnostics_with_external_link_checker(&check_external_link)
-    }
-
-    pub fn diagnostics_without_external_links(&self) -> Vec<ProjectDiagnostic> {
         self.collect_note_diagnostics()
     }
 
-    pub(super) fn diagnostics_with_external_link_checker(
+    pub fn diagnostics_with_external_link_checks(
         &self,
-        check_external_link: &dyn Fn(&str) -> ExternalLinkCheck,
+        checks: &BTreeMap<String, ExternalLinkCheck>,
     ) -> Vec<ProjectDiagnostic> {
         let mut diagnostics = self.collect_note_diagnostics();
-        self.push_external_link_diagnostics(&mut diagnostics, check_external_link);
+        diagnostics.extend(external_link_diagnostics(
+            self.snapshot.analysis().external_links(),
+            checks,
+        ));
         diagnostics
     }
 
@@ -72,32 +78,28 @@ impl Maki {
 
         diagnostics
     }
+}
 
-    fn push_external_link_diagnostics(
-        &self,
-        diagnostics: &mut Vec<ProjectDiagnostic>,
-        check_external_link: &dyn Fn(&str) -> ExternalLinkCheck,
-    ) {
-        let mut checks = BTreeMap::new();
-
-        for external_link in self.snapshot.analysis().external_links() {
-            let check = checks
-                .entry(external_link.target.clone())
-                .or_insert_with(|| check_external_link(&external_link.target))
-                .clone();
-
-            if let ExternalLinkCheck::Broken { reason } = check {
-                diagnostics.push(ProjectDiagnostic::new(
-                    external_link.path.clone(),
-                    None,
-                    ProjectDiagnosticKind::BrokenExternalLink {
-                        target: external_link.target.clone(),
-                        reason,
-                    },
-                ));
-            }
-        }
-    }
+pub fn external_link_diagnostics(
+    external_links: &[ProjectExternalLink],
+    checks: &BTreeMap<String, ExternalLinkCheck>,
+) -> Vec<ProjectDiagnostic> {
+    external_links
+        .iter()
+        .filter_map(|external_link| {
+            let ExternalLinkCheck::Broken { reason } = checks.get(&external_link.target)? else {
+                return None;
+            };
+            Some(ProjectDiagnostic::new(
+                external_link.path.clone(),
+                None,
+                ProjectDiagnosticKind::BrokenExternalLink {
+                    target: external_link.target.clone(),
+                    reason: reason.clone(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn project_diagnostic_kind(diagnostic: &AnalysisDiagnostic) -> Option<ProjectDiagnosticKind> {

@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::Error;
 use super::links::normalize_key;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -12,7 +11,7 @@ pub struct NoteRef {
 
 #[derive(Debug, PartialEq)]
 pub struct Note {
-    /// 실제 파일 시스템 절대경로
+    /// Adapter가 제공한 project root와 source path를 결합한 경로
     pub(super) absolute_path: PathBuf,
 
     /// 프로젝트 root 기준 상대경로
@@ -190,28 +189,20 @@ impl Note {
             .unwrap_or("")
     }
 
-    pub(super) fn load(
+    pub(super) fn new(
         root: impl AsRef<Path>,
         project_path: impl AsRef<Path>,
-    ) -> Result<Self, Error> {
+        modified: Option<SystemTime>,
+    ) -> Self {
         let root = root.as_ref();
         let project_path = project_path.as_ref();
         let absolute_path = root.join(project_path);
-        let metadata = absolute_path
-            .metadata()
-            .map_err(|_source| Error::NoteNotFound(absolute_path.to_path_buf()))?;
-        if !metadata.is_file() {
-            return Err(Error::NoteNotFound(absolute_path.to_path_buf()));
-        }
 
-        let absolute_path = std::fs::canonicalize(&absolute_path)
-            .map_err(|_s| Error::NoteNotFound(absolute_path))?;
-
-        Ok(Self {
+        Self {
             absolute_path,
             project_path: project_path.to_path_buf(),
-            modified: metadata.modified().ok(),
-        })
+            modified,
+        }
     }
 }
 

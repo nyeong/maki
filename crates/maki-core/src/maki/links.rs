@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use crate::parser;
@@ -72,88 +71,6 @@ pub fn is_external_href(target: &str) -> bool {
 
 pub fn is_safe_direct_href(target: &str) -> bool {
     parser::is_local_link_target(target)
-}
-
-fn is_checkable_external_href(target: &str) -> bool {
-    let target = target.trim();
-    let Some((scheme, body)) = target.split_once("://") else {
-        return false;
-    };
-    !body.is_empty()
-        && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ExternalLinkCheck {
-    Ok,
-    Broken { reason: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ExternalLinkCheckError {
-    Status(u16),
-    Transport(String),
-}
-
-impl std::fmt::Display for ExternalLinkCheckError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Status(status) => write!(f, "HTTP {status}"),
-            Self::Transport(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExternalLinkCheckMethod {
-    Head,
-    Get,
-}
-
-pub(super) fn check_external_link(target: &str) -> ExternalLinkCheck {
-    if !is_checkable_external_href(target) {
-        return ExternalLinkCheck::Ok;
-    }
-
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(3))
-        .redirects(5)
-        .build();
-
-    let result = match request_external_link(&agent, ExternalLinkCheckMethod::Head, target) {
-        Ok(()) => return ExternalLinkCheck::Ok,
-        Err(ExternalLinkCheckError::Status(_)) => {
-            request_external_link(&agent, ExternalLinkCheckMethod::Get, target)
-        }
-        Err(error) => Err(error),
-    };
-
-    match result {
-        Ok(()) => ExternalLinkCheck::Ok,
-        Err(error) => ExternalLinkCheck::Broken {
-            reason: error.to_string(),
-        },
-    }
-}
-
-fn request_external_link(
-    agent: &ureq::Agent,
-    method: ExternalLinkCheckMethod,
-    target: &str,
-) -> Result<(), ExternalLinkCheckError> {
-    let response = match method {
-        ExternalLinkCheckMethod::Head => agent.head(target).call(),
-        ExternalLinkCheckMethod::Get => agent.get(target).call(),
-    };
-
-    match response {
-        Ok(response) if response.status() < 400 => Ok(()),
-        Ok(response) => Err(ExternalLinkCheckError::Status(response.status())),
-        Err(ureq::Error::Status(status, _response)) => Err(ExternalLinkCheckError::Status(status)),
-        Err(ureq::Error::Transport(error)) => {
-            Err(ExternalLinkCheckError::Transport(error.to_string()))
-        }
-    }
 }
 
 #[derive(Debug, PartialEq)]

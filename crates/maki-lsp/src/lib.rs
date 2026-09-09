@@ -30,7 +30,9 @@ use maki_core::analysis::{
 use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
 use maki_core::parser::DateStampKind;
 use maki_core::source::{SourceMap, SourceSpan, Utf16Position};
-use maki_core::{Maki, MakiConfig, is_discoverable_maki_path, list_maki_files};
+use maki_fs::{
+    find_project_root, is_discoverable_maki_path, load_project_config, read_maki_sources,
+};
 use page_title::{HttpPageTitleProvider, PageTitleProvider};
 
 pub type LspResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -869,10 +871,10 @@ fn reference_declaration_definition_id_at(
 }
 
 fn source_root(workspace_root: &Path) -> LspResult<PathBuf> {
-    let project_root = Maki::find_project_root(workspace_root)
+    let project_root = find_project_root(workspace_root)
         .map_err(|error| format!("failed to find Maki project: {error}"))?;
     if let Some(project_root) = project_root {
-        let config = MakiConfig::load_project(&project_root)
+        let config = load_project_config(&project_root)
             .map_err(|error| format!("failed to load Maki project: {error}"))?;
         return Ok(config.project_source_root(&project_root));
     }
@@ -880,14 +882,8 @@ fn source_root(workspace_root: &Path) -> LspResult<PathBuf> {
 }
 
 fn load_documents(root: &Path) -> LspResult<BTreeMap<PathBuf, String>> {
-    let mut documents = BTreeMap::new();
-    let files = list_maki_files(root)
-        .map_err(|error| format!("failed to discover Maki documents: {error}"))?;
-    for relative in files {
-        let source = std::fs::read_to_string(root.join(&relative))?;
-        documents.insert(relative, source);
-    }
-    Ok(documents)
+    read_maki_sources(root)
+        .map_err(|error| format!("failed to load Maki documents: {error}").into())
 }
 
 #[cfg(test)]

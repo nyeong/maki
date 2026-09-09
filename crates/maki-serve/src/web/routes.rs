@@ -725,7 +725,7 @@ fn render_cacheable_response(
             .set_header("Content-Type", "application/xml; charset=utf-8")
             .set_body(sitemap_xml(maki.published_sitemap_entries()))),
         ResponseCacheKey::Diagnostics => {
-            let diagnostics = maki.diagnostics_without_external_links();
+            let diagnostics = maki.diagnostics();
             let html = html::render_diagnostics_page(
                 &diagnostics,
                 maki.notes_len(),

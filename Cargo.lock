@@ -241,16 +241,22 @@ name = "maki"
 version = "0.1.0"
 dependencies = [
  "maki-core",
+ "maki-fs",
  "maki-lsp",
  "maki-serve",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]
 name = "maki-core"
 version = "0.1.0"
+
+[[package]]
+name = "maki-fs"
+version = "0.1.0"
 dependencies = [
- "ureq",
+ "maki-core",
 ]
 
 [[package]]
@@ -264,6 +270,7 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "maki-core",
+ "maki-fs",
  "serde",
  "serde_json",
  "ureq",
@@ -274,6 +281,7 @@ name = "maki-serve"
 version = "0.1.0"
 dependencies = [
  "maki-core",
+ "maki-fs",
  "maki-http",
  "percent-encoding",
 ]

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use crate::{
     analysis::{
@@ -12,11 +12,9 @@ use crate::{
 };
 
 use super::{
-    Error, MAKI_SOURCE_EXTENSION, NoopProjectLoadMeter, PROJECT_FILE_NAME, ProjectLoadMeter,
-    SearchEntryKind, SitemapEntry,
+    Error, MAKI_SOURCE_EXTENSION, SearchEntryKind, SitemapEntry,
     config::{MakiConfig, PublishPolicy},
     dates::DateIndex,
-    files::{get_relative_path, list_maki_files},
     links::{NoteIndex, NoteLinkResolution, normalize_key},
     note::{
         Note, NoteMetadataEntry, NoteRef, RecentEntry, SearchEntry, collect_recent_entries,
@@ -25,7 +23,7 @@ use super::{
 };
 
 pub struct Maki {
-    pub(super) root: PathBuf,                  // canonical absolute path
+    pub(super) root: PathBuf, // caller-supplied project identity root
     pub(super) notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
     pub(super) index: NoteIndex,
     pub(super) snapshot: ProjectSnapshot,
@@ -39,6 +37,35 @@ pub struct Maki {
 pub(super) struct ProjectSnapshot {
     compiled: analysis::ProjectSnapshot,
     read_failures: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSource {
+    path: PathBuf,
+    source: Option<String>,
+    modified: Option<SystemTime>,
+}
+
+impl ProjectSource {
+    pub fn loaded(
+        path: impl Into<PathBuf>,
+        source: impl Into<String>,
+        modified: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            source: Some(source.into()),
+            modified,
+        }
+    }
+
+    pub fn read_failed(path: impl Into<PathBuf>, modified: Option<SystemTime>) -> Self {
+        Self {
+            path: path.into(),
+            source: None,
+            modified,
+        }
+    }
 }
 
 impl ProjectSnapshot {
@@ -100,26 +127,6 @@ pub enum MakiRoute {
 }
 
 impl Maki {
-    pub fn find_project_root(start: &Path) -> Result<Option<PathBuf>, Error> {
-        let start = std::fs::canonicalize(start)
-            .map_err(|_source| Error::RootNotFound(start.to_owned()))?;
-        let start_dir = if start.is_file() {
-            start
-                .parent()
-                .ok_or_else(|| Error::InvalidNotePath(start.clone()))?
-        } else {
-            start.as_path()
-        };
-
-        for ancestor in start_dir.ancestors() {
-            if ancestor.join(PROJECT_FILE_NAME).is_file() {
-                return Ok(Some(ancestor.to_path_buf()));
-            }
-        }
-
-        Ok(None)
-    }
-
     fn note(&self, note_ref: &NoteRef) -> Option<&Note> {
         self.notes.get(note_ref)
     }
@@ -253,6 +260,10 @@ impl Maki {
         Ok(self.snapshot.analysis().clone())
     }
 
+    pub fn external_links(&self) -> &[analysis::ProjectExternalLink] {
+        self.snapshot.analysis().external_links()
+    }
+
     pub fn snapshot_revision(&self) -> SnapshotRevision {
         self.snapshot.compiled.revision()
     }
@@ -295,57 +306,39 @@ impl Maki {
             .collect()
     }
 
-    pub fn load_with_config(root: &Path, config: MakiConfig) -> Result<Self, Error> {
-        Self::load_with_config_metered(root, config, &NoopProjectLoadMeter)
-    }
-
-    pub fn load_with_config_metered(
-        root: &Path,
+    /// Compiles caller-supplied project values without reading the filesystem or clock.
+    ///
+    /// Filesystem adapters should canonicalize `root` before calling when they need a
+    /// canonical absolute identity.
+    pub fn compile(
+        root: PathBuf,
         config: MakiConfig,
-        metrics: &impl ProjectLoadMeter,
-    ) -> Result<Self, Error> {
-        let snapshot_compile_started = Instant::now();
-
-        if !root.exists() {
-            return Err(Error::RootNotFound(root.to_path_buf()));
-        }
-        if !root.is_dir() {
-            return Err(Error::RootNotDirectory(root.to_path_buf()));
-        }
-
-        let root =
-            std::fs::canonicalize(root).map_err(|_source| Error::RootNotFound(root.to_owned()))?;
-
-        let started = Instant::now();
-        let files = list_maki_files(&root)?;
-        metrics.record_project_load_phase("list_files", started.elapsed());
-
-        let started = Instant::now();
+        project_sources: impl IntoIterator<Item = ProjectSource>,
+    ) -> Self {
         let mut notes = BTreeMap::new();
         let mut sources = BTreeMap::new();
         let mut read_failures = Vec::new();
 
-        for file in &files {
-            let note = Note::load(&root, file)?;
-            match std::fs::read_to_string(&note.absolute_path) {
-                Ok(source) => {
-                    sources.insert(note.source_path().to_path_buf(), source);
+        for ProjectSource {
+            path,
+            source,
+            modified,
+        } in project_sources
+        {
+            let note = Note::new(&root, &path, modified);
+            match source {
+                Some(source) => {
+                    sources.insert(path, source);
                 }
-                Err(_) => read_failures.push(note.absolute_path.clone()),
+                None => read_failures.push(note.absolute_path.clone()),
             }
             notes.insert(note.note_ref(), note);
         }
-        metrics.record_project_load_phase("load_notes", started.elapsed());
 
-        let started = Instant::now();
         let snapshot = ProjectSnapshot::new(sources, read_failures);
-        metrics.record_project_load_phase("analyze", started.elapsed());
 
-        let started = Instant::now();
         let index = NoteIndex::build(notes.keys());
-        metrics.record_project_load_phase("index", started.elapsed());
 
-        let started = Instant::now();
         let note_metadata_entries = notes
             .values()
             .map(|note| snapshot_note_metadata_entry(&snapshot, note))
@@ -358,11 +351,8 @@ impl Maki {
             .map(NoteMetadataEntry::into_sitemap_entry)
             .collect();
         let recent_entries = collect_recent_entries(note_metadata_entries);
-        metrics.record_project_load_phase("metadata", started.elapsed());
 
-        let snapshot_compile_duration = snapshot_compile_started.elapsed();
-
-        Ok(Self {
+        Self {
             root,
             notes,
             index,
@@ -371,14 +361,8 @@ impl Maki {
             recent_entries,
             sitemap_entries,
             config,
-            snapshot_compile_duration,
-        })
-    }
-
-    // root: absolute or relative to the project directory
-    #[allow(dead_code)]
-    pub fn load(root: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::load_with_config(root.as_ref(), MakiConfig::default())
+            snapshot_compile_duration: Duration::ZERO,
+        }
     }
 
     pub fn render_html(&self, path: &Path) -> Result<String, Error> {
@@ -523,14 +507,6 @@ impl Maki {
             snapshot_note_title(&self.snapshot, note),
             note_ref.web_path(),
         ))
-    }
-
-    pub fn render_file_html(&self, file: &Path) -> Result<String, Error> {
-        let absolute_path =
-            std::fs::canonicalize(file).map_err(|_source| Error::NoteNotFound(file.to_owned()))?;
-        let project_path = get_relative_path(&self.root, &absolute_path)?;
-
-        self.render_html(&project_path)
     }
 
     /// Resolves a note path relative to the root directory.

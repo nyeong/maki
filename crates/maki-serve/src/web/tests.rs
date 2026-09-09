@@ -7,7 +7,9 @@ use super::routes::{
 };
 use super::server::{handle_connection, read_request_head};
 use super::state::{AppState, ResponseCacheKey};
-use super::watch::{collect_watched_file_snapshot, collect_watched_project_snapshot};
+use super::watch::{
+    collect_maki_file_snapshot, collect_watched_file_snapshot, collect_watched_project_snapshot,
+};
 use crate::http;
 use std::fs;
 use std::io::{Cursor, Read, Write};
@@ -15,7 +17,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::metrics::Metrics;
-use maki_core::{Maki, MakiConfig, MakiConfigOverrides};
+use maki_core::{MakiConfig, MakiConfigOverrides};
+use maki_fs::{
+    list_maki_files, load_project, load_project_config, load_project_with_config,
+    load_project_with_config_metered,
+};
 
 fn repo_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -72,7 +78,7 @@ fn test_read_request_with_split_header() {
 fn test_handle_unknown_path_returns_not_found() {
     let request = http::Request::get("/missing");
 
-    let maki = Maki::load(repo_path(".")).unwrap();
+    let maki = load_project(&repo_path(".")).unwrap();
     let state = AppState::new(maki);
 
     let response = handle_request(&state, &request).unwrap();
@@ -95,7 +101,7 @@ fn test_handle_unknown_path_returns_not_found() {
 
 #[test]
 fn test_rendered_note_includes_live_reload_script() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/index");
 
@@ -122,7 +128,7 @@ fn test_rendered_note_includes_live_reload_script() {
 
 #[test]
 fn test_rendered_code_note_loads_code_block_assets_once_in_dependency_order() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/use-cases")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -142,7 +148,7 @@ fn test_rendered_code_note_loads_code_block_assets_once_in_dependency_order() {
 
 #[test]
 fn test_all_served_html_pages_include_one_timing_footer() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
 
     for target in [
@@ -191,7 +197,7 @@ fn test_all_served_html_pages_include_one_timing_footer() {
 
 #[test]
 fn test_non_html_and_head_responses_omit_timing_footer() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
 
     for target in [
@@ -217,7 +223,7 @@ fn test_non_html_and_head_responses_omit_timing_footer() {
 
 #[test]
 fn test_source_note_does_not_include_live_reload_script() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/index.maki");
 
@@ -230,7 +236,7 @@ fn test_source_note_does_not_include_live_reload_script() {
 
 #[test]
 fn test_search_index_returns_project_entries() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/.maki/search-index.json");
 
@@ -262,7 +268,7 @@ body
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/.maki/search-index.json")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -285,7 +291,7 @@ body
 
 #[test]
 fn test_search_page_returns_matching_titles() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/.maki/search?q=syntax");
 
@@ -312,8 +318,8 @@ fn test_project_title_suffixes_served_html_titles() {
     .unwrap();
     fs::write(root.join("home.maki"), "--^ title: Home\n\nbody").unwrap();
 
-    let config = MakiConfig::load_project(&root).unwrap();
-    let maki = Maki::load_with_config(&root, config).unwrap();
+    let config = load_project_config(&root).unwrap();
+    let maki = load_project_with_config(&root, config).unwrap();
     let state = AppState::new(maki);
 
     let note = handle_request(&state, &http::Request::get("/home")).unwrap();
@@ -346,9 +352,9 @@ fn test_project_favicon_is_linked_and_served() {
     fs::write(root.join("notes/home.maki"), "--^ title: Home\n\nbody").unwrap();
     fs::write(root.join("assets/favicon.png"), b"fake png favicon").unwrap();
 
-    let config = MakiConfig::load_project(&root).unwrap();
+    let config = load_project_config(&root).unwrap();
     let source_root = config.project_source_root(&root);
-    let maki = Maki::load_with_config(&source_root, config).unwrap();
+    let maki = load_project_with_config(&source_root, config).unwrap();
     let state = AppState::new_with_overrides(
         root.clone(),
         maki,
@@ -404,7 +410,7 @@ fn test_search_index_escapes_json_strings() {
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("quote.maki"), "--^ title: Quote \"Note\"\n").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/.maki/search-index.json");
 
@@ -422,7 +428,7 @@ fn test_note_page_response_cache_is_replaced_with_project() {
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("home.maki"), "Cache marker: first generation").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/home");
 
@@ -473,7 +479,7 @@ fn test_note_page_response_cache_is_replaced_with_project() {
 
 #[test]
 fn test_response_cache_hit_miss_metrics_follow_requests() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let metrics = Metrics::enabled();
     let state = AppState::new_with_metrics(maki, metrics.clone());
     let request = http::Request::get("/index");
@@ -504,7 +510,7 @@ fn test_subdocuments_pages_are_distinct_cacheable_routes() {
     fs::write(root.join("leaf.maki"), "--^ title: Leaf\n\nLeaf body").unwrap();
 
     let metrics = Metrics::enabled();
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new_with_metrics(maki, metrics.clone());
 
     let note = handle_request(&state, &http::Request::get("/note")).unwrap();
@@ -596,7 +602,7 @@ fn test_percent_encoded_utf8_subdocuments_path() {
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let encoded_path = "/%EC%BD%94%EB%94%A9%20%ED%85%8C%EC%8A%A4%ED%8A%B8";
 
@@ -648,7 +654,7 @@ fn test_reload_updates_project_and_cache_gauges() {
     fs::write(root.join("home.maki"), "Home generation one").unwrap();
 
     let metrics = Metrics::enabled();
-    let maki = Maki::load_with_config_metered(&root, MakiConfig::default(), &metrics).unwrap();
+    let maki = load_project_with_config_metered(&root, MakiConfig::default(), &metrics).unwrap();
     let state = AppState::new_with_metrics(maki, metrics.clone());
 
     handle_request(&state, &http::Request::get("/home")).unwrap();
@@ -668,7 +674,7 @@ fn test_reload_updates_project_and_cache_gauges() {
 
 #[test]
 fn test_warm_response_cache_populates_eager_routes_and_lazily_caches_subdocuments() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let warmup_keys = response_cache_warmup_keys(&maki);
     assert!(
         !warmup_keys
@@ -709,7 +715,7 @@ fn test_warm_response_cache_populates_eager_routes_and_lazily_caches_subdocument
 
 #[test]
 fn test_runtime_asset_routes_return_source_assets() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
 
     let css = handle_request(&state, &http::Request::get("/.maki/assets/maki.css")).unwrap();
@@ -795,6 +801,49 @@ fn test_watched_file_snapshot_includes_runtime_assets() {
 }
 
 #[test]
+fn test_watched_notes_match_project_discovery() {
+    let root = std::env::temp_dir().join(format!("maki-watch-discovery-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for directory in [
+        "notes",
+        ".hidden",
+        "node_modules/package",
+        "target/generated",
+    ] {
+        fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    fs::write(root.join("maki.toml"), "[project]\n").unwrap();
+    fs::write(root.join("index.maki"), "index").unwrap();
+    fs::write(root.join("notes/child.maki"), "child").unwrap();
+    fs::write(root.join(".hidden/note.maki"), "hidden").unwrap();
+    fs::write(root.join("node_modules/package/note.maki"), "dependency").unwrap();
+    fs::write(root.join("target/generated/note.maki"), "generated").unwrap();
+
+    let discovered = list_maki_files(&root).unwrap();
+    let snapshot = collect_maki_file_snapshot(&root).unwrap();
+    let watched_notes = snapshot
+        .keys()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "maki")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(watched_notes, discovered);
+    assert!(snapshot.contains_key(Path::new("maki.toml")));
+    assert_eq!(
+        watched_notes,
+        vec![
+            PathBuf::from("index.maki"),
+            PathBuf::from("notes/child.maki")
+        ]
+    );
+}
+
+#[test]
 fn test_watched_project_snapshot_includes_configured_favicon() {
     let root = std::env::temp_dir().join(format!("maki-favicon-watch-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -817,7 +866,7 @@ fn test_watched_project_snapshot_includes_configured_favicon() {
 
 #[test]
 fn test_meta_index_links_internal_indexes() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/@/")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -842,7 +891,7 @@ fn test_sitemap_routes_list_notes() {
     fs::create_dir_all(root.join("notes")).unwrap();
     fs::write(root.join("notes/beta.maki"), "--^ title: Beta\n").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let page = handle_request(&state, &http::Request::get("/@/sitemap")).unwrap();
     let page_body = String::from_utf8(page.body().to_vec()).unwrap();
@@ -892,7 +941,7 @@ See [[other#Target]] on [2026-08-25].
     .unwrap();
     fs::write(root.join("other.maki"), "= Target\n").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let response =
         handle_request(&state, &http::Request::get("/.maki/project-index.json")).unwrap();
@@ -950,7 +999,7 @@ second duplicate
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let response =
         handle_request(&state, &http::Request::get("/.maki/project-index.json")).unwrap();
@@ -982,7 +1031,7 @@ fn test_recents_page_lists_recent_notes() {
     fs::create_dir_all(root.join("notes")).unwrap();
     fs::write(root.join("notes/beta.maki"), "--^ title: Beta\n").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/@/recents")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -1031,7 +1080,7 @@ fn test_recents_page_disambiguates_duplicate_file_stems() {
     fs::write(root.join("끝공백 .maki"), "").unwrap();
     fs::write(root.join("탭\t문서.maki"), "").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/@/recents")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -1079,7 +1128,7 @@ Task with property date.
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
 
     let index = handle_request(&state, &http::Request::get("/@/dates")).unwrap();
@@ -1205,7 +1254,7 @@ Month [2026-08]."#,
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let day = handle_request(&state, &http::Request::get("/@/dates/2026-08-18")).unwrap();
     let day_body = String::from_utf8(day.body().to_vec()).unwrap();
@@ -1271,7 +1320,7 @@ MixedTarget [2026-08-04]."#,
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
 
     let year = handle_request(&state, &http::Request::get("/@/dates/2026")).unwrap();
@@ -1364,7 +1413,7 @@ Beta [2026-08-15]."#,
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let day = handle_request(&state, &http::Request::get("/@/dates/2026-08-15")).unwrap();
     let day_body = String::from_utf8(day.body().to_vec()).unwrap();
@@ -1391,7 +1440,7 @@ Future [2027-01-01]."#,
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let body_for = |path: &str| {
         let response = handle_request(&state, &http::Request::get(path)).unwrap();
@@ -1452,7 +1501,7 @@ fn test_iso_week_pages_handle_representable_year_boundaries() {
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let first = handle_request(&state, &http::Request::get("/@/dates/0001-W01")).unwrap();
     let first_body = String::from_utf8(first.body().to_vec()).unwrap();
@@ -1476,7 +1525,7 @@ fn test_diagnostics_page_lists_project_issues() {
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("home.maki"), "See [[missing]] and [Ghost][].").unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/@/diagnostics");
 
@@ -1513,7 +1562,7 @@ fn test_diagnostics_page_lists_duplicate_ids_with_declaration_lines() {
     )
     .unwrap();
 
-    let maki = Maki::load(&root).unwrap();
+    let maki = load_project(&root).unwrap();
     let state = AppState::new(maki);
     let response = handle_request(&state, &http::Request::get("/@/diagnostics")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
@@ -1527,7 +1576,7 @@ fn test_diagnostics_page_lists_duplicate_ids_with_declaration_lines() {
 
 #[test]
 fn test_head_diagnostics_page_returns_headers_without_body() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::new(http::Method::Head, "/@/diagnostics");
 
@@ -1595,7 +1644,7 @@ impl Write for DisconnectingStream {
 
 #[test]
 fn test_live_reload_broken_pipe_is_a_normal_separate_disconnect() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("docs")).unwrap();
     let metrics = Metrics::enabled();
     let state = AppState::new_with_metrics(maki, metrics.clone());
     let mut stream = DisconnectingStream {

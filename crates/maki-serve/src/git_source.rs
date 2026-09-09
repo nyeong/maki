@@ -11,7 +11,8 @@ use std::{
 };
 
 use crate::{metrics::Metrics, web};
-use maki_core::{Error as MakiError, Maki, MakiConfig, MakiConfigOverrides, PROJECT_FILE_NAME};
+use maki_core::{Error as MakiError, Maki, MakiConfigOverrides, PROJECT_FILE_NAME};
+use maki_fs::{load_project_config, load_project_with_config_metered};
 
 const DEFAULT_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 const REPOSITORY_GIT_ENV: &[&str] = &[
@@ -252,10 +253,10 @@ impl GitSource {
             });
         }
 
-        let mut config = MakiConfig::load_project(checkout.root())?;
+        let mut config = load_project_config(checkout.root())?;
         config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(checkout.root());
-        let mut maki = Maki::load_with_config_metered(&source_root, config, metrics)?;
+        let mut maki = load_project_with_config_metered(&source_root, config, metrics)?;
         let snapshot_finalize_started = Instant::now();
         let source_paths = maki
             .notes()
@@ -745,7 +746,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
 
-        let mut maki = Maki::load(&root).unwrap();
+        let mut maki = maki_fs::load_project(&root).unwrap();
         let core_duration = maki.snapshot_compile_duration();
         let started = Instant::now()
             .checked_sub(Duration::from_millis(7))

@@ -2,11 +2,11 @@ use super::*;
 
 #[test]
 fn search_entries_use_title_property_or_file_stem() {
-    let project = temp_project("search-entry-title");
-    write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
-    write_note_with_content(&project, "beta-note.maki", "body");
+    let mut project = test_project("search-entry-title");
+    project.add_source("alpha.maki", "--^ title: Alpha Note\n\nbody");
+    project.add_source("beta-note.maki", "body");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert!(maki.search_entries().iter().any(|entry| {
         entry.kind() == SearchEntryKind::Note
@@ -24,9 +24,8 @@ fn search_entries_use_title_property_or_file_stem() {
 
 #[test]
 fn search_entries_include_source_files_and_headings() {
-    let project = temp_project("search-entry-kinds");
-    write_note_with_content(
-        &project,
+    let mut project = test_project("search-entry-kinds");
+    project.add_source(
         "alpha.maki",
         r#"--^ title: Alpha Note
 
@@ -38,7 +37,7 @@ fn search_entries_include_source_files_and_headings() {
 body"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert!(maki.search_entries().iter().any(|entry| {
         entry.kind() == SearchEntryKind::File
@@ -172,35 +171,26 @@ fn recent_entry_disambiguation_preserves_modified_and_source_path_sorting() {
 
 #[test]
 fn recent_entries_disambiguate_duplicate_file_stems_with_minimal_path_suffixes() {
-    let project = temp_project("recents-duplicate-file-stems");
-    write_note_with_content(
-        &project,
-        "notes/코딩 테스트.maki",
-        "--^ title: 코딩 테스트\n",
-    );
-    write_note_with_content(
-        &project,
+    let mut project = test_project("recents-duplicate-file-stems");
+    project.add_source("notes/코딩 테스트.maki", "--^ title: 코딩 테스트\n");
+    project.add_source(
         "notes/제2차 미래 먹거리 계획/코딩 테스트.maki",
         "--^ title: 코딩 테스트\n",
     );
-    write_note(&project, "notes/A/개발 & 계획.maki");
-    write_note(&project, "archive/A/개발 & 계획.maki");
-    write_note(&project, "notes/로드맵.maki");
-    write_note(&project, "notes/A/로드맵.maki");
-    write_note(&project, "notes/B/A/로드맵.maki");
-    write_note(&project, "notes/안내서.v2.maki");
-    write_note(&project, "archive/안내서.v2.maki");
-    write_note(&project, "notes/고유 문서.maki");
-    write_note_with_content(&project, "authored/one.maki", "--^ title: 같은 제목\n");
-    write_note_with_content(&project, "authored/two.maki", "--^ title: 같은 제목\n");
-    write_note_with_content(
-        &project,
-        "authored/같은 제목.maki",
-        "--^ title: 같은 제목\n",
-    );
-    write_note(&project, "fallback/같은 제목.maki");
+    project.add_empty_source("notes/A/개발 & 계획.maki");
+    project.add_empty_source("archive/A/개발 & 계획.maki");
+    project.add_empty_source("notes/로드맵.maki");
+    project.add_empty_source("notes/A/로드맵.maki");
+    project.add_empty_source("notes/B/A/로드맵.maki");
+    project.add_empty_source("notes/안내서.v2.maki");
+    project.add_empty_source("archive/안내서.v2.maki");
+    project.add_empty_source("notes/고유 문서.maki");
+    project.add_source("authored/one.maki", "--^ title: 같은 제목\n");
+    project.add_source("authored/two.maki", "--^ title: 같은 제목\n");
+    project.add_source("authored/같은 제목.maki", "--^ title: 같은 제목\n");
+    project.add_empty_source("fallback/같은 제목.maki");
 
-    let mut maki = Maki::load(&project.root).unwrap();
+    let mut maki = project.compile();
     let titles_by_path = maki
         .recent_entries()
         .iter()
@@ -250,11 +240,11 @@ fn recent_entries_disambiguate_duplicate_file_stems_with_minimal_path_suffixes()
 
 #[test]
 fn recent_entries_keep_snapshot_titles_after_modified_times_are_applied() {
-    let project = temp_project("snapshot-recents-title");
+    let mut project = test_project("snapshot-recents-title");
     let modified = UNIX_EPOCH + Duration::from_secs(1_000);
-    write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
+    project.add_source("alpha.maki", "--^ title: Alpha Note\n\nbody");
 
-    let mut maki = Maki::load(&project.root).unwrap();
+    let mut maki = project.compile();
     maki.apply_recent_modified_times(&std::collections::BTreeMap::from([(
         PathBuf::from("alpha.maki"),
         modified,
@@ -269,12 +259,12 @@ fn recent_entries_keep_snapshot_titles_after_modified_times_are_applied() {
 
 #[test]
 fn search_titles_matches_case_insensitive_title_substrings() {
-    let project = temp_project("search-title-match");
-    write_note_with_content(&project, "alpha.maki", "--^ title: Alpha Note\n\nbody");
-    write_note_with_content(&project, "beta.maki", "--^ title: Beta Note\n\nbody");
-    write_note_with_content(&project, "gamma.maki", "--^ title: Gamma\n\nbody");
+    let mut project = test_project("search-title-match");
+    project.add_source("alpha.maki", "--^ title: Alpha Note\n\nbody");
+    project.add_source("beta.maki", "--^ title: Beta Note\n\nbody");
+    project.add_source("gamma.maki", "--^ title: Gamma\n\nbody");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let titles = maki
         .search_titles("NOTE", 10)
         .iter()
@@ -285,12 +275,12 @@ fn search_titles_matches_case_insensitive_title_substrings() {
 }
 
 #[test]
-fn loaded_project_uses_an_immutable_source_snapshot() {
-    let project = temp_project("immutable-source-snapshot");
-    write_note_with_content(&project, "index.maki", "Before reload");
+fn compiled_project_uses_an_immutable_source_snapshot() {
+    let mut project = test_project("immutable-source-snapshot");
+    project.add_source("index.maki", "Before reload");
 
-    let maki = Maki::load(&project.root).unwrap();
-    write_note_with_content(&project, "index.maki", "After reload");
+    let maki = project.compile();
+    project.add_source("index.maki", "After reload");
 
     assert_eq!(
         maki.get_raw_content(Path::new("index.maki")).unwrap(),
@@ -302,8 +292,8 @@ fn loaded_project_uses_an_immutable_source_snapshot() {
             .contains("Before reload")
     );
     assert!(
-        Maki::load(&project.root)
-            .unwrap()
+        project
+            .compile()
             .render_html(Path::new("index.maki"))
             .unwrap()
             .contains("After reload")

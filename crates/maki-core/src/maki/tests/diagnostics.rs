@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn diagnostics_collect_parse_warnings_and_link_resolution_issues() {
-    let project = temp_project("diagnostics");
-    write_note_with_content(
-        &project,
+    let mut project = test_project("diagnostics");
+    project.add_source(
         "start.maki",
         r#"--^ invalid-property
 
@@ -20,10 +19,10 @@ See [[missing]], [Ghost][], and [[same]].
 See [[container-missing]].
 ---"#,
     );
-    write_note(&project, "alpha/same.maki");
-    write_note(&project, "beta/same.maki");
+    project.add_empty_source("alpha/same.maki");
+    project.add_empty_source("beta/same.maki");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let diagnostics = maki.diagnostics();
 
     assert!(diagnostics.iter().any(|diagnostic| {
@@ -79,13 +78,13 @@ See [[container-missing]].
 
 #[test]
 fn diagnostics_preserve_note_order_when_source_paths_sort_differently() {
-    let project = temp_project("diagnostic-order");
-    write_note_with_content(&project, "foo.maki", "[[missing-parent]]");
-    write_note_with_content(&project, "foo/bar.maki", "[[missing-child]]");
+    let mut project = test_project("diagnostic-order");
+    project.add_source("foo.maki", "[[missing-parent]]");
+    project.add_source("foo/bar.maki", "[[missing-child]]");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let paths = maki
-        .diagnostics_without_external_links()
+        .diagnostics()
         .into_iter()
         .filter_map(|diagnostic| {
             matches!(diagnostic.kind(), ProjectDiagnosticKind::BrokenLink { .. })
@@ -100,16 +99,15 @@ fn diagnostics_preserve_note_order_when_source_paths_sort_differently() {
 }
 
 #[test]
-fn diagnostics_without_external_links_skips_external_link_checks() {
-    let project = temp_project("local-diagnostics");
-    write_note_with_content(
-        &project,
+fn pure_diagnostics_do_not_include_external_link_results() {
+    let mut project = test_project("local-diagnostics");
+    project.add_source(
         "start.maki",
         "See [Down][] and [[missing]].\n\n[Down]: <https://down.example/path>",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
-    let diagnostics = maki.diagnostics_without_external_links();
+    let maki = project.compile();
+    let diagnostics = maki.diagnostics();
 
     assert!(diagnostics.iter().any(|diagnostic| {
         matches!(
@@ -124,10 +122,9 @@ fn diagnostics_without_external_links_skips_external_link_checks() {
 }
 
 #[test]
-fn diagnostics_collect_broken_external_links() {
-    let project = temp_project("external-link-diagnostics");
-    write_note_with_content(
-        &project,
+fn diagnostics_compose_supplied_broken_external_link_results() {
+    let mut project = test_project("external-link-diagnostics");
+    project.add_source(
         "start.maki",
         r#"See [Down][], <https://ok.example/docs>, and `https://code.example`.
 
@@ -138,26 +135,28 @@ See <https://down.example/path>.
 ---"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
-    let checked = RefCell::new(vec![]);
-    let diagnostics = maki.diagnostics_with_external_link_checker(&|target| {
-        checked.borrow_mut().push(target.to_string());
-        if target == "https://down.example/path" {
+    let maki = project.compile();
+    let external_links = maki
+        .external_links()
+        .iter()
+        .map(|link| link.target.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        external_links,
+        vec!["https://down.example/path", "https://ok.example/docs"]
+    );
+
+    let checks = BTreeMap::from([
+        (
+            "https://down.example/path".to_string(),
             ExternalLinkCheck::Broken {
                 reason: "HTTP 404".to_string(),
-            }
-        } else {
-            ExternalLinkCheck::Ok
-        }
-    });
+            },
+        ),
+        ("https://ok.example/docs".to_string(), ExternalLinkCheck::Ok),
+    ]);
+    let diagnostics = maki.diagnostics_with_external_link_checks(&checks);
 
-    assert_eq!(
-        checked.into_inner(),
-        vec![
-            "https://down.example/path".to_string(),
-            "https://ok.example/docs".to_string(),
-        ]
-    );
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.source_path() == Path::new("start.maki")
             && matches!(
@@ -178,28 +177,22 @@ See <https://down.example/path>.
 
 #[test]
 fn diagnostics_collect_links_inside_strong_inline() {
-    let project = temp_project("strong-link-diagnostics");
-    write_note_with_content(
-        &project,
+    let mut project = test_project("strong-link-diagnostics");
+    project.add_source(
         "start.maki",
         r#"See *[[missing]] and [Missing][] and <https://down.example/path>*.
 
 [Missing]: [[/missing-note]]"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
-    let checked = RefCell::new(vec![]);
-    let diagnostics = maki.diagnostics_with_external_link_checker(&|target| {
-        checked.borrow_mut().push(target.to_string());
+    let maki = project.compile();
+    let checks = BTreeMap::from([(
+        "https://down.example/path".to_string(),
         ExternalLinkCheck::Broken {
             reason: "HTTP 404".to_string(),
-        }
-    });
-
-    assert_eq!(
-        checked.into_inner(),
-        vec!["https://down.example/path".to_string()]
-    );
+        },
+    )]);
+    let diagnostics = maki.diagnostics_with_external_link_checks(&checks);
     assert!(diagnostics.iter().any(|diagnostic| {
         matches!(
             diagnostic.kind(),
@@ -223,26 +216,25 @@ fn diagnostics_collect_links_inside_strong_inline() {
 
 #[test]
 fn diagnostics_do_not_report_missing_footnote_definitions() {
-    let project = temp_project("missing-footnote-diagnostics");
-    write_note_with_content(&project, "start.maki", "Missing [^note] stays text.");
+    let mut project = test_project("missing-footnote-diagnostics");
+    project.add_source("start.maki", "Missing [^note] stays text.");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
-    assert!(maki.diagnostics_without_external_links().is_empty());
+    assert!(maki.diagnostics().is_empty());
 }
 
 #[test]
 fn diagnostics_report_unresolved_explicit_references_but_not_bare_markers() {
-    let project = temp_project("unresolved-reference-diagnostics");
-    write_note_with_content(
-        &project,
+    let mut project = test_project("unresolved-reference-diagnostics");
+    project.add_source(
         "start.maki",
         "[missing] [^missing] [missing][] [title][ missing ] [^missing][] [^][ missing ]",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let unresolved = maki
-        .diagnostics_without_external_links()
+        .diagnostics()
         .into_iter()
         .filter(|diagnostic| {
             matches!(
@@ -263,10 +255,9 @@ fn diagnostics_report_unresolved_explicit_references_but_not_bare_markers() {
 }
 
 #[test]
-fn reference_values_are_checked_once_according_to_their_shared_shape() {
-    let project = temp_project("reference-value-shape-diagnostics");
-    write_note_with_content(
-        &project,
+fn reference_values_contribute_one_external_link_for_their_shared_shape() {
+    let mut project = test_project("reference-value-shape-diagnostics");
+    project.add_source(
         "start.maki",
         r#"[raw][] [prose][]
 
@@ -274,9 +265,9 @@ fn reference_values_are_checked_once_according_to_their_shared_shape() {
 [prose]: <https://example.com/a> has details"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let broken_targets = maki
-        .diagnostics_without_external_links()
+        .diagnostics()
         .into_iter()
         .filter_map(|diagnostic| match diagnostic.kind() {
             ProjectDiagnosticKind::BrokenLink { target } => Some(target.clone()),
@@ -286,28 +277,34 @@ fn reference_values_are_checked_once_according_to_their_shared_shape() {
 
     assert_eq!(broken_targets, vec!["missing".to_string()]);
 
-    let checked = RefCell::new(vec![]);
-    maki.diagnostics_with_external_link_checker(&|target| {
-        checked.borrow_mut().push(target.to_string());
-        ExternalLinkCheck::Ok
-    });
     assert_eq!(
-        checked.into_inner(),
-        vec!["https://example.com/a".to_string()]
+        maki.external_links()
+            .iter()
+            .map(|link| link.target.as_str())
+            .collect::<Vec<_>>(),
+        vec!["https://example.com/a"]
+    );
+    let checks = BTreeMap::from([("https://example.com/a".to_string(), ExternalLinkCheck::Ok)]);
+    assert!(
+        maki.diagnostics_with_external_link_checks(&checks)
+            .iter()
+            .all(|diagnostic| !matches!(
+                diagnostic.kind(),
+                ProjectDiagnosticKind::BrokenExternalLink { .. }
+            ))
     );
 }
 
 #[test]
 fn diagnostics_report_every_duplicate_id_declaration_with_its_line() {
-    let project = temp_project("duplicate-id-diagnostics");
-    write_note_with_content(
-        &project,
+    let mut project = test_project("duplicate-id-diagnostics");
+    project.add_source(
         "start.maki",
         "First\n--^ id: shared\n\nSecond\n--^ id: shared",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
-    let diagnostics = maki.diagnostics_without_external_links();
+    let maki = project.compile();
+    let diagnostics = maki.diagnostics();
     let duplicate_lines = diagnostics
         .iter()
         .filter_map(|diagnostic| match diagnostic.kind() {
@@ -323,9 +320,8 @@ fn diagnostics_report_every_duplicate_id_declaration_with_its_line() {
 
 #[test]
 fn diagnostics_ignore_links_inside_raw_quotes() {
-    let project = temp_project("raw-quote-diagnostics");
-    write_note_with_content(
-        &project,
+    let mut project = test_project("raw-quote-diagnostics");
+    project.add_source(
         "start.maki",
         r#"--v mode: pre
 > [[not-a-link]]
@@ -336,7 +332,7 @@ fn diagnostics_ignore_links_inside_raw_quotes() {
 ---"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
-    assert!(maki.diagnostics_without_external_links().is_empty());
+    assert!(maki.diagnostics().is_empty());
 }

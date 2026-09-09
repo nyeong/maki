@@ -13,6 +13,7 @@ description = "Language Server Protocol support for Maki"
 lsp-server = "0.7.9"
 lsp-types = "0.95.1"
 maki-core = { version = "0.1.0", path = "../maki-core" }
+maki-fs = { version = "0.1.0", path = "../maki-fs" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ureq = { version = "2.12.1", default-features = false, features = ["tls"] }
