@@ -24,8 +24,8 @@ use lsp_types::{
 use maki_core::analysis::{
     AnalysisBlockKind, AnalysisDiagnosticKind, DateMarkerOccurrence, DateOrigin,
     DateTargetIdentity, DefinitionTarget, DefinitionTargetKind, DocumentAnalysis,
-    HeadingOccurrence, LinkResolution, ProjectAnalysis, ReferenceDefinitionId, SourceSnapshot,
-    analyze_project, property_description,
+    DocumentSelection, HeadingOccurrence, LinkResolution, ProjectAnalysis, ProjectSnapshot,
+    ReferenceDefinitionId, property_description,
 };
 use maki_core::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget};
 use maki_core::parser::DateStampKind;
@@ -142,9 +142,8 @@ fn workspace_root(params: &InitializeParams) -> LspResult<PathBuf> {
 
 struct Server {
     source_root: PathBuf,
-    documents: BTreeMap<PathBuf, String>,
+    snapshot: ProjectSnapshot,
     document_versions: BTreeMap<PathBuf, i32>,
-    analysis: ProjectAnalysis,
     page_title_provider: Arc<dyn PageTitleProvider>,
     extraction_capabilities: code_actions::ExtractionCapabilities,
 }
@@ -163,13 +162,12 @@ impl Server {
     ) -> LspResult<Self> {
         let source_root = source_root(&workspace_root)?;
         let documents = load_documents(&source_root)?;
-        let analysis = analyze_documents(&documents);
+        let snapshot = ProjectSnapshot::compile(documents);
 
         Ok(Self {
             source_root,
-            documents,
+            snapshot,
             document_versions: BTreeMap::new(),
-            analysis,
             page_title_provider: Arc::new(HttpPageTitleProvider::new()),
             extraction_capabilities,
         })
@@ -264,9 +262,7 @@ impl Server {
                 if let Some(path) = self.relative_path(&params.text_document.uri) {
                     self.document_versions
                         .insert(path.clone(), params.text_document.version);
-                    self.documents
-                        .insert(path.clone(), params.text_document.text);
-                    self.reanalyze();
+                    self.replace_document(path, Some(params.text_document.text));
                     self.publish_diagnostics(connection)?;
                 }
             }
@@ -280,8 +276,7 @@ impl Server {
                 {
                     self.document_versions
                         .insert(path.clone(), params.text_document.version);
-                    self.documents.insert(path, change.text);
-                    self.reanalyze();
+                    self.replace_document(path, Some(change.text));
                     self.publish_diagnostics(connection)?;
                 }
             }
@@ -290,16 +285,9 @@ impl Server {
                     serde_json::from_value(notification.params)?;
                 if let Some(path) = self.relative_path(&params.text_document.uri) {
                     let absolute = self.source_root.join(&path);
-                    match std::fs::read_to_string(absolute) {
-                        Ok(source) => {
-                            self.documents.insert(path.clone(), source);
-                        }
-                        Err(_) => {
-                            self.documents.remove(&path);
-                        }
-                    }
+                    let source = std::fs::read_to_string(absolute).ok();
+                    self.replace_document(path.clone(), source);
                     self.document_versions.remove(&path);
-                    self.reanalyze();
                     self.publish_empty_diagnostics(connection, &path)?;
                     self.publish_diagnostics(connection)?;
                 }
@@ -309,8 +297,8 @@ impl Server {
         Ok(())
     }
 
-    fn reanalyze(&mut self) {
-        self.analysis = analyze_documents(&self.documents);
+    fn replace_document(&mut self, path: PathBuf, source: Option<String>) {
+        self.snapshot = self.snapshot.with_source(path, source);
     }
 
     fn relative_path(&self, uri: &Url) -> Option<PathBuf> {
@@ -326,18 +314,19 @@ impl Server {
 
     fn document_for_uri(&self, uri: &Url) -> Option<(&str, &DocumentAnalysis)> {
         let path = self.relative_path(uri)?;
-        let source = self.documents.get(&path)?;
-        let analysis = self.analysis.document(&path)?;
+        let source = self.snapshot.source(&path)?;
+        let analysis = self.snapshot.analysis().document(&path)?;
         Some((source, analysis))
     }
 
     fn publish_diagnostics(&self, connection: &Connection) -> LspResult<()> {
         for path in self.document_versions.keys() {
-            let Some(source) = self.documents.get(path) else {
+            let Some(source) = self.snapshot.source(path) else {
                 continue;
             };
             let diagnostics = self
-                .analysis
+                .snapshot
+                .analysis()
                 .diagnostics
                 .iter()
                 .filter(|diagnostic| diagnostic.path == *path)
@@ -423,8 +412,8 @@ impl Server {
     fn references(&self, params: ReferenceParams) -> Option<Vec<Location>> {
         let uri = &params.text_document_position.text_document.uri;
         let path = self.relative_path(uri)?;
-        let source = self.documents.get(&path)?;
-        let document = self.analysis.document(&path)?;
+        let source = self.snapshot.source(&path)?;
+        let document = self.snapshot.analysis().document(&path)?;
         let offset = lsp_offset(source, params.text_document_position.position)?;
 
         if let Some(definition_id) = reference_use_definition_id_at(document, offset) {
@@ -471,7 +460,7 @@ impl Server {
         target: &DateTargetIdentity,
         kinds: impl IntoIterator<Item = DateStampKind>,
     ) -> Vec<Location> {
-        let indexed_markers = self.analysis.date_marker_locations(target);
+        let indexed_markers = self.snapshot.analysis().date_marker_locations(target);
         let mut locations = Vec::new();
 
         for kind in kinds {
@@ -563,7 +552,7 @@ impl Server {
             }
             DefinitionTargetKind::Heading => {
                 let anchor = target.fragment.as_ref()?;
-                let document = self.analysis.document(&target.path)?;
+                let document = self.snapshot.analysis().document(&target.path)?;
                 let heading = document
                     .headings
                     .iter()
@@ -610,7 +599,7 @@ impl Server {
             locations.extend(self.declaration_locations(identity));
         }
 
-        for document in self.analysis.documents().values() {
+        for document in self.snapshot.analysis().documents().values() {
             for link in &document.note_links {
                 let Some(LinkResolution::Found(target)) = link.resolution.as_ref() else {
                     continue;
@@ -628,7 +617,8 @@ impl Server {
     fn declaration_locations(&self, identity: &ReferenceIdentity) -> Vec<Location> {
         match identity {
             ReferenceIdentity::Document(path) => self
-                .analysis
+                .snapshot
+                .analysis()
                 .document(path)
                 .and_then(|document| {
                     (document.document_span.start < document.document_span.end)
@@ -638,7 +628,8 @@ impl Server {
                 .into_iter()
                 .collect(),
             ReferenceIdentity::Heading { path, anchor } => self
-                .analysis
+                .snapshot
+                .analysis()
                 .document(path)
                 .into_iter()
                 .flat_map(|document| &document.headings)
@@ -646,7 +637,8 @@ impl Server {
                 .filter_map(|heading| self.symbol_location(path, heading.title_span))
                 .collect(),
             ReferenceIdentity::Id { path, id } => self
-                .analysis
+                .snapshot
+                .analysis()
                 .document(path)
                 .into_iter()
                 .flat_map(|document| &document.block_ids)
@@ -724,11 +716,11 @@ impl Server {
     fn completion(&self, params: CompletionParams) -> Option<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
         let path = self.relative_path(uri)?;
-        let source = self.documents.get(&path)?;
-        self.analysis.document(&path)?;
+        let source = self.snapshot.source(&path)?;
+        self.snapshot.analysis().document(&path)?;
         let offset = lsp_offset(source, params.text_document_position.position)?;
         Some(CompletionResponse::Array(completion_items(
-            &self.analysis,
+            self.snapshot.analysis(),
             &path,
             source,
             offset,
@@ -747,7 +739,7 @@ impl Server {
         let query = params.query.to_lowercase();
         let mut symbols = Vec::new();
 
-        for document in self.analysis.documents().values() {
+        for document in self.snapshot.analysis().documents().values() {
             if (query.is_empty() || document.title.to_lowercase().contains(&query))
                 && let Some(location) = self.symbol_location(&document.path, document.document_span)
             {
@@ -794,7 +786,7 @@ impl Server {
     }
 
     fn symbol_location(&self, path: &Path, span: SourceSpan) -> Option<Location> {
-        let source = self.documents.get(path)?;
+        let source = self.snapshot.source(path)?;
         let uri = Url::from_file_path(self.source_root.join(path)).ok()?;
         Some(Location::new(uri, lsp_range(source, span)?))
     }
@@ -898,15 +890,11 @@ fn load_documents(root: &Path) -> LspResult<BTreeMap<PathBuf, String>> {
     Ok(documents)
 }
 
+#[cfg(test)]
 fn analyze_documents(documents: &BTreeMap<PathBuf, String>) -> ProjectAnalysis {
-    let snapshots = documents
-        .iter()
-        .map(|(path, source)| SourceSnapshot {
-            path: path.as_path(),
-            source,
-        })
-        .collect::<Vec<_>>();
-    analyze_project(&snapshots)
+    ProjectSnapshot::compile(documents.clone())
+        .analysis()
+        .clone()
 }
 
 fn completion_items(
@@ -1074,20 +1062,13 @@ fn document_completion_items(
             })
             .collect(),
         DocumentSelector::Child(_) => {
-            let Some(current) = project.document(current_path) else {
-                return Vec::new();
-            };
-            let child_root = format!("{}/", current.canonical_path);
             let mut items = project
-                .note_candidates()
-                .filter_map(|document| {
-                    let relative = document.canonical_path.strip_prefix(&child_root)?;
-                    prefix_matches(relative, prefix).then_some((document, relative))
-                })
-                .map(|(document, relative)| {
+                .descendant_documents(current_path)
+                .filter(|candidate| prefix_matches(candidate.relative_coordinate, prefix))
+                .map(|candidate| {
                     completion_item(
-                        format!("+{relative}"),
-                        document.title.clone(),
+                        format!("+{}", candidate.relative_coordinate),
+                        candidate.document.title.clone(),
                         replace_range,
                     )
                 })
@@ -1124,105 +1105,14 @@ fn selected_document<'a>(
     current_path: &Path,
     selector: DocumentSelector<'_>,
 ) -> Option<&'a DocumentAnalysis> {
-    match selector {
-        DocumentSelector::Current => project.document(current_path),
-        DocumentSelector::Root(target) => coordinate_document(project, target),
-        DocumentSelector::Child(target) => {
-            let target = normalize_document_target(target);
-            if !is_normal_relative_target(target) {
-                return None;
-            }
-            let current = project.document(current_path)?;
-            coordinate_document(project, &format!("{}/{target}", current.canonical_path))
-        }
-        DocumentSelector::Legacy(target) => legacy_document(project, current_path, target),
+    match project.select_document(current_path, selector) {
+        DocumentSelection::Found(document) => Some(document),
+        DocumentSelection::Broken | DocumentSelection::Ambiguous => None,
     }
-}
-
-fn coordinate_document<'a>(
-    project: &'a ProjectAnalysis,
-    target: &str,
-) -> Option<&'a DocumentAnalysis> {
-    let target = normalize_document_target(target);
-    project
-        .note_candidates()
-        .find(|document| document.canonical_path == target)
-        .or_else(|| {
-            let normalized = target.to_lowercase();
-            unique_document(
-                project
-                    .note_candidates()
-                    .filter(|document| document.canonical_path.to_lowercase() == normalized),
-            )
-        })
-}
-
-fn legacy_document<'a>(
-    project: &'a ProjectAnalysis,
-    current_path: &Path,
-    target: &str,
-) -> Option<&'a DocumentAnalysis> {
-    let target = normalize_document_target(target);
-    if target.is_empty() {
-        return None;
-    }
-    if let Some(exact) = project
-        .note_candidates()
-        .find(|document| document.canonical_path == target)
-    {
-        return Some(exact);
-    }
-    if target.contains('/') {
-        return coordinate_document(project, target);
-    }
-
-    let sibling = current_path
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join(format!("{target}.maki"));
-    let sibling = canonical_source_path(&sibling);
-    if let Some(document) = coordinate_document(project, &sibling) {
-        return Some(document);
-    }
-
-    let normalized = target.to_lowercase();
-    unique_document(project.note_candidates().filter(|document| {
-        document
-            .path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .is_some_and(|stem| stem.to_lowercase() == normalized)
-    }))
-}
-
-fn unique_document<'a>(
-    mut candidates: impl Iterator<Item = &'a DocumentAnalysis>,
-) -> Option<&'a DocumentAnalysis> {
-    let candidate = candidates.next()?;
-    candidates.next().is_none().then_some(candidate)
-}
-
-fn normalize_document_target(target: &str) -> &str {
-    target.strip_suffix(".maki").unwrap_or(target)
 }
 
 fn prefix_matches(value: &str, prefix: &str) -> bool {
     value.to_lowercase().starts_with(&prefix.to_lowercase())
-}
-
-fn canonical_source_path(path: &Path) -> String {
-    let path = path.with_extension("");
-    path.strip_prefix(".")
-        .unwrap_or(&path)
-        .to_string_lossy()
-        .into_owned()
-}
-
-fn is_normal_relative_target(target: &str) -> bool {
-    !target.is_empty()
-        && target
-            .split('/')
-            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
 fn heading_symbols(source: &str, headings: &[HeadingOccurrence]) -> Vec<DocumentSymbol> {
@@ -1294,7 +1184,7 @@ fn link_hover(link: &maki_core::analysis::NoteLinkOccurrence) -> String {
             };
             format!(
                 "Resolves to `/{document}{selector}`.",
-                document = canonical_source_path(&target.path)
+                document = &target.canonical_path
             )
         }
         Some(LinkResolution::BrokenNote) => "Target note was not found.".to_string(),
@@ -1413,8 +1303,7 @@ mod tests {
     fn test_server(documents: BTreeMap<PathBuf, String>) -> Server {
         Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -1718,6 +1607,7 @@ mod tests {
         let mut server =
             Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
         let (server_connection, _client_connection) = Connection::memory();
+        let disk_revision = server.snapshot.revision();
         let change = |version, text: &str| Notification {
             method: "textDocument/didChange".to_string(),
             params: serde_json::to_value(DidChangeTextDocumentParams {
@@ -1738,10 +1628,8 @@ mod tests {
             .handle_notification(&server_connection, change(0, "ignored-before-open"))
             .unwrap();
         assert!(!server.document_versions.contains_key(&path));
-        assert_eq!(
-            server.documents.get(&path).map(String::as_str),
-            Some("disk")
-        );
+        assert_eq!(server.snapshot.source(&path), Some("disk"));
+        assert_eq!(server.snapshot.revision(), disk_revision);
 
         server
             .handle_notification(
@@ -1761,19 +1649,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(server.document_versions.get(&path), Some(&1));
-        assert_eq!(
-            server.documents.get(&path).map(String::as_str),
-            Some("first")
-        );
+        assert_eq!(server.snapshot.source(&path), Some("first"));
+        let open_revision = server.snapshot.revision();
+        assert_ne!(open_revision, disk_revision);
 
         server
             .handle_notification(&server_connection, change(2, "second"))
             .unwrap();
         assert_eq!(server.document_versions.get(&path), Some(&2));
-        assert_eq!(
-            server.documents.get(&path).map(String::as_str),
-            Some("second")
-        );
+        assert_eq!(server.snapshot.source(&path), Some("second"));
+        let changed_revision = server.snapshot.revision();
+        assert_ne!(changed_revision, open_revision);
 
         server
             .handle_notification(
@@ -1788,19 +1674,16 @@ mod tests {
             )
             .unwrap();
         assert!(!server.document_versions.contains_key(&path));
-        assert_eq!(
-            server.documents.get(&path).map(String::as_str),
-            Some("disk")
-        );
+        assert_eq!(server.snapshot.source(&path), Some("disk"));
+        let closed_revision = server.snapshot.revision();
+        assert_ne!(closed_revision, changed_revision);
 
         server
             .handle_notification(&server_connection, change(3, "ignored-after-close"))
             .unwrap();
         assert!(!server.document_versions.contains_key(&path));
-        assert_eq!(
-            server.documents.get(&path).map(String::as_str),
-            Some("disk")
-        );
+        assert_eq!(server.snapshot.source(&path), Some("disk"));
+        assert_eq!(server.snapshot.revision(), closed_revision);
     }
 
     #[test]
@@ -1826,10 +1709,14 @@ mod tests {
         let server = Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
 
         assert_eq!(
-            server.documents.keys().cloned().collect::<Vec<_>>(),
+            server
+                .snapshot
+                .source_paths()
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>(),
             vec![PathBuf::from("index.maki")]
         );
-        assert_eq!(server.analysis.documents().len(), 1);
+        assert_eq!(server.snapshot.analysis().documents().len(), 1);
 
         let hidden_uri = Url::from_file_path(
             workspace
@@ -2010,8 +1897,7 @@ mod tests {
         let documents = BTreeMap::from([(PathBuf::from("index.maki"), source.to_string())]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -2279,6 +2165,97 @@ mod tests {
                 document_uri("index.maki"),
                 Range::new(Position::new(0, 1), Position::new(0, 4)),
             )]
+        );
+    }
+
+    #[test]
+    fn quoted_maki_navigation_uses_root_document_ranges() {
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("index.maki"),
+                "> [local][]\r\n> [local]: [[target]]\r\n".to_string(),
+            ),
+            (
+                PathBuf::from("target.maki"),
+                "--^ title: Target\n\nbody\n".to_string(),
+            ),
+        ]);
+        let server = test_server(documents);
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(0, 4)),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(1, 3), Position::new(1, 8)),
+            )
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(1, 14)),
+            Location::new(
+                document_uri("target.maki"),
+                Range::new(Position::new(0, 11), Position::new(0, 17)),
+            )
+        );
+    }
+
+    #[test]
+    fn deeply_quoted_references_keep_lexical_targets_dates_and_document_links() {
+        let source = concat!(
+            "> [shared][]\r\n",
+            "> > [shared][] [day][] [site][]\r\n",
+            "> [shared]: [[outer-target]]\r\n",
+            "\r\n",
+            "[shared]: [[root-target]]\r\n",
+            "[day]: [2026-09-07]\r\n",
+            "[site]: <https://root.example/>\r\n",
+        );
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(1, 6)),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(2, 3), Position::new(2, 9)),
+            )
+        );
+        assert_eq!(
+            definition_at(&server, "index.maki", Position::new(1, 17)),
+            Location::new(
+                document_uri("index.maki"),
+                Range::new(Position::new(5, 1), Position::new(5, 4)),
+            )
+        );
+
+        let hover = server
+            .hover(HoverParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams::new(
+                    lsp_types::TextDocumentIdentifier::new(document_uri("index.maki")),
+                    Position::new(1, 17),
+                ),
+                work_done_progress_params: Default::default(),
+            })
+            .unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("nested date hover should use markup content");
+        };
+        assert_eq!(markup.value, "Maki date: `2026-09-07` (visible inline)");
+        assert_eq!(
+            hover.range,
+            Some(Range::new(Position::new(1, 15), Position::new(1, 22)))
+        );
+
+        let links = document_links_for(&server, "index.maki");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().map(Url::as_str),
+            Some("https://root.example/")
+        );
+        assert_eq!(
+            links[0].range,
+            Range::new(Position::new(1, 23), Position::new(1, 31))
         );
     }
 
@@ -2600,10 +2577,7 @@ mod tests {
         server
             .document_versions
             .insert(PathBuf::from("declaration.maki"), 1);
-        server
-            .documents
-            .insert(PathBuf::from("declaration.maki"), unsaved.to_string());
-        server.reanalyze();
+        server.replace_document(PathBuf::from("declaration.maki"), Some(unsaved.to_string()));
 
         assert_eq!(
             definitions_at(&server, "reference.maki", Position::new(0, 4)),
@@ -2767,8 +2741,7 @@ mod tests {
         ]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -2868,13 +2841,16 @@ mod tests {
         ]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
         };
-        let document = server.analysis.document(Path::new("current.maki")).unwrap();
+        let document = server
+            .snapshot
+            .analysis()
+            .document(Path::new("current.maki"))
+            .unwrap();
 
         assert_eq!(
             server.reference_identity_at(document, source.find("/other").unwrap() + 1),
@@ -2907,8 +2883,7 @@ mod tests {
         ]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -2940,8 +2915,7 @@ mod tests {
         let documents = BTreeMap::from([(PathBuf::from("open.maki"), source.to_string())]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -2980,8 +2954,7 @@ mod tests {
         let documents = BTreeMap::from([(PathBuf::from("open.maki"), source.to_string())]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::from([(PathBuf::from("open.maki"), 1)]),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -3057,8 +3030,7 @@ mod tests {
         )]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),
@@ -3095,8 +3067,7 @@ mod tests {
         )]);
         let server = Server {
             source_root: PathBuf::from("/workspace"),
-            analysis: analyze_documents(&documents),
-            documents,
+            snapshot: ProjectSnapshot::compile(documents),
             document_versions: BTreeMap::new(),
             page_title_provider: no_page_title_provider(),
             extraction_capabilities: all_extraction_capabilities(),

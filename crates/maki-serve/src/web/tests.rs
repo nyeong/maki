@@ -883,7 +883,11 @@ fn test_project_index_json_exports_analysis() {
 
 = Intro
 
-See [[other#Target]] on [2026-08-25]."#,
+See [[other#Target]] on [2026-08-25].
+
+> [nested-day][]
+
+[nested-day]: [2026-08-27]"#,
     )
     .unwrap();
     fs::write(root.join("other.maki"), "= Target\n").unwrap();
@@ -900,7 +904,8 @@ See [[other#Target]] on [2026-08-25]."#,
         response.get_header("Content-Type"),
         Some("application/json; charset=utf-8")
     );
-    assert!(body.contains("\"schema_version\":1"));
+    assert!(body.contains("\"schema_version\":2"));
+    assert!(body.contains("\"revision\":"));
     assert!(body.contains("\"documents\":["));
     assert!(body.contains("\"source_path\":\"home.maki\""));
     assert!(body.contains("\"headings\":["));
@@ -909,10 +914,15 @@ See [[other#Target]] on [2026-08-25]."#,
     assert!(body.contains("\"target\":\"other#Target\""));
     assert!(body.contains("\"target_span\":"));
     assert!(body.contains("\"resolution\":{\"status\":\"found\""));
+    assert!(body.contains("\"canonical_path\":\"other\""));
     assert!(body.contains("\"kind\":\"heading\",\"fragment\":\"Target\""));
     assert!(body.contains("\"dates\":["));
     assert!(body.contains("\"kind\":\"scheduled\""));
+    assert!(body.contains("\"owner\":{\"kind\":\"document\"}"));
     assert!(body.contains("\"property_key\":\"scheduled\""));
+    assert!(body.contains("\"target\":{\"kind\":\"day\",\"value\":\"2026-08-26\"}"));
+    assert!(body.contains("\"body\":\"2026-08-27\""));
+    assert!(body.contains("\"target\":{\"kind\":\"day\",\"value\":\"2026-08-27\"}"));
     assert!(body.contains("\"kind\":\"reference\""));
 }
 
@@ -1484,7 +1494,7 @@ fn test_diagnostics_page_lists_project_issues() {
     assert!(body.contains("<script src=\"/.maki/assets/maki-toc.js\"></script>"));
     assert!(body.contains("2 issue(s)"));
     assert!(body.contains("<h3 id=\"[home.maki](/home)\"><a href=\"/home\">home.maki</a></h3>"));
-    assert!(body.contains("broken link: missing"));
+    assert!(body.contains("broken link: line 1: missing"));
     assert!(body.contains("unresolved reference: line 1: Ghost"));
     assert!(!body.contains("maki-diagnostics-table"));
 }

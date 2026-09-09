@@ -85,7 +85,7 @@ fn maki_build_reports_project_diagnostic_summary_to_stderr() {
     assert!(stderr.contains(
         "diagnostics: 2 issue(s): 0 duplicate id(s), 1 unresolved reference(s), 1 broken link(s)"
     ));
-    assert!(stderr.contains("warning: home.maki: broken link: missing"));
+    assert!(stderr.contains("warning: home.maki:3: broken link: missing"));
     assert!(stderr.contains("warning: home.maki:3: unresolved reference: Ghost"));
 }
 

@@ -4,14 +4,17 @@ use super::types::{ListKind, TableRowKind, TodoState};
 use crate::source::SourceSpan;
 use std::collections::BTreeSet;
 
-#[derive(Debug, PartialEq)]
-pub(super) enum PropertyKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PropertyDirection {
     Previous,
     Next,
 }
 
+pub(super) type PropertyKind = PropertyDirection;
+
 #[derive(Debug, PartialEq)]
 pub(super) struct PropertyItemDraft<'a> {
+    pub(super) raw_line: &'a str,
     pub(super) key: &'a str,
     pub(super) value: &'a str,
 }
@@ -26,8 +29,12 @@ pub(super) struct ReferenceDefinitionDraft<'a> {
 }
 
 impl<'a> PropertyItemDraft<'a> {
-    pub(super) fn new(key: &'a str, value: &'a str) -> Self {
-        PropertyItemDraft { key, value }
+    pub(super) fn new(raw_line: &'a str, key: &'a str, value: &'a str) -> Self {
+        PropertyItemDraft {
+            raw_line,
+            key,
+            value,
+        }
     }
 }
 
@@ -339,7 +346,7 @@ fn parse_property_draft<'a>(
             continue;
         };
 
-        items.push(PropertyItemDraft::new(key.trim(), value.trim()))
+        items.push(PropertyItemDraft::new(raw_line, key.trim(), value.trim()))
     }
 
     Some(BlockDraft::Property {

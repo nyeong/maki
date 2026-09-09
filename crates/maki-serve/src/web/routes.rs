@@ -8,8 +8,9 @@ use maki_core::parser::DateStampKind;
 use maki_core::{
     DatePeriod, Error as MakiError, HomeMode, Maki, MakiRoute, SearchEntry, SitemapEntry,
     analysis::{
-        AnalysisBlockKind, AnalysisDiagnosticKind, DateOrigin as AnalysisDateOrigin,
-        DefinitionTargetKind, LinkResolution, ProjectAnalysis, PropertyDirection,
+        AnalysisBlockKind, AnalysisDiagnosticKind, AnalysisDiagnosticSubject,
+        DateOrigin as AnalysisDateOrigin, DateTargetIdentity, DefinitionTargetKind, LinkResolution,
+        ProjectAnalysis, PropertyDirection, PropertyOwner, SnapshotRevision,
     },
 };
 
@@ -123,11 +124,14 @@ fn source_span_json(span: maki_core::source::SourceSpan) -> String {
 fn project_index_json(maki: &Maki) -> Result<String, MakiError> {
     let analysis = maki.published_analysis()?;
 
-    Ok(project_analysis_json(&analysis))
+    Ok(project_analysis_json(&analysis, maki.snapshot_revision()))
 }
 
-fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
-    let mut json = String::from("{\"schema_version\":1,\"documents\":[");
+fn project_analysis_json(analysis: &ProjectAnalysis, revision: SnapshotRevision) -> String {
+    let mut json = format!(
+        "{{\"schema_version\":2,\"revision\":{},\"documents\":[",
+        revision.get()
+    );
     for (index, document) in analysis.documents().values().enumerate() {
         if index > 0 {
             json.push(',');
@@ -216,6 +220,8 @@ fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
             }
             json.push_str("{\"direction\":");
             push_json_string(&mut json, property_direction_label(property.direction));
+            json.push_str(",\"owner\":");
+            push_property_owner_json(&mut json, property.owner);
             json.push_str(",\"key\":");
             push_json_string(&mut json, &property.key);
             json.push_str(",\"value\":");
@@ -241,6 +247,8 @@ fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
             push_json_string(&mut json, date_stamp_kind_label(date.kind));
             json.push_str(",\"body\":");
             push_json_string(&mut json, &date.body);
+            json.push_str(",\"target\":");
+            push_date_target_json(&mut json, date.target);
             json.push_str(",\"origin\":");
             push_json_string(&mut json, analysis_date_origin_label(&date.origin));
             if let AnalysisDateOrigin::PropertyValue { key } = &date.origin {
@@ -266,6 +274,8 @@ fn project_analysis_json(analysis: &ProjectAnalysis) -> String {
         push_json_string(&mut json, diagnostic_kind_label(diagnostic.kind));
         json.push_str(",\"message\":");
         push_json_string(&mut json, &diagnostic.message);
+        json.push_str(",\"subject\":");
+        push_diagnostic_subject_json(&mut json, &diagnostic.subject);
         json.push_str(",\"span\":");
         json.push_str(&source_span_json(diagnostic.span));
         json.push('}');
@@ -284,6 +294,8 @@ fn push_link_resolution_json(output: &mut String, resolution: Option<&LinkResolu
         LinkResolution::Found(target) => {
             output.push_str("{\"status\":\"found\",\"path\":");
             push_json_string(output, &target.path.display().to_string());
+            output.push_str(",\"canonical_path\":");
+            push_json_string(output, &target.canonical_path);
             output.push_str(",\"selection_span\":");
             output.push_str(&source_span_json(target.selection_span));
             output.push_str(",\"kind\":");
@@ -335,6 +347,60 @@ fn property_direction_label(direction: PropertyDirection) -> &'static str {
         PropertyDirection::Previous => "previous",
         PropertyDirection::Next => "next",
     }
+}
+
+fn push_property_owner_json(output: &mut String, owner: PropertyOwner) {
+    match owner {
+        PropertyOwner::Document => output.push_str("{\"kind\":\"document\"}"),
+        PropertyOwner::Block { kind, span } => {
+            output.push_str("{\"kind\":\"block\",\"block_kind\":");
+            push_json_string(output, block_kind_label(kind));
+            output.push_str(",\"span\":");
+            output.push_str(&source_span_json(span));
+            output.push('}');
+        }
+    }
+}
+
+fn push_date_target_json(output: &mut String, target: DateTargetIdentity) {
+    match target {
+        DateTargetIdentity::Day(date) => {
+            output.push_str("{\"kind\":\"day\",\"value\":");
+            push_json_string(output, &date.to_string());
+        }
+        DateTargetIdentity::Month(month) => {
+            output.push_str("{\"kind\":\"month\",\"value\":");
+            push_json_string(output, &month.to_string());
+        }
+        DateTargetIdentity::IsoWeek(week) => {
+            output.push_str("{\"kind\":\"iso_week\",\"value\":");
+            push_json_string(output, &week.to_string());
+        }
+        DateTargetIdentity::Range { start, end } => {
+            output.push_str("{\"kind\":\"range\",\"start\":");
+            push_json_string(output, &start.to_string());
+            output.push_str(",\"end\":");
+            push_json_string(output, &end.to_string());
+        }
+    }
+    output.push('}');
+}
+
+fn push_diagnostic_subject_json(output: &mut String, subject: &AnalysisDiagnosticSubject) {
+    let (kind, value) = match subject {
+        AnalysisDiagnosticSubject::None => {
+            output.push_str("null");
+            return;
+        }
+        AnalysisDiagnosticSubject::Id(value) => ("id", value),
+        AnalysisDiagnosticSubject::Reference(value) => ("reference", value),
+        AnalysisDiagnosticSubject::Link(value) => ("link", value),
+    };
+    output.push_str("{\"kind\":");
+    push_json_string(output, kind);
+    output.push_str(",\"value\":");
+    push_json_string(output, value);
+    output.push('}');
 }
 
 fn date_stamp_kind_label(kind: DateStampKind) -> &'static str {

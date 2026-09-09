@@ -23,6 +23,16 @@ impl SourceSpan {
     }
 }
 
+pub(crate) fn slice_span(source: &str, slice: &str) -> Option<SourceSpan> {
+    let source_start = source.as_ptr() as usize;
+    let source_end = source_start + source.len();
+    let slice_start = slice.as_ptr() as usize;
+    let slice_end = slice_start + slice.len();
+
+    (source_start <= slice_start && slice_end <= source_end)
+        .then(|| SourceSpan::new(slice_start - source_start, slice_end - source_start))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourcePosition {
     pub line: usize,
@@ -138,6 +148,13 @@ impl<'a> SourceMap<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slice_span_rejects_an_unrelated_empty_slice_without_panicking() {
+        let source = String::from("source");
+
+        assert_eq!(slice_span(&source, ""), None);
+    }
 
     #[test]
     fn source_map_tracks_lf_crlf_and_trailing_empty_line() {

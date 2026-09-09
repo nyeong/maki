@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::Path;
 
+use crate::nested::{NestedDocumentObserver, NestedTraversalVisitor, traverse_parsed_document};
 use crate::parser::{self, BlockKind, DateRange, DateStamp, Inline};
 
-use super::super::note::{Note, NoteRef};
-use super::super::quote_mode_is_raw;
+use super::super::note::NoteRef;
 use super::context::{
     DateTraversalContext, block_date_context, document_date_context, list_item_line_date_context,
     property_date_context, table_body_row_date_context, table_row_date_context,
@@ -17,7 +17,7 @@ struct DateIndexCollector<'a> {
     index: &'a mut DateIndex,
     source_path: &'a Path,
     note_ref: NoteRef,
-    note_title: String,
+    note_title: &'a str,
     inline_ordinal: usize,
     property_ordinal: usize,
 }
@@ -41,7 +41,7 @@ impl<'a> DateIndexCollector<'a> {
         index: &'a mut DateIndex,
         source_path: &'a Path,
         note_ref: NoteRef,
-        note_title: String,
+        note_title: &'a str,
     ) -> Self {
         Self {
             index,
@@ -64,7 +64,7 @@ impl<'a> DateIndexCollector<'a> {
             id,
             source_path: self.source_path.to_path_buf(),
             note_ref: self.note_ref.clone(),
-            note_title: self.note_title.clone(),
+            note_title: self.note_title.to_string(),
             origin,
             marker,
             context: context.to_string(),
@@ -193,30 +193,6 @@ fn collect_property_dates<'a>(
     }
 }
 
-fn collect_list_item_dates(
-    collector: &mut DateIndexCollector<'_>,
-    item: &parser::ListItem<'_>,
-    context: &DateTraversalContext,
-    references: &parser::ReferenceDefinitions<'_>,
-    footnote_order: &mut FootnoteDefinitionOrder,
-) {
-    let item_line_context = list_item_line_date_context(item);
-    let mut item_context = context.with_top_list_item(item_line_context.clone());
-    let occurrence_context = item_context.contextualize(&item_line_context);
-
-    collect_inline_dates(collector, &item.body, &occurrence_context, references);
-    collect_footnote_definition_keys(&item.body, footnote_order);
-    for child in &item.children {
-        collect_block_dates(
-            collector,
-            child,
-            &mut item_context,
-            references,
-            footnote_order,
-        );
-    }
-}
-
 fn collect_table_row_dates(
     collector: &mut DateIndexCollector<'_>,
     row: &parser::TableRow<'_>,
@@ -234,152 +210,168 @@ fn collect_table_row_dates(
     }
 }
 
-fn collect_block_dates(
-    collector: &mut DateIndexCollector<'_>,
-    block: &parser::Block<'_>,
-    context: &mut DateTraversalContext,
-    references: &parser::ReferenceDefinitions<'_>,
-    footnote_order: &mut FootnoteDefinitionOrder,
-) {
-    let local_context = block_date_context(block);
-    let block_context = match &block.kind {
-        BlockKind::Heading { level, .. } => context.contextualize_heading(*level, &local_context),
-        _ => context.contextualize(&local_context),
-    };
-    collect_property_dates(collector, block.properties(), &block_context);
+struct DateTraversal<'a> {
+    collector: DateIndexCollector<'a>,
+    footnote_orders: Vec<FootnoteDefinitionOrder>,
+}
 
-    match &block.kind {
-        BlockKind::Paragraph { body } => {
-            collect_inline_dates(collector, body, &block_context, references);
-            collect_footnote_definition_keys(body, footnote_order);
+impl<'a> DateTraversal<'a> {
+    fn new(collector: DateIndexCollector<'a>) -> Self {
+        Self {
+            collector,
+            footnote_orders: Vec::new(),
         }
-        BlockKind::Heading {
-            level,
-            body,
-            raw_body,
-        } => {
-            collect_inline_dates(collector, body, &block_context, references);
-            collect_footnote_definition_keys(body, footnote_order);
-            context.enter_heading(*level, raw_body);
-        }
-        BlockKind::List { items } => {
-            for item in items {
-                collect_list_item_dates(collector, item, context, references, footnote_order);
-            }
-        }
-        BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
-            collect_maki_lines_dates(collector, lines, context, references)
-        }
-        BlockKind::Table { header, rows, .. } => {
-            let table_header_context = table_row_date_context(header);
-            let header_context = context.contextualize(&table_header_context);
-            collect_table_row_dates(
-                collector,
-                header,
-                &header_context,
-                references,
-                footnote_order,
-            );
-            for row in rows {
-                let row_context =
-                    context.contextualize(&table_body_row_date_context(&table_header_context, row));
-                collect_table_row_dates(collector, row, &row_context, references, footnote_order);
-            }
-        }
-        BlockKind::Container { kind, lines, .. }
-            if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
-        {
-            collect_maki_lines_dates(collector, lines, context, references)
-        }
-        BlockKind::Quote { .. }
-        | BlockKind::Code { .. }
-        | BlockKind::Container { .. }
-        | BlockKind::ReferenceDefinition { .. } => {}
     }
 }
 
-fn collect_maki_lines_dates(
-    collector: &mut DateIndexCollector<'_>,
-    lines: &[&str],
-    context: &DateTraversalContext,
-    references: &parser::ReferenceDefinitions<'_>,
-) {
-    let source = lines.join("\n");
-    let parsed = parser::parse_with_references(&source, references);
-    let mut nested_context = context.clone();
-    collect_document_dates_with_context(collector, &parsed.document, &mut nested_context);
-}
+impl NestedTraversalVisitor for DateTraversal<'_> {
+    type Context = DateTraversalContext;
 
-fn collect_document_dates_with_context(
-    collector: &mut DateIndexCollector<'_>,
-    document: &parser::Document<'_>,
-    context: &mut DateTraversalContext,
-) {
-    let document_context =
-        context.contextualize(&document_date_context(document, &collector.note_title));
-
-    collect_property_dates(collector, document.properties(), &document_context);
-    let mut footnote_order = FootnoteDefinitionOrder::default();
-    for block in &document.blocks {
-        collect_block_dates(
-            collector,
-            block,
-            context,
-            document.reference_definitions(),
-            &mut footnote_order,
+    fn enter_document(&mut self, document: &parser::Document<'_>, context: &mut Self::Context) {
+        self.footnote_orders
+            .push(FootnoteDefinitionOrder::default());
+        let document_context =
+            context.contextualize(&document_date_context(document, self.collector.note_title));
+        collect_property_dates(
+            &mut self.collector,
+            document.properties(),
+            &document_context,
         );
     }
 
-    let mut note_index = 0;
-    while note_index < footnote_order.keys.len() {
-        let key = footnote_order.keys[note_index].clone();
-        note_index += 1;
-        let Some(definition) = document.reference(&key) else {
-            continue;
+    fn visit_block(
+        &mut self,
+        block: &parser::Block<'_>,
+        references: &parser::ReferenceDefinitions<'_>,
+        context: &mut Self::Context,
+    ) {
+        let local_context = block_date_context(block);
+        let block_context = match &block.kind {
+            BlockKind::Heading { level, .. } => {
+                context.contextualize_heading(*level, &local_context)
+            }
+            _ => context.contextualize(&local_context),
         };
-        if definition.value_kind() != parser::ReferenceValueKind::Prose {
-            continue;
+        collect_property_dates(&mut self.collector, block.properties(), &block_context);
+
+        let footnote_order = self
+            .footnote_orders
+            .last_mut()
+            .expect("document traversal should own a footnote order");
+        match &block.kind {
+            BlockKind::Paragraph { body } => {
+                collect_inline_dates(&mut self.collector, body, &block_context, references);
+                collect_footnote_definition_keys(body, footnote_order);
+            }
+            BlockKind::Heading {
+                level,
+                body,
+                raw_body,
+            } => {
+                collect_inline_dates(&mut self.collector, body, &block_context, references);
+                collect_footnote_definition_keys(body, footnote_order);
+                context.enter_heading(*level, raw_body);
+            }
+            BlockKind::Table { header, rows, .. } => {
+                let table_header_context = table_row_date_context(header);
+                let header_context = context.contextualize(&table_header_context);
+                collect_table_row_dates(
+                    &mut self.collector,
+                    header,
+                    &header_context,
+                    references,
+                    footnote_order,
+                );
+                for row in rows {
+                    let row_context = context
+                        .contextualize(&table_body_row_date_context(&table_header_context, row));
+                    collect_table_row_dates(
+                        &mut self.collector,
+                        row,
+                        &row_context,
+                        references,
+                        footnote_order,
+                    );
+                }
+            }
+            BlockKind::List { .. }
+            | BlockKind::Quote { .. }
+            | BlockKind::Code { .. }
+            | BlockKind::Container { .. }
+            | BlockKind::ReferenceDefinition { .. } => {}
         }
-        let marker = format!("[{}]", definition.key);
-        let reference_source = format!("{marker}: {}", definition.raw_value);
-        let reference_context = context.contextualize(&reference_source);
+    }
+
+    fn enter_list_item(
+        &mut self,
+        item: &parser::ListItem<'_>,
+        references: &parser::ReferenceDefinitions<'_>,
+        context: &Self::Context,
+    ) -> Self::Context {
+        let item_line_context = list_item_line_date_context(item);
+        let item_context = context.with_top_list_item(item_line_context.clone());
+        let occurrence_context = item_context.contextualize(&item_line_context);
         collect_inline_dates(
-            collector,
-            &definition.value,
-            &reference_context,
-            document.reference_definitions(),
+            &mut self.collector,
+            &item.body,
+            &occurrence_context,
+            references,
         );
-        collect_footnote_definition_keys(&definition.value, &mut footnote_order);
+        collect_footnote_definition_keys(
+            &item.body,
+            self.footnote_orders
+                .last_mut()
+                .expect("document traversal should own a footnote order"),
+        );
+        item_context
+    }
+
+    fn exit_document(&mut self, document: &parser::Document<'_>, context: &mut Self::Context) {
+        let mut footnote_order = self
+            .footnote_orders
+            .pop()
+            .expect("document traversal should own a footnote order");
+        let mut note_index = 0;
+        while note_index < footnote_order.keys.len() {
+            let key = footnote_order.keys[note_index].clone();
+            note_index += 1;
+            let Some(definition) = document.reference(&key) else {
+                continue;
+            };
+            if definition.value_kind() != parser::ReferenceValueKind::Prose {
+                continue;
+            }
+            let marker = format!("[{}]", definition.key);
+            let reference_source = format!("{marker}: {}", definition.raw_value);
+            let reference_context = context.contextualize(&reference_source);
+            collect_inline_dates(
+                &mut self.collector,
+                &definition.value,
+                &reference_context,
+                document.reference_definitions(),
+            );
+            collect_footnote_definition_keys(&definition.value, &mut footnote_order);
+        }
     }
 }
 
-fn collect_document_dates(collector: &mut DateIndexCollector<'_>, document: &parser::Document<'_>) {
-    let mut context = DateTraversalContext::default();
-    collect_document_dates_with_context(collector, document, &mut context);
-}
-
-pub(in crate::maki) fn collect_date_index(
-    notes: &BTreeMap<NoteRef, Note>,
-    sources: &BTreeMap<PathBuf, String>,
-) -> DateIndex {
-    let mut date_index = DateIndex::default();
-
-    for note in notes.values() {
-        let Some(source) = sources.get(note.source_path()) else {
-            continue;
-        };
-        let parsed = parser::parse(source);
-        let note_ref = note.note_ref();
-        let note_title = parsed
-            .document
-            .title()
-            .unwrap_or(note.file_stem())
-            .to_string();
-        let mut collector =
-            DateIndexCollector::new(&mut date_index, note.source_path(), note_ref, note_title);
-        collect_document_dates(&mut collector, &parsed.document);
-    }
-
-    date_index.sort_backlinks();
-    date_index
+pub(crate) fn collect_parsed_document_dates(
+    date_index: &mut DateIndex,
+    source_path: &Path,
+    note_ref: NoteRef,
+    note_title: &str,
+    source: &str,
+    parsed: &parser::ParseResult<'_>,
+    nested_observer: &mut dyn NestedDocumentObserver,
+) {
+    let collector = DateIndexCollector::new(date_index, source_path, note_ref, note_title);
+    let mut traversal = DateTraversal::new(collector);
+    traverse_parsed_document(
+        source,
+        parsed,
+        DateTraversalContext::default(),
+        &mut traversal,
+        nested_observer,
+    );
+    debug_assert!(traversal.footnote_orders.is_empty());
 }

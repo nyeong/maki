@@ -64,7 +64,7 @@ fn build_blocks<'a>(drafts: &[BlockDraft<'a>]) -> Vec<Block<'a>> {
                 ..
             } => {
                 if let Some(block) = blocks.last_mut() {
-                    block.props.extend(items)
+                    block.props.extend(PropertyKind::Previous, items)
                 }
             }
             BlockDraft::Property {
@@ -72,7 +72,7 @@ fn build_blocks<'a>(drafts: &[BlockDraft<'a>]) -> Vec<Block<'a>> {
                 items,
                 ..
             } => {
-                pending_props.extend(items);
+                pending_props.extend(PropertyKind::Next, items);
             }
             draft => {
                 let block = build_block(draft, std::mem::take(&mut pending_props));
@@ -114,9 +114,9 @@ where
                 ..
             } => {
                 if let Some(block) = blocks.last_mut() {
-                    block.props.extend(items)
+                    block.props.extend(PropertyKind::Previous, items)
                 } else {
-                    doc_props.extend(items);
+                    doc_props.extend(PropertyKind::Previous, items);
                 }
             }
             BlockDraft::Property {
@@ -124,7 +124,7 @@ where
                 items,
                 ..
             } => {
-                pending_props.extend(items);
+                pending_props.extend(PropertyKind::Next, items);
             }
             draft => {
                 let block = build_block(draft, std::mem::take(&mut pending_props));

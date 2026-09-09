@@ -1139,8 +1139,12 @@ plain text"#;
                 indent: 0,
                 kind: PropertyKind::Previous,
                 items: vec![
-                    PropertyItemDraft::new("title", "Maki"),
-                    PropertyItemDraft::new("description", "This is a simple example.")
+                    PropertyItemDraft::new("--^ title: Maki", "title", "Maki"),
+                    PropertyItemDraft::new(
+                        "--^ description: This is a simple example.",
+                        "description",
+                        "This is a simple example."
+                    )
                 ],
             },
             BlockDraft::Heading {
@@ -1418,6 +1422,11 @@ fn parse_reports_invalid_property_without_panicking() {
     );
 
     assert_eq!(parsed.document.title(), Some("Maki"));
+    assert_eq!(parsed.document.property_declarations().len(), 1);
+    assert_eq!(
+        parsed.document.property_declarations()[0].raw_line(),
+        "--^ title: Maki"
+    );
     assert_eq!(
         parsed.diagnostics,
         vec![ParseDiagnostic {
@@ -1589,6 +1598,109 @@ fn parse_reports_property_on_property_and_ignores_the_second_property() {
     assert_eq!(
         parsed.document.blocks[0].properties().next(),
         Some(("title", "pending"))
+    );
+    assert_eq!(
+        parsed.document.blocks[0]
+            .property_declarations()
+            .iter()
+            .map(|declaration| declaration.raw_line())
+            .collect::<Vec<_>>(),
+        vec!["--v title: pending"]
+    );
+}
+
+#[test]
+fn attached_property_declarations_preserve_ownership_source_and_overwrites() {
+    let source = r#"--^ TITLE : first
+--^ title: second
+= First
+--v MODE : first
+--v mode: second
+= Second
+--^ after : attached
+--^ AFTER: overwritten
+separator
+--v dangling: no owner"#;
+    let parsed = parse(source);
+
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(parsed.document.title(), Some("second"));
+    assert_eq!(
+        parsed
+            .document
+            .property_declarations()
+            .iter()
+            .map(|declaration| (
+                declaration.direction(),
+                declaration.raw_line(),
+                declaration.key(),
+                declaration.value(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                PropertyDirection::Previous,
+                "--^ TITLE : first",
+                "TITLE",
+                "first",
+            ),
+            (
+                PropertyDirection::Previous,
+                "--^ title: second",
+                "title",
+                "second",
+            ),
+        ]
+    );
+
+    assert!(parsed.document.blocks[0].property_declarations().is_empty());
+    assert_eq!(parsed.document.blocks[1].property("mode"), Some("second"));
+    assert_eq!(
+        parsed.document.blocks[1].property("after"),
+        Some("overwritten")
+    );
+    assert_eq!(
+        parsed.document.blocks[1]
+            .property_declarations()
+            .iter()
+            .map(|declaration| (
+                declaration.direction(),
+                declaration.raw_line(),
+                declaration.key(),
+                declaration.value(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (PropertyDirection::Next, "--v MODE : first", "MODE", "first",),
+            (
+                PropertyDirection::Next,
+                "--v mode: second",
+                "mode",
+                "second",
+            ),
+            (
+                PropertyDirection::Previous,
+                "--^ after : attached",
+                "after",
+                "attached",
+            ),
+            (
+                PropertyDirection::Previous,
+                "--^ AFTER: overwritten",
+                "AFTER",
+                "overwritten",
+            ),
+        ]
+    );
+
+    assert!(parsed.document.blocks[2].property_declarations().is_empty());
+    assert!(
+        parsed
+            .document
+            .blocks
+            .iter()
+            .flat_map(Block::property_declarations)
+            .all(|declaration| declaration.key() != "dangling")
     );
 }
 

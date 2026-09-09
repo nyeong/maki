@@ -12,4 +12,4 @@ pub use types::{
     DateRelation,
 };
 
-pub(super) use collector::collect_date_index;
+pub(crate) use collector::collect_parsed_document_dates;

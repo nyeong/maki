@@ -2,13 +2,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    analysis::AnalysisDiagnosticKind,
-    parser::{self, BlockKind, Inline},
+    analysis::{AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisDiagnosticSubject},
     source::SourceMap,
 };
 
+use super::Maki;
 use super::links::{ExternalLinkCheck, check_external_link};
-use super::{Maki, NoteLinkResolution, NoteRef, quote_mode_is_raw};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDiagnostic {
@@ -38,6 +37,14 @@ impl Maki {
     fn collect_note_diagnostics(&self) -> Vec<ProjectDiagnostic> {
         let mut diagnostics = vec![];
 
+        let mut diagnostics_by_path = BTreeMap::<&Path, Vec<&AnalysisDiagnostic>>::new();
+        for diagnostic in &self.snapshot.analysis().diagnostics {
+            diagnostics_by_path
+                .entry(&diagnostic.path)
+                .or_default()
+                .push(diagnostic);
+        }
+
         for note in self.notes.values() {
             let source_path = note.source_path();
             let Some(source) = self.snapshot.source(source_path) else {
@@ -48,70 +55,19 @@ impl Maki {
                 ));
                 continue;
             };
-            let parsed = parser::parse(source);
-
-            for diagnostic in &parsed.diagnostics {
-                diagnostics.push(ProjectDiagnostic::new(
-                    source_path,
-                    Some(diagnostic.line),
-                    ProjectDiagnosticKind::ParseWarning {
-                        message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
-                    },
-                ));
+            let Some(source_diagnostics) = diagnostics_by_path.get(&source_path) else {
+                continue;
+            };
+            let source_map = SourceMap::new(source);
+            for &diagnostic in source_diagnostics {
+                let Some(kind) = project_diagnostic_kind(diagnostic) else {
+                    continue;
+                };
+                let line = source_map
+                    .position(diagnostic.span.start)
+                    .map(|position| position.line + 1);
+                diagnostics.push(ProjectDiagnostic::new(source_path, line, kind));
             }
-
-            if let Some(document) = self.snapshot.analysis().document(source_path) {
-                let source_map = SourceMap::new(source);
-                for diagnostic in &document.diagnostics {
-                    let kind = match diagnostic.kind {
-                        AnalysisDiagnosticKind::DuplicateId => {
-                            let id = document
-                                .block_ids
-                                .iter()
-                                .find(|block_id| block_id.value_span == diagnostic.span)
-                                .map(|block_id| block_id.id.clone())
-                                .unwrap_or_else(|| {
-                                    diagnostic
-                                        .message
-                                        .strip_prefix("duplicate id: ")
-                                        .unwrap_or(&diagnostic.message)
-                                        .to_string()
-                                });
-                            ProjectDiagnosticKind::DuplicateId { id }
-                        }
-                        AnalysisDiagnosticKind::UnresolvedReference => {
-                            let key = document
-                                .reference_graph
-                                .uses
-                                .iter()
-                                .find(|usage| usage.key_span == diagnostic.span)
-                                .map(|usage| usage.key.clone())
-                                .unwrap_or_else(|| {
-                                    diagnostic
-                                        .message
-                                        .strip_prefix("unresolved reference: ")
-                                        .unwrap_or(&diagnostic.message)
-                                        .to_string()
-                                });
-                            ProjectDiagnosticKind::UnresolvedReference { key }
-                        }
-                        _ => continue,
-                    };
-                    let line = source_map
-                        .position(diagnostic.span.start)
-                        .map(|position| position.line + 1);
-                    diagnostics.push(ProjectDiagnostic::new(source_path, line, kind));
-                }
-            }
-
-            let current = note.note_ref();
-            collect_document_link_diagnostics(
-                &mut diagnostics,
-                self,
-                &current,
-                source_path,
-                &parsed.document,
-            );
         }
 
         diagnostics
@@ -124,7 +80,7 @@ impl Maki {
     ) {
         let mut checks = BTreeMap::new();
 
-        for external_link in &self.external_links {
+        for external_link in self.snapshot.analysis().external_links() {
             let check = checks
                 .entry(external_link.target.clone())
                 .or_insert_with(|| check_external_link(&external_link.target))
@@ -132,7 +88,7 @@ impl Maki {
 
             if let ExternalLinkCheck::Broken { reason } = check {
                 diagnostics.push(ProjectDiagnostic::new(
-                    external_link.source_path.clone(),
+                    external_link.path.clone(),
                     None,
                     ProjectDiagnosticKind::BrokenExternalLink {
                         target: external_link.target.clone(),
@@ -140,6 +96,46 @@ impl Maki {
                     },
                 ));
             }
+        }
+    }
+}
+
+fn project_diagnostic_kind(diagnostic: &AnalysisDiagnostic) -> Option<ProjectDiagnosticKind> {
+    match diagnostic.kind {
+        AnalysisDiagnosticKind::ParseWarning => Some(ProjectDiagnosticKind::ParseWarning {
+            message: diagnostic.message.clone(),
+        }),
+        AnalysisDiagnosticKind::DuplicateId => {
+            let AnalysisDiagnosticSubject::Id(id) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::DuplicateId { id: id.clone() })
+        }
+        AnalysisDiagnosticKind::UnresolvedReference => {
+            let AnalysisDiagnosticSubject::Reference(key) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::UnresolvedReference { key: key.clone() })
+        }
+        AnalysisDiagnosticKind::BrokenNoteLink
+        | AnalysisDiagnosticKind::BrokenHeadingLink
+        | AnalysisDiagnosticKind::BrokenIdLink => {
+            let AnalysisDiagnosticSubject::Link(target) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::BrokenLink {
+                target: target.clone(),
+            })
+        }
+        AnalysisDiagnosticKind::AmbiguousNoteLink
+        | AnalysisDiagnosticKind::AmbiguousHeadingLink
+        | AnalysisDiagnosticKind::AmbiguousIdLink => {
+            let AnalysisDiagnosticSubject::Link(target) = &diagnostic.subject else {
+                return None;
+            };
+            Some(ProjectDiagnosticKind::AmbiguousLink {
+                target: target.clone(),
+            })
         }
     }
 }
@@ -281,179 +277,5 @@ impl ProjectDiagnosticSummary {
 
     pub fn read_failures(&self) -> usize {
         self.read_failures
-    }
-}
-fn collect_inline_link_diagnostics(
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-    maki: &Maki,
-    current: &NoteRef,
-    source_path: &Path,
-    inlines: &[Inline<'_>],
-) {
-    for inline in inlines {
-        match inline {
-            Inline::NoteLink { target, .. } => push_link_diagnostic(
-                diagnostics,
-                source_path,
-                maki.resolve_note_link(current, target),
-                target,
-            ),
-            _ => {
-                if let Some(body) = inline.nested_inlines() {
-                    collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
-                }
-            }
-        }
-    }
-}
-
-fn collect_table_row_link_diagnostics(
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-    maki: &Maki,
-    current: &NoteRef,
-    source_path: &Path,
-    row: &parser::TableRow<'_>,
-) {
-    if row.is_separator() {
-        return;
-    }
-
-    for cell in &row.cells {
-        collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &cell.body);
-    }
-}
-
-fn collect_block_link_diagnostics(
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-    maki: &Maki,
-    current: &NoteRef,
-    source_path: &Path,
-    block: &parser::Block<'_>,
-    references: &parser::ReferenceDefinitions<'_>,
-) {
-    match &block.kind {
-        BlockKind::Paragraph { body } => {
-            collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body)
-        }
-        BlockKind::Heading { body, .. } => {
-            collect_inline_link_diagnostics(diagnostics, maki, current, source_path, body);
-        }
-        BlockKind::List { items } => {
-            for item in items {
-                collect_inline_link_diagnostics(
-                    diagnostics,
-                    maki,
-                    current,
-                    source_path,
-                    &item.body,
-                );
-                for child in &item.children {
-                    collect_block_link_diagnostics(
-                        diagnostics,
-                        maki,
-                        current,
-                        source_path,
-                        child,
-                        references,
-                    );
-                }
-            }
-        }
-        BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
-            collect_maki_lines_link_diagnostics(
-                diagnostics,
-                maki,
-                current,
-                source_path,
-                lines,
-                references,
-            )
-        }
-        BlockKind::Table { header, rows, .. } => {
-            collect_table_row_link_diagnostics(diagnostics, maki, current, source_path, header);
-            for row in rows {
-                collect_table_row_link_diagnostics(diagnostics, maki, current, source_path, row);
-            }
-        }
-        BlockKind::Container { kind, lines, .. }
-            if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
-        {
-            collect_maki_lines_link_diagnostics(
-                diagnostics,
-                maki,
-                current,
-                source_path,
-                lines,
-                references,
-            )
-        }
-        BlockKind::Quote { .. }
-        | BlockKind::Code { .. }
-        | BlockKind::Container { .. }
-        | BlockKind::ReferenceDefinition { .. } => {}
-    }
-}
-
-fn collect_maki_lines_link_diagnostics(
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-    maki: &Maki,
-    current: &NoteRef,
-    source_path: &Path,
-    lines: &[&str],
-    references: &parser::ReferenceDefinitions<'_>,
-) {
-    let source = lines.join("\n");
-    let parsed = parser::parse_with_references(&source, references);
-
-    collect_document_link_diagnostics(diagnostics, maki, current, source_path, &parsed.document);
-}
-
-fn collect_document_link_diagnostics(
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-    maki: &Maki,
-    current: &NoteRef,
-    source_path: &Path,
-    document: &parser::Document<'_>,
-) {
-    for definition in document.reference_definitions().iter() {
-        collect_inline_link_diagnostics(diagnostics, maki, current, source_path, &definition.value);
-    }
-
-    for block in &document.blocks {
-        collect_block_link_diagnostics(
-            diagnostics,
-            maki,
-            current,
-            source_path,
-            block,
-            document.reference_definitions(),
-        );
-    }
-}
-
-fn push_link_diagnostic(
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-    source_path: &Path,
-    resolution: NoteLinkResolution,
-    target: &str,
-) {
-    match resolution {
-        NoteLinkResolution::Found(_)
-        | NoteLinkResolution::FoundHeading { .. }
-        | NoteLinkResolution::FoundId { .. } => {}
-        NoteLinkResolution::Broken => diagnostics.push(ProjectDiagnostic::new(
-            source_path,
-            None,
-            ProjectDiagnosticKind::BrokenLink {
-                target: target.to_string(),
-            },
-        )),
-        NoteLinkResolution::Ambiguous => diagnostics.push(ProjectDiagnostic::new(
-            source_path,
-            None,
-            ProjectDiagnosticKind::AmbiguousLink {
-                target: target.to_string(),
-            },
-        )),
     }
 }
