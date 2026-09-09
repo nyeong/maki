@@ -1,19 +1,24 @@
 --^ title: Architecture
---^ updated: [2026-08-31]
+--^ updated: [2026-09-09]
 
 = 코드 구조
 
-Maki는 workspace 안의 다섯 crate 경계로 나뉜다.
+Maki는 workspace 안의 여섯 crate 경계로 나뉜다.
 
-- root `maki` binary: CLI parsing, command 실행, stderr 출력 포맷.
-- `maki-core`: parser, source map, sans IO analysis, HTML renderer, project domain, note/link/date/diagnostics/search metadata.
+- root `maki` binary: CLI parsing, command 실행, stderr 출력 포맷과 opt-in external-link HTTP 검사.
+- `maki-core`: parser, source map, sans IO config/project compile과 analysis, HTML renderer, note/link/date/diagnostics/search metadata.
+- `maki-fs`: project root discovery, manifest/file read, note listing, metadata와 canonicalization을 맡는 concrete filesystem adapter.
 - `maki-http`: Maki 의미를 모르는 raw HTTP request/response parsing and serialization.
 - `maki-lsp`: stdio LSP message 처리와 editor buffer cache를 맡는 protocol adapter.
 - `maki-serve`: Maki web route handling, live reload, watcher, response cache, git source runtime, Prometheus metrics.
 
 crate 경계는 protocol·IO와 Maki 의미를 분리한다.
+`maki-fs`는 실제 local filesystem을 위한 구체 함수만 제공하며 virtual filesystem이나 async IO abstraction을 정의하지 않는다.
+CLI, `maki-serve`와 `maki-lsp`의 초기 project load는 같은 discovery/read adapter를 사용하고, watcher도 같은 note listing 규칙을 사용한다.
 `maki-http`는 Maki domain을 모르는 얇은 HTTP 계층이고, `maki-serve`는 Maki route/cache/reload/metrics 정책을 담는다.
+Outbound external-link 검사는 `maki-http`의 역할이 아니다. Root CLI가 `maki build --check-external-links`를 받았을 때만 별도 HTTP adapter를 실행한다.
 `maki-lsp`는 filesystem/editor IO를 맡고, 문서 분석과 source position 변환은 `maki-core`를 사용한다.
+#91의 page-title HTTP fetch는 bare URL extraction Code Action의 resolve에서만 실행되는 bounded LSP adapter 기능이며 build external-link 검사와 공유하지 않는다.
 
 = 파싱
 
@@ -89,6 +94,11 @@ crate 경계는 protocol·IO와 Maki 의미를 분리한다.
 `analyze_document`와 `analyze_project`는 filesystem이나 network를 읽지 않으며, project snapshot 안에서 document/heading/explicit-ID link와 explicit reference를 resolve하고 semantic diagnostic을 만든다.
 `ProjectSnapshot`은 source map, analysis와 고유 revision을 한 immutable 값으로 소유한다. Runtime과 LSP는 이 값을 통째로 교체하므로 서로 다른 세대의 source와 index를 함께 관찰할 수 없다.
 
+`MakiConfig::parse(project_file, raw)`는 adapter가 읽은 TOML 문자열과 diagnostic용 path를 값으로 받아 config를 만든다.
+`ProjectSource`는 source-root-relative path, 읽은 source 또는 read-failure 상태와 optional modified time을 값으로 보존한다.
+`Maki::compile(root, config, project_sources)`은 이 값들에서 `ProjectSnapshot`, note metadata, search, recents, sitemap과 diagnostics surface를 만든다.
+이 API들은 전달받은 root를 읽거나 canonicalize하지 않고 clock도 읽지 않는다. `maki-fs`가 IO와 load timing을 마친 뒤 pure compile 결과를 runtime에 넘긴다.
+
 Internal link target은 renderer나 protocol adapter마다 제각각 문자열을 나누지 않는다.
 Core의 공통 target parser가 `/`·`+` document selector와 `#`·`@` internal selector를 구조화하고, `ProjectAnalysis`의 한 selection contract가 runtime과 LSP target을 결정한다.
 Explicit ID index는 `(DocumentRef, LocalId)`를 key로 사용한다.
@@ -100,7 +110,8 @@ Runtime rendering·diagnostics와 LSP는 각 adapter의 resolution result를 사
 List item child block은 원본 Document source 좌표를 유지하므로 top-level block과 같은 located analysis 대상이다.
 Quote와 quote container의 semantic Maki body는 line별 coordinate map으로 원본 source span에 투영한다. 그 안의 heading, ID, property, link, date와 diagnostic도 navigation과 LSP에서 root Document 좌표를 사용한다.
 
-Snapshot compile은 각 root source를 한 번 parse하고 analysis, date index, external-link metadata와 runtime diagnostics가 결과를 공유한다.
+Snapshot compile은 각 root source를 한 번 parse하고 analysis, date index, external-link metadata와 pure project diagnostics가 결과를 공유한다.
+`Maki::diagnostics()`는 network를 사용하지 않는다. CLI HTTP adapter가 명시적으로 검사한 target별 결과값이 있을 때만 `diagnostics_with_external_link_checks`가 그 결과를 project diagnostics에 합성한다.
 HTML renderer는 source를 빌리는 AST의 lifetime 경계를 안전하게 유지하기 위해 request마다 한 번 parse한다.
 
 = 표현

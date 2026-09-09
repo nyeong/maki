@@ -1,10 +1,16 @@
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
-use maki_core::{Error as MakiError, Maki, MakiConfig, MakiConfigOverrides, html, parser};
+use maki_core::analysis::{self, ProjectExternalLink};
+use maki_core::{Error as MakiError, MakiConfig, MakiConfigOverrides, html, parser};
+use maki_fs::{
+    find_project_root, load_project_config, load_project_with_config,
+    load_project_with_config_metered, render_file_html,
+};
 use maki_serve::{git_source, metrics::Metrics, web};
 
 use crate::cli::{Command, ServeOptions, ServeSource, VersionFormat};
+use crate::external_links::{diagnostics_for_external_links, diagnostics_with_external_links};
 use crate::output::{emit_parse_warnings, emit_project_diagnostic_summary};
 
 #[derive(Debug)]
@@ -47,11 +53,11 @@ impl Display for RunError {
 }
 
 fn run_path_serve(root: PathBuf, options: ServeOptions) -> Result<(), RunError> {
-    let Some(project_root) = Maki::find_project_root(&root)? else {
+    let Some(project_root) = find_project_root(&root)? else {
         return run_directory_serve(root.clone(), root, MakiConfig::default(), options);
     };
 
-    let config = MakiConfig::load_project(&project_root)?;
+    let config = load_project_config(&project_root)?;
     let source_root = config.project_source_root(&project_root);
     if same_path(&root, &project_root)? || is_project_source_path(&root, &source_root)? {
         run_directory_serve(project_root, source_root, config, options)
@@ -70,7 +76,7 @@ fn run_directory_serve(
     config_overrides.apply_to(&mut config);
     let metrics = metrics_for_endpoint(&options.metrics);
 
-    let maki = Maki::load_with_config_metered(&source_root, config, &metrics)?;
+    let maki = load_project_with_config_metered(&source_root, config, &metrics)?;
     if let Some(project_title) = maki.config().project_title() {
         println!("Project: {project_title}");
     }
@@ -78,7 +84,7 @@ fn run_directory_serve(
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
-    emit_project_diagnostic_summary(&maki.diagnostics_without_external_links());
+    emit_project_diagnostic_summary(&maki.diagnostics());
     Ok(web::serve_project(
         maki,
         project_root,
@@ -110,7 +116,7 @@ fn run_git_serve(
     for note in maki.notes() {
         println!("- {}", note.source_path().display());
     }
-    emit_project_diagnostic_summary(&maki.diagnostics_without_external_links());
+    emit_project_diagnostic_summary(&maki.diagnostics());
     source.record_active(&checkout)?;
 
     let initial_commit = checkout.commit().to_string();
@@ -148,30 +154,47 @@ pub(crate) fn run_serve(source: ServeSource, options: ServeOptions) -> Result<()
     }
 }
 
-fn run_build(file: PathBuf) -> Result<(), RunError> {
-    let html = match Maki::find_project_root(&file)? {
+fn run_build(file: PathBuf, check_external_links: bool) -> Result<(), RunError> {
+    let html = match find_project_root(&file)? {
         Some(root) => {
-            let config = MakiConfig::load_project(&root)?;
+            let config = load_project_config(&root)?;
             let source_root = config.project_source_root(&root);
             if is_project_source_path(&file, &source_root)? {
-                let maki = Maki::load_with_config(&source_root, config)?;
-                emit_project_diagnostic_summary(&maki.diagnostics());
-                maki.render_file_html(&file)?
+                let maki = load_project_with_config(&source_root, config)?;
+                let diagnostics = if check_external_links {
+                    diagnostics_with_external_links(&maki)
+                } else {
+                    maki.diagnostics()
+                };
+                emit_project_diagnostic_summary(&diagnostics);
+                render_file_html(&maki, &file)?
             } else {
-                render_standalone_file(&file)?
+                render_standalone_file(&file, check_external_links)?
             }
         }
-        None => render_standalone_file(&file)?,
+        None => render_standalone_file(&file, check_external_links)?,
     };
 
     println!("{html}");
     Ok(())
 }
 
-fn render_standalone_file(file: &Path) -> Result<String, RunError> {
+fn render_standalone_file(file: &Path, check_external_links: bool) -> Result<String, RunError> {
     let content = std::fs::read_to_string(file).map_err(|source| RunError::IoError { source })?;
     let parsed = parser::parse(&content);
     emit_parse_warnings(file, &parsed.diagnostics);
+    if check_external_links {
+        let document = analysis::analyze_document(file, &content);
+        let external_links = document
+            .external_links
+            .into_iter()
+            .map(|target| ProjectExternalLink {
+                path: file.to_path_buf(),
+                target,
+            })
+            .collect::<Vec<_>>();
+        emit_project_diagnostic_summary(&diagnostics_for_external_links(&external_links));
+    }
     Ok(html::render_document(&parsed.document))
 }
 
@@ -216,7 +239,10 @@ pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
             Ok(())
         }
         Command::Serve { source, options } => run_serve(source, options),
-        Command::Build { file } => run_build(file),
+        Command::Build {
+            file,
+            check_external_links,
+        } => run_build(file, check_external_links),
         Command::Lsp => maki_lsp::run_stdio_with_version(env!("CARGO_PKG_VERSION"))
             .map_err(|error| RunError::Lsp(error.to_string())),
     }

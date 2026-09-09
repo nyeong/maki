@@ -67,6 +67,14 @@ Source가 바뀌면 project를 reload하고 열린 page에 live reload event를 
 
 입력 파일이 configured source root 안에 있으면 project의 note/link resolution을 사용한다.
 Project 밖의 파일이거나 `maki.toml`이 없으면 standalone HTML로 render한다.
+기본 build는 filesystem source와 IO 없는 parser/project diagnostics만 사용하며 network request를 만들지 않는다.
+외부 HTTP(S) link까지 검사하려면 실행할 때 명시적으로 opt-in한다.
+
+--v lang: bash
+: maki build docs/index.maki --check-external-links > index.html
+
+외부 link 검사 결과는 기존 project warning과 함께 stderr에 출력하고 HTML은 계속 stdout에 출력한다.
+이 선택은 CLI 실행에만 적용하며 `maki.toml`에서 network 검사를 켤 수 없다.
 
 = Editor 연결
 
@@ -84,5 +92,5 @@ Maki 문법 전체는 [[maki-syntax]], manifest 설정은 [[maki-toml]]을 참�
 - `maki --version --json`: machine-readable version 출력
 - `maki serve [path]`: local project 또는 note directory serve
 - `maki serve --git <url>`: Git branch를 주기적으로 갱신하며 serve
-- `maki build <file>`: HTML을 stdout으로 출력
+- `maki build <file> [--check-external-links]`: 기본 offline으로 HTML을 stdout에 출력하고, 선택하면 외부 HTTP(S) link도 검사
 - `maki lsp`: stdio language server 실행

@@ -6,6 +6,7 @@ use std::time::SystemTime;
 
 use maki_core::PROJECT_FILE_NAME;
 use maki_core::html;
+use maki_fs::list_maki_files;
 
 use super::state::AppState;
 use super::{FILE_WATCH_DEBOUNCE, FILE_WATCH_INTERVAL};
@@ -35,39 +36,26 @@ fn insert_file_stamp(
 }
 
 pub(super) fn collect_maki_file_snapshot(root: &Path) -> Result<FileSnapshot, std::io::Error> {
-    fn collect(root: &Path, current: &Path, acc: &mut FileSnapshot) -> Result<(), std::io::Error> {
-        for entry in std::fs::read_dir(current)? {
-            let entry = entry?;
-            let file_name = entry.file_name();
-            if file_name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-
-            let path = entry.path();
-            if path.is_dir() {
-                collect(root, &path, acc)?;
-                continue;
-            }
-
-            if !path.is_file() {
-                continue;
-            }
-
-            let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            let is_maki_note = path.extension().is_some_and(|ext| ext == "maki");
-            let is_project_file = relative_path == Path::new(PROJECT_FILE_NAME);
-            if !is_maki_note && !is_project_file {
-                continue;
-            }
-
-            insert_file_stamp(acc, relative_path, &path)?;
-        }
-
-        Ok(())
+    let mut snapshot = BTreeMap::new();
+    let note_paths =
+        list_maki_files(root).map_err(|error| std::io::Error::other(error.to_string()))?;
+    for relative_path in note_paths {
+        insert_file_stamp(
+            &mut snapshot,
+            relative_path.clone(),
+            &root.join(relative_path),
+        )?;
     }
 
-    let mut snapshot = BTreeMap::new();
-    collect(root, root, &mut snapshot)?;
+    let project_file = root.join(PROJECT_FILE_NAME);
+    if project_file.is_file() {
+        insert_file_stamp(
+            &mut snapshot,
+            PathBuf::from(PROJECT_FILE_NAME),
+            &project_file,
+        )?;
+    }
+
     Ok(snapshot)
 }
 

@@ -5,7 +5,7 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use maki_core::ProjectLoadMeter;
+use maki_fs::ProjectLoadMeter;
 
 mod histogram;
 mod labels;

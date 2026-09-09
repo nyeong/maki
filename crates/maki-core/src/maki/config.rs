@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use super::{Error, PROJECT_FILE_NAME};
+use super::Error;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct MakiConfig {
@@ -38,28 +38,14 @@ impl MakiConfig {
         project_root.join(&self.source_dir)
     }
 
-    pub fn load_project(root: &Path) -> Result<Self, Error> {
-        let project_file = root.join(PROJECT_FILE_NAME);
-
-        if !project_file.exists() {
-            return Ok(Self::default());
-        }
-        if !project_file.is_file() {
-            return Err(Error::InvalidProjectFile(
-                project_file,
-                "expected a regular file".to_string(),
-            ));
-        }
-
-        let raw = std::fs::read_to_string(&project_file)
-            .map_err(|_source| Error::ReadProjectFileFailed(project_file.clone()))?;
-        let project = ProjectToml::parse(&project_file, &raw)?;
+    pub fn parse(project_file: &Path, raw: &str) -> Result<Self, Error> {
+        let project = ProjectToml::parse(project_file, raw)?;
 
         let mut config = Self {
             project_title: project.title,
             source_dir: project
                 .source
-                .map(|source| parse_project_source(&project_file, &source))
+                .map(|source| parse_project_source(project_file, &source))
                 .transpose()?
                 .unwrap_or_else(|| PathBuf::from(".")),
             ..Default::default()
@@ -69,7 +55,7 @@ impl MakiConfig {
         }
         config.favicon = project
             .serve_favicon
-            .map(|favicon| parse_project_favicon(&project_file, &favicon))
+            .map(|favicon| parse_project_favicon(project_file, &favicon))
             .transpose()?;
         Ok(config)
     }

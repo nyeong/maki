@@ -3,8 +3,8 @@ use crate::parser::IsoWeek;
 
 #[test]
 fn date_index_collects_inline_property_and_range_dates() {
-    let project = temp_project("date-index");
-    write_note_with_content(
+    let project = test_project("date-index");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -15,7 +15,7 @@ Meet <2026-08-16 토>.
 Track [2026-08-17]--[2026-08-19]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let property_date = Date::parse("2026-08-15").unwrap();
     let range_start_date = Date::parse("2026-08-17").unwrap();
     let middle_date = Date::parse("2026-08-18").unwrap();
@@ -63,8 +63,8 @@ Track [2026-08-17]--[2026-08-19]."#,
 
 #[test]
 fn date_occurrence_kind_labels_inline_and_property_dates() {
-    let project = temp_project("date-occurrence-kind");
-    write_note_with_content(
+    let project = test_project("date-occurrence-kind");
+    add_source(
         &project,
         "start.maki",
         r#"--^ scheduled: <2026-08-26>
@@ -75,7 +75,7 @@ Reference [2026-08-29].
 Event <2026-08-30>."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let kind_for = |raw: &str| {
         let date = Date::parse(raw).unwrap();
         let backlinks = maki.date_index().backlinks_for(&date).unwrap();
@@ -95,8 +95,8 @@ Event <2026-08-30>."#,
 
 #[test]
 fn date_index_collects_month_week_and_iso_weekday_markers() {
-    let project = temp_project("period-date-index");
-    write_note_with_content(
+    let project = test_project("period-date-index");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -107,7 +107,7 @@ Specific [2026-W23-1].
 Target [2026-06-01]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let month_period = DatePeriod::Month {
         year: 2026,
         month: 8,
@@ -159,8 +159,8 @@ Target [2026-06-01]."#,
 
 #[test]
 fn date_index_collects_dates_inside_strong_inline() {
-    let project = temp_project("strong-date-index");
-    write_note_with_content(
+    let project = test_project("strong-date-index");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -169,7 +169,7 @@ fn date_index_collects_dates_inside_strong_inline() {
 Plan *<2026-08-21> and [2026-08-22]--[2026-08-23]*."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let property_date = Date::parse("2026-08-20").unwrap();
     let inline_date = Date::parse("2026-08-21").unwrap();
     let range_start_date = Date::parse("2026-08-22").unwrap();
@@ -213,14 +213,14 @@ Plan *<2026-08-21> and [2026-08-22]--[2026-08-23]*."#,
 
 #[test]
 fn date_context_preserves_braced_changes_and_highlight_syntax() {
-    let project = temp_project("braced-change-date-context");
-    write_note_with_content(
+    let project = test_project("braced-change-date-context");
+    add_source(
         &project,
         "start.maki",
         "Plan +{new} -{old} ::now:: [2026-08-24].",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let date = Date::parse("2026-08-24").unwrap();
     let backlinks = maki.date_index().backlinks_for(&date).unwrap();
     let occurrence = maki
@@ -236,8 +236,8 @@ fn date_context_preserves_braced_changes_and_highlight_syntax() {
 
 #[test]
 fn date_index_collects_dates_from_reference_definitions() {
-    let project = temp_project("footnote-date-index");
-    write_note_with_content(
+    let project = test_project("footnote-date-index");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -247,7 +247,7 @@ Body[^release][].
 [release]: Released on [2026-08-24]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let date = Date::parse("2026-08-24").unwrap();
     let backlinks = maki.date_index().backlinks_for(&date).unwrap();
     let occurrence = maki
@@ -263,8 +263,8 @@ Body[^release][].
 
 #[test]
 fn footnote_definition_dates_follow_rendered_note_order_and_skip_regular_references() {
-    let project = temp_project("reference-date-render-order");
-    write_note_with_content(
+    let project = test_project("reference-date-render-order");
+    add_source(
         &project,
         "start.maki",
         r#"Second [^second][], then first [^first][]. Plain [plain][].
@@ -275,7 +275,7 @@ fn footnote_definition_dates_follow_rendered_note_order_and_skip_regular_referen
 [plain]: Plain reference date [2026-08-27]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let first = Date::parse("2026-08-24").unwrap();
     let second = Date::parse("2026-08-25").unwrap();
     let unused = Date::parse("2026-08-26").unwrap();
@@ -299,8 +299,8 @@ fn footnote_definition_dates_follow_rendered_note_order_and_skip_regular_referen
 
 #[test]
 fn footnote_definition_dates_include_late_explicit_footnotes() {
-    let project = temp_project("late-footnote-date");
-    write_note_with_content(
+    let project = test_project("late-footnote-date");
+    add_source(
         &project,
         "start.maki",
         r#"Body[^first][].
@@ -309,7 +309,7 @@ fn footnote_definition_dates_include_late_explicit_footnotes() {
 [second]: Second date [2026-08-28]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let date = Date::parse("2026-08-28").unwrap();
     let backlinks = maki.date_index().backlinks_for(&date).unwrap();
 
@@ -323,14 +323,14 @@ fn footnote_definition_dates_include_late_explicit_footnotes() {
 
 #[test]
 fn exact_date_reference_values_create_occurrences_at_their_uses() {
-    let project = temp_project("link-shaped-reference-date");
-    write_note_with_content(
+    let project = test_project("link-shaped-reference-date");
+    add_source(
         &project,
         "start.maki",
         "Follow [release][].\n\n[release]: [2026-08-24]",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let date = Date::parse("2026-08-24").unwrap();
 
     let backlinks = maki.date_index().backlinks_for(&date).unwrap();
@@ -344,8 +344,8 @@ fn exact_date_reference_values_create_occurrences_at_their_uses() {
 
 #[test]
 fn date_range_reference_title_override_does_not_create_an_occurrence() {
-    let project = temp_project("date-range-reference-title-override");
-    write_note_with_content(
+    let project = test_project("date-range-reference-title-override");
+    add_source(
         &project,
         "start.maki",
         r#"Default [period][]. Override [renamed][period]. Then [2026-08-26].
@@ -353,7 +353,7 @@ fn date_range_reference_title_override_does_not_create_an_occurrence() {
 [period]: [2026-08-24]--[2026-08-25]"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let range_start = Date::parse("2026-08-24").unwrap();
     let range_end = Date::parse("2026-08-25").unwrap();
     let following = Date::parse("2026-08-26").unwrap();
@@ -379,8 +379,8 @@ fn date_range_reference_title_override_does_not_create_an_occurrence() {
 
 #[test]
 fn nested_reference_date_ids_follow_each_render_scope() {
-    let project = temp_project("nested-reference-date-scope");
-    write_note_with_content(
+    let project = test_project("nested-reference-date-scope");
+    add_source(
         &project,
         "start.maki",
         r#"> [^same][]
@@ -391,7 +391,7 @@ fn nested_reference_date_ids_follow_each_render_scope() {
 [same]: Outer date [2026-08-24]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let nested = Date::parse("2026-08-25").unwrap();
     let outer = Date::parse("2026-08-24").unwrap();
 
@@ -413,8 +413,8 @@ fn nested_reference_date_ids_follow_each_render_scope() {
 
 #[test]
 fn date_index_ignores_dates_inside_raw_quotes() {
-    let project = temp_project("raw-quote-date-index");
-    write_note_with_content(
+    let project = test_project("raw-quote-date-index");
+    add_source(
         &project,
         "start.maki",
         r#"--v mode: pre
@@ -426,7 +426,7 @@ fn date_index_ignores_dates_inside_raw_quotes() {
 ---"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert!(
         maki.date_index()
@@ -442,8 +442,8 @@ fn date_index_ignores_dates_inside_raw_quotes() {
 
 #[test]
 fn date_index_orders_range_middle_backlinks_after_direct_dates() {
-    let project = temp_project("date-index-priority");
-    write_note_with_content(
+    let project = test_project("date-index-priority");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -453,7 +453,7 @@ Track [2026-08-17]--[2026-08-19].
 Target [2026-08-18]."#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let middle_date = Date::parse("2026-08-18").unwrap();
 
     let middle_backlinks = maki.date_index().backlinks_for(&middle_date).unwrap();
@@ -472,8 +472,8 @@ Target [2026-08-18]."#,
 
 #[test]
 fn date_index_context_includes_parent_heading_and_top_list_item() {
-    let project = temp_project("date-index-context");
-    write_note_with_content(
+    let project = test_project("date-index-context");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -487,7 +487,7 @@ fn date_index_context_includes_parent_heading_and_top_list_item() {
 == Sprint [2026-08-16]"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let nested_date = Date::parse("2026-08-15").unwrap();
     let heading_date = Date::parse("2026-08-16").unwrap();
 
@@ -514,15 +514,15 @@ fn date_index_context_includes_parent_heading_and_top_list_item() {
 
 #[test]
 fn date_index_context_preserves_todo_state() {
-    let project = temp_project("todo-date-context");
-    write_note_with_content(
+    let project = test_project("todo-date-context");
+    add_source(
         &project,
         "start.maki",
         r#"- [ ] Release on [2026-08-25]
 - [x] Reviewed on [2026-08-24]"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let todo = Date::parse("2026-08-25").unwrap();
     let done = Date::parse("2026-08-24").unwrap();
     let todo_backlinks = maki.date_index().backlinks_for(&todo).unwrap();
@@ -546,8 +546,8 @@ fn date_index_context_preserves_todo_state() {
 
 #[test]
 fn date_index_context_for_table_dates_includes_heading_row_and_table_header() {
-    let project = temp_project("date-index-table-context");
-    write_note_with_content(
+    let project = test_project("date-index-table-context");
+    add_source(
         &project,
         "start.maki",
         r#"--^ title: Start
@@ -560,7 +560,7 @@ fn date_index_context_for_table_dates_includes_heading_row_and_table_header() {
 | [2026-08-16] | Follow up | Codex |"#,
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let date = Date::parse("2026-08-15").unwrap();
 
     let backlinks = maki.date_index().backlinks_for(&date).unwrap();

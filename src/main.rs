@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod external_links;
 mod output;
 
 use commands::run_command;

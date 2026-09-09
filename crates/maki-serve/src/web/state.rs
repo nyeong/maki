@@ -5,7 +5,8 @@ use std::time::Instant;
 
 use crate::http;
 use crate::metrics::Metrics;
-use maki_core::{DatePeriod, Error as MakiError, Maki, MakiConfig, MakiConfigOverrides};
+use maki_core::{DatePeriod, Error as MakiError, Maki, MakiConfigOverrides};
+use maki_fs::{load_project_config, load_project_with_config_metered};
 
 use super::MAX_SSE_CLIENTS;
 use super::live_reload::{LiveReload, inject_live_reload_script};
@@ -136,10 +137,10 @@ impl AppState {
 
     pub(super) fn reload(&self) -> Result<(), MakiError> {
         let started = Instant::now();
-        let mut config = MakiConfig::load_project(&self.project_root)?;
+        let mut config = load_project_config(&self.project_root)?;
         self.config_overrides.apply_to(&mut config);
         let source_root = config.project_source_root(&self.project_root);
-        let result = Maki::load_with_config_metered(&source_root, config, &self.metrics)
+        let result = load_project_with_config_metered(&source_root, config, &self.metrics)
             .and_then(|next| self.replace_maki(next));
         let label = if result.is_ok() { "ok" } else { "error" };
         self.metrics

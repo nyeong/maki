@@ -13,6 +13,7 @@ readme = "README.md"
 [workspace]
 members = [
     "crates/maki-core",
+    "crates/maki-fs",
     "crates/maki-http",
     "crates/maki-lsp",
     "crates/maki-serve",
@@ -29,6 +30,8 @@ publish = false
 
 [dependencies]
 maki-core = { version = "0.1.0", path = "crates/maki-core" }
+maki-fs = { version = "0.1.0", path = "crates/maki-fs" }
 maki-lsp = { version = "0.1.0", path = "crates/maki-lsp" }
 maki-serve = { version = "0.1.0", path = "crates/maki-serve" }
 serde_json = "1.0"
+ureq = { version = "2.12.1", default-features = false, features = ["tls"] }

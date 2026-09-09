@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn note_path() {
-    let note = Note::load(repo_path("."), "docs/use-cases.maki").unwrap();
+    let note = Note::new("project", "docs/use-cases.maki", None);
 
     assert_eq!(note.source_path(), PathBuf::from("docs/use-cases.maki"));
     assert_eq!(note.canonical_path(), PathBuf::from("docs/use-cases"));
@@ -12,7 +12,7 @@ fn note_path() {
 
 #[test]
 fn note_ref() {
-    let note = Note::load(repo_path("."), "docs/use-cases.maki").unwrap();
+    let note = Note::new("project", "docs/use-cases.maki", None);
     let ref_ = note.note_ref();
     assert_eq!(ref_.canonical_path(), PathBuf::from("docs/use-cases"));
     assert_eq!(ref_.web_path(), "/docs/use-cases");
@@ -50,7 +50,11 @@ fn direct_href_safety_allows_only_local_links() {
 
 #[test]
 fn resolve_note_link() {
-    let maki = Maki::load(repo_path("docs")).unwrap();
+    let project = test_project("resolve-note-link");
+    add_empty_source(&project, "index.maki");
+    add_empty_source(&project, "use-cases.maki");
+    add_empty_source(&project, "maki-toml.maki");
+    let maki = project.compile();
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("index"), "use-cases"),
         NoteLinkResolution::Found(NoteRef::new("use-cases"))
@@ -69,14 +73,14 @@ fn resolve_note_link() {
 
 #[test]
 fn resolve_note_link_supports_heading_anchors_and_stable_ids() {
-    let project = temp_project("heading-link");
-    write_note_with_content(
+    let project = test_project("heading-link");
+    add_source(
         &project,
         "start.maki",
         "= 소개\n--^ id: intro\n\n[[#intro]] [[other#詳細]]",
     );
-    write_note_with_content(&project, "other.maki", "= 詳細");
-    let maki = Maki::load(&project.root).unwrap();
+    add_source(&project, "other.maki", "= 詳細");
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("start"), "#intro"),
@@ -101,8 +105,8 @@ fn resolve_note_link_supports_heading_anchors_and_stable_ids() {
 
 #[test]
 fn resolve_note_link_supports_root_child_heading_and_document_local_id_selectors() {
-    let project = temp_project("nested-document-selectors");
-    write_note_with_content(
+    let project = test_project("nested-document-selectors");
+    add_source(
         &project,
         "plan.maki",
         r#"--^ title: Plan
@@ -114,7 +118,7 @@ Current paragraph
 
 = Current section"#,
     );
-    write_note_with_content(
+    add_source(
         &project,
         "plan/coding.maki",
         r#"--^ title: Coding
@@ -124,7 +128,7 @@ Current paragraph
 - Solve problems
 --^ id: checklist"#,
     );
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let current = NoteRef::new("plan");
 
     assert_eq!(
@@ -173,10 +177,10 @@ Current paragraph
 
 #[test]
 fn explicit_root_and_child_selectors_do_not_fall_back_to_project_wide_stems() {
-    let project = temp_project("explicit-document-coordinate");
-    write_note(&project, "plan.maki");
-    write_note(&project, "other/coding.maki");
-    let maki = Maki::load(&project.root).unwrap();
+    let project = test_project("explicit-document-coordinate");
+    add_empty_source(&project, "plan.maki");
+    add_empty_source(&project, "other/coding.maki");
+    let maki = project.compile();
     let current = NoteRef::new("plan");
 
     assert_eq!(
@@ -199,14 +203,14 @@ fn explicit_root_and_child_selectors_do_not_fall_back_to_project_wide_stems() {
 
 #[test]
 fn document_local_ids_can_repeat_across_documents_but_are_exact_within_one_document() {
-    let project = temp_project("document-local-ids");
-    write_note_with_content(
+    let project = test_project("document-local-ids");
+    add_source(
         &project,
         "alpha.maki",
         "Alpha\n--^ id: schedule\n\nDuplicate\n--^ id: duplicate\n\nAgain\n--^ id: duplicate",
     );
-    write_note_with_content(&project, "beta.maki", "Beta\n--^ id: schedule");
-    let maki = Maki::load(&project.root).unwrap();
+    add_source(&project, "beta.maki", "Beta\n--^ id: schedule");
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("alpha"), "@schedule"),
@@ -234,13 +238,13 @@ fn document_local_ids_can_repeat_across_documents_but_are_exact_within_one_docum
 
 #[test]
 fn heading_and_explicit_id_selectors_are_ambiguous_when_their_html_fragments_collide() {
-    let project = temp_project("fragment-collision");
-    write_note_with_content(
+    let project = test_project("fragment-collision");
+    add_source(
         &project,
         "index.maki",
         "= shared\n\nTarget block\n--^ id: shared\n\n[[#shared]] [[@shared]]",
     );
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let current = NoteRef::new("index");
 
     assert_eq!(
@@ -251,16 +255,12 @@ fn heading_and_explicit_id_selectors_are_ambiguous_when_their_html_fragments_col
         maki.resolve_note_link(&current, "@shared"),
         NoteLinkResolution::Ambiguous
     );
-    assert!(
-        maki.diagnostics_without_external_links()
-            .iter()
-            .any(|diagnostic| {
-                matches!(
-                    diagnostic.kind(),
-                    ProjectDiagnosticKind::DuplicateId { id } if id == "shared"
-                )
-            })
-    );
+    assert!(maki.diagnostics().iter().any(|diagnostic| {
+        matches!(
+            diagnostic.kind(),
+            ProjectDiagnosticKind::DuplicateId { id } if id == "shared"
+        )
+    }));
 
     let html = maki.render_html(Path::new("index.maki")).unwrap();
     assert_eq!(html.matches("class=\"ambiguous-link\"").count(), 2);
@@ -272,39 +272,39 @@ fn heading_and_explicit_id_selectors_are_ambiguous_when_their_html_fragments_col
 
 #[test]
 fn rendered_project_pages_expose_block_id_fragments_and_direct_document_relations() {
-    let project = temp_project("document-navigation");
-    write_note_with_content(&project, "plan.maki", "--^ title: Plan\n\nBody");
-    write_note_with_content(
+    let project = test_project("document-navigation");
+    add_source(&project, "plan.maki", "--^ title: Plan\n\nBody");
+    add_source(
         &project,
         "plan/coding.maki",
         "--^ title: Coding\n\nTarget paragraph\n--^ id: target",
     );
-    write_note_with_content(
+    add_source(
         &project,
         "plan/interviews.maki",
         "--^ title: Interviews\n\nBody",
     );
-    write_note_with_content(
+    add_source(
         &project,
         "plan/coding/week-one.maki",
         "--^ title: Week One\n\nBody",
     );
-    write_note_with_content(
+    add_source(
         &project,
         "plan/missing/deep.maki",
         "--^ title: Deep\n\nBody",
     );
-    write_note_with_content(
+    add_source(
         &project,
         "partial/parent.maki",
         "--^ title: Partial Parent\n\nBody",
     );
-    write_note_with_content(
+    add_source(
         &project,
         "partial/parent/deep.maki",
         "--^ title: Partial Deep\n\nBody",
     );
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     let parent_html = maki.render_html(Path::new("plan.maki")).unwrap();
     assert!(!parent_html.contains("aria-label=\"Parent documents\""));
@@ -353,17 +353,17 @@ fn rendered_project_pages_expose_block_id_fragments_and_direct_document_relation
 
 #[test]
 fn subdocument_routes_and_pages_are_distinct_from_note_and_source_routes() {
-    let project = temp_project("subdocument-routes");
-    write_note_with_content(&project, "plan.maki", "--^ title: Plan <&>\n\nBody");
-    write_note_with_content(&project, "plan/a.maki", "--^ title: Zeta <child>\n\nBody");
-    write_note_with_content(&project, "plan/z.maki", "--^ title: Alpha & child\n\nBody");
-    write_note_with_content(
+    let project = test_project("subdocument-routes");
+    add_source(&project, "plan.maki", "--^ title: Plan <&>\n\nBody");
+    add_source(&project, "plan/a.maki", "--^ title: Zeta <child>\n\nBody");
+    add_source(&project, "plan/z.maki", "--^ title: Alpha & child\n\nBody");
+    add_source(
         &project,
         "plan/a/deep.maki",
         "--^ title: Deep child\n\nBody",
     );
-    write_note_with_content(&project, "leaf.maki", "--^ title: Leaf\n\nBody");
-    let maki = Maki::load(&project.root).unwrap();
+    add_source(&project, "leaf.maki", "--^ title: Leaf\n\nBody");
+    let maki = project.compile();
 
     assert_eq!(maki.resolve_route("/").unwrap(), MakiRoute::Home);
     assert_eq!(
@@ -407,11 +407,11 @@ fn subdocument_routes_and_pages_are_distinct_from_note_and_source_routes() {
 
 #[test]
 fn resolve_note_link_uses_case_insensitive_path_lookup() {
-    let project = temp_project("case-insensitive-path");
-    write_note(&project, "milestones/v0.maki");
-    write_note(&project, "index.maki");
+    let project = test_project("case-insensitive-path");
+    add_empty_source(&project, "milestones/v0.maki");
+    add_empty_source(&project, "index.maki");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("index"), "Milestones/V0"),
@@ -421,11 +421,11 @@ fn resolve_note_link_uses_case_insensitive_path_lookup() {
 
 #[test]
 fn resolve_note_link_uses_case_insensitive_sibling_stem_lookup() {
-    let project = temp_project("case-insensitive-sibling");
-    write_note(&project, "notes/devenv.maki");
-    write_note(&project, "notes/nix.maki");
+    let project = test_project("case-insensitive-sibling");
+    add_empty_source(&project, "notes/devenv.maki");
+    add_empty_source(&project, "notes/nix.maki");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("notes/devenv"), "Nix"),
@@ -435,12 +435,12 @@ fn resolve_note_link_uses_case_insensitive_sibling_stem_lookup() {
 
 #[test]
 fn resolve_note_link_prefers_sibling_stem_before_project_wide_stem() {
-    let project = temp_project("sibling-before-project-stem");
-    write_note(&project, "notes/page.maki");
-    write_note(&project, "notes/nix.maki");
-    write_note(&project, "other/Nix.maki");
+    let project = test_project("sibling-before-project-stem");
+    add_empty_source(&project, "notes/page.maki");
+    add_empty_source(&project, "notes/nix.maki");
+    add_empty_source(&project, "other/Nix.maki");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("notes/page"), "NIX"),
@@ -450,12 +450,12 @@ fn resolve_note_link_prefers_sibling_stem_before_project_wide_stem() {
 
 #[test]
 fn resolve_note_link_reports_case_insensitive_stem_ambiguity() {
-    let project = temp_project("case-insensitive-stem-ambiguity");
-    write_note(&project, "start.maki");
-    write_note(&project, "alpha/nix.maki");
-    write_note(&project, "beta/NIX.maki");
+    let project = test_project("case-insensitive-stem-ambiguity");
+    add_empty_source(&project, "start.maki");
+    add_empty_source(&project, "alpha/nix.maki");
+    add_empty_source(&project, "beta/NIX.maki");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("start"), "Nix"),
@@ -465,12 +465,12 @@ fn resolve_note_link_reports_case_insensitive_stem_ambiguity() {
 
 #[test]
 fn resolve_note_link_preserves_exact_path_priority() {
-    let project = temp_project("exact-before-sibling");
-    write_note(&project, "nix.maki");
-    write_note(&project, "notes/page.maki");
-    write_note(&project, "notes/nix.maki");
+    let project = test_project("exact-before-sibling");
+    add_empty_source(&project, "nix.maki");
+    add_empty_source(&project, "notes/page.maki");
+    add_empty_source(&project, "notes/nix.maki");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
 
     assert_eq!(
         maki.resolve_note_link(&NoteRef::new("notes/page"), "nix"),
@@ -480,15 +480,15 @@ fn resolve_note_link_preserves_exact_path_priority() {
 
 #[test]
 fn reference_links_can_resolve_to_notes_with_custom_titles() {
-    let project = temp_project("reference-note-link");
-    write_note_with_content(
+    let project = test_project("reference-note-link");
+    add_source(
         &project,
         "start.maki",
         "See [the page][].\n\n[the page]: [[page]]",
     );
-    write_note_with_content(&project, "page.maki", "--^ title: Page\n\nbody");
+    add_source(&project, "page.maki", "--^ title: Page\n\nbody");
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let html = maki.render_html(Path::new("start.maki")).unwrap();
 
     assert!(html.contains("<a href=\"/page\">the page</a>"));
@@ -496,31 +496,31 @@ fn reference_links_can_resolve_to_notes_with_custom_titles() {
 
 #[test]
 fn direct_links_preserve_local_hrefs_without_note_resolution() {
-    let project = temp_project("direct-local-href");
-    write_note_with_content(
+    let project = test_project("direct-local-href");
+    add_source(
         &project,
         "start.maki",
         "[download](assets/archive) [section](#details)",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let html = maki.render_html(Path::new("start.maki")).unwrap();
 
     assert!(html.contains("<a href=\"assets/archive\">download</a>"));
     assert!(html.contains("<a href=\"#details\">section</a>"));
-    assert!(maki.diagnostics_without_external_links().is_empty());
+    assert!(maki.diagnostics().is_empty());
 }
 
 #[test]
 fn reference_external_links_render_as_plain_hrefs() {
-    let project = temp_project("reference-external-link");
-    write_note_with_content(
+    let project = test_project("reference-external-link");
+    add_source(
         &project,
         "start.maki",
         "See [djot][].\n\n[djot]: <https://github.com/jgm/djot>",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let html = maki.render_html(Path::new("start.maki")).unwrap();
 
     assert!(
@@ -530,14 +530,14 @@ fn reference_external_links_render_as_plain_hrefs() {
 
 #[test]
 fn angle_wrapped_external_urls_render_as_links_but_bare_urls_do_not() {
-    let project = temp_project("hyper-link");
-    write_note_with_content(
+    let project = test_project("hyper-link");
+    add_source(
         &project,
         "start.maki",
         "See <https://example.com/docs>, not https://example.com/bare.",
     );
 
-    let maki = Maki::load(&project.root).unwrap();
+    let maki = project.compile();
     let html = maki.render_html(Path::new("start.maki")).unwrap();
 
     assert!(html.contains(

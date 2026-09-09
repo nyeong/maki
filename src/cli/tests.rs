@@ -122,6 +122,53 @@ fn test_parse_lsp_command() {
 }
 
 #[test]
+fn test_parse_build_external_link_policy() {
+    assert_eq!(
+        parse_args(&args(&["maki", "build", "docs/index.maki"])),
+        Ok(Command::Build {
+            file: PathBuf::from("docs/index.maki"),
+            check_external_links: false,
+        })
+    );
+    assert_eq!(
+        parse_args(&args(&[
+            "maki",
+            "build",
+            "--check-external-links",
+            "docs/index.maki",
+        ])),
+        Ok(Command::Build {
+            file: PathBuf::from("docs/index.maki"),
+            check_external_links: true,
+        })
+    );
+    assert_eq!(
+        parse_args(&args(&[
+            "maki",
+            "build",
+            "docs/index.maki",
+            "--check-external-links",
+        ])),
+        Ok(Command::Build {
+            file: PathBuf::from("docs/index.maki"),
+            check_external_links: true,
+        })
+    );
+}
+
+#[test]
+fn test_parse_build_rejects_unknown_or_extra_arguments() {
+    assert_eq!(
+        parse_args(&args(&["maki", "build", "--offline"])),
+        Err(CliError::UnknownOption("--offline".to_string()))
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "build", "one.maki", "two.maki"])),
+        Err(CliError::UnexpectedArgument("two.maki".to_string()))
+    );
+}
+
+#[test]
 fn test_parse_missing_command() {
     assert_eq!(parse_args(&args(&["maki"])), Err(CliError::MissingCommand))
 }

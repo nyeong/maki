@@ -64,6 +64,7 @@ maki --version
 maki --version --json
 maki serve .
 maki build docs/index.maki > index.html
+maki build docs/index.maki --check-external-links > index.html
 maki lsp
 maki serve --git https://example.invalid/maki.git --branch main --state-dir /var/lib/maki/docs
 maki serve . --metrics 127.0.0.1:4041
@@ -75,7 +76,10 @@ root. Otherwise, it serves `<path>` as a plain note directory.
 
 `maki build <file>` uses the same project discovery. Files inside the configured
 source root get project-aware link resolution; other files render as standalone
-HTML.
+HTML. Builds are offline by default: parser and project diagnostics never make a
+network request. Pass `--check-external-links` to explicitly check authored
+HTTP(S) links and include any failures in the warnings written to stderr. This
+opt-in is a CLI policy and cannot be enabled by `maki.toml`.
 
 `maki lsp` starts the stdio language server for editor integration.
 

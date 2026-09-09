@@ -1,5 +1,5 @@
 --^ title: Core Analysis
---^ updated: [2026-09-08]
+--^ updated: [2026-09-09]
 
 = 개요
 
@@ -76,6 +76,20 @@ Project의 Document map과 date marker reverse index는 같은 immutable snapsho
 Runtime과 LSP는 source와 analysis를 별도 갱신하지 않고 `ProjectSnapshot` 전체를 교체한다. Load/render/search/diagnostics/LSP 기능은 같은 revision의 source와 analysis를 읽는다.
 현재 snapshot 전체를 다시 분석한다. API 사용자는 내부 index 전략에 의존하지 않는다.
 
+== Config와 Project Compile
+
+`MakiConfig::parse(project_file, raw)`는 manifest path와 raw TOML 문자열을 값으로 받아 config를 만든다.
+Manifest 존재 확인과 read는 하지 않으며, path는 validation error의 source를 표시하는 데만 사용한다.
+
+`ProjectSource::loaded(path, source, modified)`는 source-root-relative path, 읽은 source와 optional modified time을 보존한다.
+Adapter가 note를 읽지 못한 경우에는 `ProjectSource::read_failed(path, modified)`로 그 상태를 전달한다.
+`Maki::compile(root, config, project_sources)`은 이 값들로 기존 `ProjectSnapshot::compile` 계약을 사용해 note/link/date/search와 diagnostic view를 구성한다.
+Root path도 값으로만 사용하므로 compile은 filesystem, network와 clock을 읽지 않는다.
+
+`maki-fs`가 project root discovery, manifest와 source read, metadata, canonicalization과 load timing을 소유한다.
+이는 local filesystem을 위한 concrete adapter이며 core에 virtual filesystem 또는 async IO trait를 추가하지 않는다.
+LSP는 초기 workspace source를 이 adapter로 읽은 뒤 editor buffer 값으로 `ProjectSnapshot`을 교체한다.
+
 Note Link target parser는 `/`와 `+` document selector, `#`와 `@` internal selector를 protocol-neutral data로 보존한다.
 `ProjectAnalysis::select_document`, `resolve_note_link`, `descendant_documents`가 runtime, analysis와 LSP의 공통 선택 계약이다.
 Canonical identity는 source-root-relative, extension 없는 `/` 구분 path다. Authored `\\`는 `/`로 정규화하고 `.maki` suffix 하나를 허용하되 empty, `.`, `..`, drive-prefix component는 거부한다.
@@ -103,8 +117,13 @@ ID, Reference key, Link target은 typed subject로 보존하므로 consumer가 m
 - active definition이 없는 explicit Reference Use/Footnote
 - 같은 Document 안의 duplicate explicit ID 또는 다른 Heading fragment와의 충돌
 
-External HTTP/HTTPS link check와 note read failure는 IO가 필요하므로 이 sans IO surface에 포함하지 않는다.
-기존 project runtime의 diagnostics가 이 문제를 별도로 수집하며, IO adapter가 두 결과를 표시 단계에서 합성할 수 있다.
+`Maki::diagnostics()`는 `AnalysisDiagnostic`과 adapter가 값으로 전달한 note read-failure 상태만 project diagnostic으로 투영하며 network를 호출하지 않는다.
+External HTTP/HTTPS link check는 root CLI adapter가 `maki build --check-external-links`로 명시적으로 선택됐을 때만 수행한다.
+Adapter는 target별 `ExternalLinkCheck` 결과값을 만들고 `Maki::diagnostics_with_external_link_checks`가 pure diagnostics와 합성한다.
+따라서 기본 build, serve diagnostics와 semantic LSP diagnostics는 offline이고 같은 source snapshot에 대해 deterministic하다.
+
+LSP #91의 page-title HTTP fetch는 이 검사와 별개다.
+Bare URL extraction Code Action의 resolve에서만 bounded provider가 실행되며 core project compile이나 diagnostics의 dependency가 아니다.
 
 = Nested Located Surface
 

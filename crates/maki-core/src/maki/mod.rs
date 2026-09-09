@@ -8,27 +8,13 @@
 //! - 문서의 `title`을 문서의 제목으로 활용함
 //! - 문서의 `publish`를 publish 정책으로 활용함
 
-use std::time::Duration;
-
 pub const PROJECT_FILE_NAME: &str = "maki.toml";
-pub(super) const MAKI_EXTENSION: &str = "maki";
 pub(super) const MAKI_SOURCE_EXTENSION: &str = ".maki";
-
-pub trait ProjectLoadMeter {
-    fn record_project_load_phase(&self, phase: &'static str, duration: Duration);
-}
-
-pub(super) struct NoopProjectLoadMeter;
-
-impl ProjectLoadMeter for NoopProjectLoadMeter {
-    fn record_project_load_phase(&self, _phase: &'static str, _duration: Duration) {}
-}
 
 mod config;
 mod dates;
 mod diagnostics;
 mod error;
-mod files;
 mod links;
 mod note;
 mod project;
@@ -42,13 +28,15 @@ pub(crate) use dates::{
     collect_parsed_document_dates, date_occurrence_href, date_page_path, date_year_page_path,
     inline_date_occurrence_id, property_date_occurrence_id,
 };
-pub use diagnostics::{ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary};
+pub use diagnostics::{
+    ExternalLinkCheck, ProjectDiagnostic, ProjectDiagnosticKind, ProjectDiagnosticSummary,
+    external_link_diagnostics,
+};
 pub use error::Error;
-pub use files::{is_discoverable_maki_path, list_maki_files};
 pub use links::NoteLinkResolution;
 pub(crate) use links::{is_external_href, is_safe_direct_href};
 pub use note::{Note, NoteRef, RecentEntry, SearchEntry, SearchEntryKind, SitemapEntry};
-pub use project::{Maki, MakiRoute};
+pub use project::{Maki, MakiRoute, ProjectSource};
 
 #[cfg(test)]
 mod tests;
