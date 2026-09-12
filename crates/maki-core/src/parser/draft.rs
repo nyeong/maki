@@ -244,8 +244,9 @@ fn is_closing_fence(line: &LineToken<'_>, len: usize) -> bool {
         LineToken::Line {
             indent: 0,
             kind: LinePrefix::HyphenFence(line_len),
+            raw_line,
             ..
-        } if *line_len == len && line.body() == Some("")
+        } if *line_len == len && raw_line.len() == len
     )
 }
 
@@ -488,8 +489,10 @@ fn strip_line_indent<'a>(line: &LineToken<'a>, indent: usize) -> LineToken<'a> {
 fn parse_list_item_child_drafts<'a>(
     cursor: &mut LineCursor<'_, 'a>,
     content_indent: usize,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
 ) -> Vec<BlockDraft<'a>> {
     let mut child_lines = vec![];
+    let mut first_child_line = None;
 
     while let Some((next_index, next_line)) = cursor.peek_after_leading_blanks() {
         if !line_is_indented_at_least(next_line, content_indent) {
@@ -516,15 +519,24 @@ fn parse_list_item_child_drafts<'a>(
                 break;
             }
 
+            let line_number = cursor.line_number();
             let line = cursor
                 .next()
                 .expect("peeked list child line should be available");
+            first_child_line.get_or_insert(line_number);
             child_lines.push(strip_line_indent(line, content_indent));
         }
     }
 
-    let mut diagnostics = vec![];
-    build_drafts(&child_lines, &mut diagnostics)
+    let mut child_diagnostics = vec![];
+    let drafts = build_drafts(&child_lines, &mut child_diagnostics);
+    if let Some(first_child_line) = first_child_line {
+        for diagnostic in &mut child_diagnostics {
+            diagnostic.line += first_child_line - 1;
+        }
+    }
+    diagnostics.extend(child_diagnostics);
+    drafts
 }
 
 fn parse_list_item_draft<'a>(
@@ -570,7 +582,10 @@ fn parse_todo_item(kind: ListKind, body: &str) -> (Option<TodoState>, &str) {
     (None, body)
 }
 
-fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+fn parse_list_draft<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) -> Option<BlockDraft<'a>> {
     let (list_kind, list_indent, _) = list_marker(cursor.peek()?)?;
 
     if list_indent != 0 {
@@ -584,7 +599,7 @@ fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a
         .is_some_and(|line| is_list_marker_at(line, list_indent, list_kind))
     {
         let (mut item, content_indent) = parse_list_item_draft(cursor)?;
-        item.children = parse_list_item_child_drafts(cursor, content_indent);
+        item.children = parse_list_item_child_drafts(cursor, content_indent, diagnostics);
         items.push(item);
 
         if list_kind == ListKind::Ordered
@@ -751,7 +766,7 @@ pub(super) fn build_drafts<'a>(
             Some(draft)
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             Some(draft)
-        } else if let Some(draft) = parse_list_draft(&mut cursor) {
+        } else if let Some(draft) = parse_list_draft(&mut cursor, diagnostics) {
             Some(draft)
         } else if let Some(draft) = parse_table_draft(&mut cursor) {
             Some(draft)
