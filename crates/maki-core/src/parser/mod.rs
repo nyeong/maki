@@ -6,6 +6,7 @@ use std::cell::Cell;
 mod build;
 mod diagnostic;
 mod draft;
+mod formatter;
 mod inline;
 mod line;
 mod types;
@@ -15,14 +16,15 @@ mod tests;
 
 pub use diagnostic::{ParseDiagnostic, ParseDiagnosticKind, format_parse_diagnostic_kind};
 pub(crate) use draft::PropertyDirection;
+pub use formatter::{FormatError, format_source};
 pub use inline::parse_inline;
 pub(crate) use inline::{is_local_link_target, uri_scheme};
-pub(crate) use types::PropertyDeclaration;
 pub use types::{
     Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
     Document, Inline, IsoWeek, ListItem, ListKind, ReferenceDefinition, ReferenceDefinitions,
     ReferenceValueKind, TableCell, TableColumnAlignment, TableRow, TableRowKind, TodoState,
 };
+pub(crate) use types::{PropertyDeclaration, quote_mode_is_raw};
 
 pub struct ParseResult<'a> {
     pub document: Document<'a>,

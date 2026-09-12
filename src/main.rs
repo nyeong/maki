@@ -1,9 +1,10 @@
 mod cli;
 mod commands;
 mod external_links;
+mod format_command;
 mod output;
 
-use commands::run_command;
+use commands::{CommandOutcome, run_command};
 
 fn main() {
     let args = std::env::args().collect::<Vec<String>>();
@@ -13,8 +14,12 @@ fn main() {
         std::process::exit(2);
     });
 
-    run_command(command).unwrap_or_else(|e| {
-        eprintln!("{}", e);
-        std::process::exit(1);
-    })
+    match run_command(command) {
+        Ok(CommandOutcome::Success) => {}
+        Ok(CommandOutcome::CheckFailed) => std::process::exit(1),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
 }

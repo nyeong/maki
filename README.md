@@ -65,6 +65,9 @@ maki --version --json
 maki serve .
 maki build docs/index.maki > index.html
 maki build docs/index.maki --check-external-links > index.html
+maki fmt .
+maki fmt --check
+maki fmt - < draft.maki > formatted.maki
 maki lsp
 maki serve --git https://example.invalid/maki.git --branch main --state-dir /var/lib/maki/docs
 maki serve . --metrics 127.0.0.1:4041
@@ -80,6 +83,14 @@ HTML. Builds are offline by default: parser and project diagnostics never make a
 network request. Pass `--check-external-links` to explicitly check authored
 HTTP(S) links and include any failures in the warnings written to stderr. This
 opt-in is a CLI policy and cannot be enabled by `maki.toml`.
+
+`maki fmt [path]` normalizes conservative structural whitespace in one `.maki`
+file or every note in a project, without reflowing paragraphs or changing raw
+container bodies. The path defaults to the current directory. A project path
+uses its configured source root; a directory outside that source is handled as
+a standalone note directory. Pass `--check` to report files that would change
+without writing them. A dirty check exits with status 1. Use `-` to read one
+document from stdin and write the formatted document to stdout.
 
 `maki lsp` starts the stdio language server for editor integration.
 

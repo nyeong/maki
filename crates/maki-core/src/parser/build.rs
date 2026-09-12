@@ -214,7 +214,7 @@ fn build_table_block<'a>(
 fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
     match draft {
         BlockDraft::Property { .. } => panic!("No Property Block!"),
-        BlockDraft::Heading { level, body } => Block {
+        BlockDraft::Heading { level, body, .. } => Block {
             kind: BlockKind::Heading {
                 level: *level,
                 body: parse_inline(body),
@@ -239,6 +239,7 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             kind,
             args,
             raw_lines,
+            ..
         } => Block {
             kind: BlockKind::Container {
                 kind,
@@ -253,7 +254,7 @@ fn build_block<'a>(draft: &BlockDraft<'a>, props: Properties<'a>) -> Block<'a> {
             },
             props,
         },
-        BlockDraft::Table { header, rows } => build_table_block(header, rows, props),
+        BlockDraft::Table { header, rows, .. } => build_table_block(header, rows, props),
         BlockDraft::List { items } => Block {
             kind: BlockKind::List {
                 items: items.iter().map(build_list_item).collect(),

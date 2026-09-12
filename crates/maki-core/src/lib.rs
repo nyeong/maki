@@ -6,6 +6,8 @@ mod nested;
 pub mod parser;
 pub mod source;
 
+pub use parser::{FormatError, format_source};
+
 pub use maki::{
     DateBacklink, DateIndex, DateMarker, DateOccurrence, DateOccurrenceKind, DateOrigin,
     DatePeriod, DateRelation, Error, ExternalLinkCheck, HomeMode, Maki, MakiConfig,

@@ -671,6 +671,10 @@ impl<'a> Block<'a> {
     }
 }
 
+pub(crate) fn quote_mode_is_raw(mode: Option<&str>) -> bool {
+    matches!(mode, Some("pre" | "text"))
+}
+
 #[derive(Debug, PartialEq)]
 pub enum BlockKind<'a> {
     Paragraph {

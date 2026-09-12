@@ -13,12 +13,12 @@ use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
     CodeActionResponse, CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
     CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLink, DocumentLinkOptions,
-    DocumentLinkParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    InitializeParams, Location, MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind,
-    PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities, SymbolInformation,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams, DocumentLink,
+    DocumentLinkOptions, DocumentLinkParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, InitializeParams, Location, MarkupContent, MarkupKind, OneOf, Position,
+    PositionEncodingKind, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
+    SymbolInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
     WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use maki_core::analysis::{
@@ -124,6 +124,7 @@ fn server_capabilities() -> ServerCapabilities {
         })),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
         ..ServerCapabilities::default()
@@ -227,6 +228,10 @@ impl Server {
                 let params: DocumentSymbolParams = serde_json::from_value(request.params)?;
                 serde_json::to_value(self.document_symbols(params))?
             }
+            "textDocument/formatting" => {
+                let params: DocumentFormattingParams = serde_json::from_value(request.params)?;
+                serde_json::to_value(self.formatting(params))?
+            }
             "workspace/symbol" => {
                 let params: WorkspaceSymbolParams = serde_json::from_value(request.params)?;
                 serde_json::to_value(self.workspace_symbols(params))?
@@ -319,6 +324,22 @@ impl Server {
         let source = self.snapshot.source(&path)?;
         let analysis = self.snapshot.analysis().document(&path)?;
         Some((source, analysis))
+    }
+
+    fn formatting(&self, params: DocumentFormattingParams) -> Option<Vec<TextEdit>> {
+        let path = self.relative_path(&params.text_document.uri)?;
+        let source = self.snapshot.source(&path)?;
+        let Ok(formatted) = maki_core::format_source(source) else {
+            return Some(Vec::new());
+        };
+        if formatted.as_ref() == source {
+            return Some(Vec::new());
+        }
+
+        Some(vec![TextEdit {
+            range: lsp_range(source, SourceSpan::new(0, source.len()))?,
+            new_text: formatted.into_owned(),
+        }])
     }
 
     fn publish_diagnostics(&self, connection: &Connection) -> LspResult<()> {
@@ -1392,6 +1413,18 @@ mod tests {
             .expect("document should be analyzed")
     }
 
+    fn formatting_params(uri: Url) -> DocumentFormattingParams {
+        DocumentFormattingParams {
+            text_document: lsp_types::TextDocumentIdentifier::new(uri),
+            options: lsp_types::FormattingOptions {
+                tab_size: 4,
+                insert_spaces: true,
+                ..lsp_types::FormattingOptions::default()
+            },
+            work_done_progress_params: Default::default(),
+        }
+    }
+
     #[test]
     fn initialize_result_reports_server_version() {
         let result = initialize_result("1.2.3");
@@ -1412,6 +1445,93 @@ mod tests {
             true
         );
         assert_eq!(result["capabilities"]["referencesProvider"], true);
+        assert_eq!(result["capabilities"]["documentFormattingProvider"], true);
+    }
+
+    #[test]
+    fn formatting_requests_are_dispatched() {
+        let source = "--^  title : Dispatch\n";
+        let server = test_server(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            source.to_string(),
+        )]));
+        let (server_connection, client_connection) = Connection::memory();
+
+        server
+            .handle_request(
+                &server_connection,
+                Request {
+                    id: 1.into(),
+                    method: "textDocument/formatting".to_string(),
+                    params: serde_json::to_value(formatting_params(document_uri("index.maki")))
+                        .unwrap(),
+                },
+            )
+            .unwrap();
+
+        let Message::Response(response) = client_connection.receiver.recv().unwrap() else {
+            panic!("expected a formatting response");
+        };
+        assert!(response.error.is_none());
+        let edits: Vec<TextEdit> = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(
+            edits,
+            vec![TextEdit {
+                range: Range::new(Position::new(0, 0), Position::new(1, 0)),
+                new_text: "--^ title: Dispatch\n".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn formatting_uses_the_unsaved_snapshot_and_utf16_range() {
+        let workspace = temp_workspace("formatting-unsaved");
+        write_workspace_file(&workspace, "index.maki", "= Disk\n");
+        let path = PathBuf::from("index.maki");
+        let uri = Url::from_file_path(workspace.root.join(&path)).unwrap();
+        let mut server =
+            Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
+        server.document_versions.insert(path.clone(), 7);
+        server.replace_document(path, Some("--^  title : Draft\nparagraph 😀".to_string()));
+
+        let edits = server
+            .formatting(formatting_params(uri))
+            .expect("the open document should be available");
+
+        assert_eq!(
+            edits,
+            vec![TextEdit {
+                range: Range::new(Position::new(0, 0), Position::new(1, 12)),
+                new_text: "--^ title: Draft\nparagraph 😀".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn formatting_returns_no_edits_for_noop_or_malformed_sources() {
+        let server = test_server(BTreeMap::from([
+            (
+                PathBuf::from("canonical.maki"),
+                "= Heading\n\nparagraph\n".to_string(),
+            ),
+            (
+                PathBuf::from("malformed.maki"),
+                "--- raw\nbody\n".to_string(),
+            ),
+        ]));
+
+        assert_eq!(
+            server.formatting(formatting_params(document_uri("canonical.maki"))),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            server.formatting(formatting_params(document_uri("malformed.maki"))),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            server.formatting(formatting_params(document_uri("missing.maki"))),
+            None
+        );
     }
 
     #[test]

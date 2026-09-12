@@ -513,6 +513,8 @@ fn read_until_contains(stream: &mut TcpStream, needle: &str, timeout: Duration) 
 
 #[path = "milestone_quality/build.rs"]
 mod build;
+#[path = "milestone_quality/format.rs"]
+mod format;
 #[path = "milestone_quality/git.rs"]
 mod git;
 #[path = "milestone_quality/metrics.rs"]

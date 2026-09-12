@@ -169,6 +169,71 @@ fn test_parse_build_rejects_unknown_or_extra_arguments() {
 }
 
 #[test]
+fn test_parse_format_file_and_project_targets() {
+    assert_eq!(
+        parse_args(&args(&["maki", "fmt", "notes/today.maki"])),
+        Ok(Command::Format {
+            target: FormatTarget::Path(PathBuf::from("notes/today.maki")),
+            check: false,
+        })
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "fmt"])),
+        Ok(Command::Format {
+            target: FormatTarget::Path(PathBuf::from(".")),
+            check: false,
+        })
+    );
+}
+
+#[test]
+fn test_parse_format_check_in_either_position() {
+    for input in [
+        ["maki", "fmt", "--check", "docs"],
+        ["maki", "fmt", "docs", "--check"],
+    ] {
+        assert_eq!(
+            parse_args(&args(&input)),
+            Ok(Command::Format {
+                target: FormatTarget::Path(PathBuf::from("docs")),
+                check: true,
+            })
+        );
+    }
+
+    assert_eq!(
+        parse_args(&args(&["maki", "fmt", "--check"])),
+        Ok(Command::Format {
+            target: FormatTarget::Path(PathBuf::from(".")),
+            check: true,
+        })
+    );
+}
+
+#[test]
+fn test_parse_format_stdin() {
+    assert_eq!(
+        parse_args(&args(&["maki", "fmt", "--check", "-"])),
+        Ok(Command::Format {
+            target: FormatTarget::Stdin,
+            check: true,
+        })
+    );
+}
+
+#[test]
+fn test_parse_format_rejects_unknown_or_extra_arguments() {
+    assert_eq!(
+        parse_args(&args(&["maki", "fmt", "--write", "page.maki"])),
+        Err(CliError::UnknownOption("--write".to_string()))
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "fmt", "one.maki", "two.maki"])),
+        Err(CliError::UnexpectedArgument("two.maki".to_string()))
+    );
+}
+
+#[test]
 fn test_parse_missing_command() {
     assert_eq!(parse_args(&args(&["maki"])), Err(CliError::MissingCommand))
 }

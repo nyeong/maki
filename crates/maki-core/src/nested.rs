@@ -1,4 +1,4 @@
-use crate::parser::{self, Block, BlockKind, ListItem, ReferenceDefinitions};
+use crate::parser::{self, Block, BlockKind, ListItem, ReferenceDefinitions, quote_mode_is_raw};
 use crate::source::{SourceSpan, slice_span};
 
 #[derive(Debug)]
@@ -222,10 +222,6 @@ impl<V: NestedTraversalVisitor> Traversal<'_, V> {
         self.document(&mapped.text, &parsed, Some(&mapped), &mut nested_context);
         self.observer.exit();
     }
-}
-
-fn quote_mode_is_raw(mode: Option<&str>) -> bool {
-    matches!(mode, Some("pre" | "text"))
 }
 
 #[cfg(test)]

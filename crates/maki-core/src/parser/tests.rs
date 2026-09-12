@@ -1148,17 +1148,20 @@ plain text"#;
                 ],
             },
             BlockDraft::Heading {
+                raw_line: "== Heading",
                 level: 2,
                 body: "Heading",
             },
             BlockDraft::List {
                 items: vec![ListItemDraft {
+                    raw_line: "- list",
                     kind: ListKind::Unordered,
                     todo: None,
                     indent: 0,
                     body: "list",
                     children: vec![BlockDraft::List {
                         items: vec![ListItemDraft {
+                            raw_line: "- nested list",
                             kind: ListKind::Unordered,
                             todo: None,
                             indent: 0,
@@ -1172,6 +1175,8 @@ plain text"#;
                 raw_lines: vec!["This is Code Line"],
             },
             BlockDraft::Container {
+                opener_raw_line: "--- code",
+                fence_len: 3,
                 kind: "code",
                 args: vec![],
                 raw_lines: vec!["Container Block"],

@@ -6,6 +6,13 @@ the canonical Forgejo repository.
 
 ## [Unreleased]
 
+### Added
+
+- Added a conservative, semantics-checked Maki formatter shared by
+  `maki fmt`, `maki fmt --check`, stdin/stdout, and LSP whole-document
+  formatting. It preserves authored paragraph wrapping, line endings, and raw
+  bodies, and refuses parser warnings instead of guessing repairs.
+
 ### Changed
 
 - Replaced implicit document-local reference and footnote markers with the
