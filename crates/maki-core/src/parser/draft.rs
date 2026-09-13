@@ -54,6 +54,7 @@ pub(super) enum BlockDraft<'a> {
     },
     /// =
     Heading {
+        raw_line: &'a str,
         level: usize,
         body: &'a str,
     },
@@ -70,6 +71,8 @@ pub(super) enum BlockDraft<'a> {
 
     /// --- <kind> [<args>]
     Container {
+        opener_raw_line: &'a str,
+        fence_len: usize,
         kind: &'a str,
         args: Vec<&'a str>,
         raw_lines: Vec<&'a str>,
@@ -85,6 +88,8 @@ pub(super) enum BlockDraft<'a> {
     },
 
     Table {
+        header_raw_line: &'a str,
+        separator_raw_line: &'a str,
         header: Vec<&'a str>,
         rows: Vec<TableRowDraft<'a>>,
     },
@@ -96,12 +101,14 @@ pub(super) enum BlockDraft<'a> {
 
 #[derive(Debug, PartialEq)]
 pub(super) struct TableRowDraft<'a> {
+    pub(super) raw_line: &'a str,
     pub(super) kind: TableRowKind,
     pub(super) cells: Vec<&'a str>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(super) struct ListItemDraft<'a> {
+    pub(super) raw_line: &'a str,
     pub(super) kind: ListKind,
     pub(super) todo: Option<TodoState>,
     pub(super) indent: usize,
@@ -244,8 +251,9 @@ fn is_closing_fence(line: &LineToken<'_>, len: usize) -> bool {
         LineToken::Line {
             indent: 0,
             kind: LinePrefix::HyphenFence(line_len),
+            raw_line,
             ..
-        } if *line_len == len && line.body() == Some("")
+        } if *line_len == len && raw_line.len() == len
     )
 }
 
@@ -300,6 +308,8 @@ fn parse_container_draft<'a>(
     }
 
     Some(BlockDraft::Container {
+        opener_raw_line: raw_line,
+        fence_len,
         kind,
         args,
         raw_lines,
@@ -426,6 +436,7 @@ fn parse_heading_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft
         return None;
     };
     let level = *level;
+    let raw_line = line.raw_line();
     let body = line.body()?;
 
     if !(1..=6).contains(&level) {
@@ -434,7 +445,11 @@ fn parse_heading_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft
 
     cursor.next();
 
-    Some(BlockDraft::Heading { level, body })
+    Some(BlockDraft::Heading {
+        raw_line,
+        level,
+        body,
+    })
 }
 
 fn list_marker(line: &LineToken<'_>) -> Option<(ListKind, usize, usize)> {
@@ -488,8 +503,10 @@ fn strip_line_indent<'a>(line: &LineToken<'a>, indent: usize) -> LineToken<'a> {
 fn parse_list_item_child_drafts<'a>(
     cursor: &mut LineCursor<'_, 'a>,
     content_indent: usize,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
 ) -> Vec<BlockDraft<'a>> {
     let mut child_lines = vec![];
+    let mut first_child_line = None;
 
     while let Some((next_index, next_line)) = cursor.peek_after_leading_blanks() {
         if !line_is_indented_at_least(next_line, content_indent) {
@@ -516,15 +533,24 @@ fn parse_list_item_child_drafts<'a>(
                 break;
             }
 
+            let line_number = cursor.line_number();
             let line = cursor
                 .next()
                 .expect("peeked list child line should be available");
+            first_child_line.get_or_insert(line_number);
             child_lines.push(strip_line_indent(line, content_indent));
         }
     }
 
-    let mut diagnostics = vec![];
-    build_drafts(&child_lines, &mut diagnostics)
+    let mut child_diagnostics = vec![];
+    let drafts = build_drafts(&child_lines, &mut child_diagnostics);
+    if let Some(first_child_line) = first_child_line {
+        for diagnostic in &mut child_diagnostics {
+            diagnostic.line += first_child_line - 1;
+        }
+    }
+    diagnostics.extend(child_diagnostics);
+    drafts
 }
 
 fn parse_list_item_draft<'a>(
@@ -532,6 +558,7 @@ fn parse_list_item_draft<'a>(
 ) -> Option<(ListItemDraft<'a>, usize)> {
     let line = cursor.peek()?;
     let (kind, indent, content_indent) = list_marker(line)?;
+    let raw_line = line.raw_line();
     let body = line.body()?;
     let (todo, body) = parse_todo_item(kind, body);
 
@@ -539,6 +566,7 @@ fn parse_list_item_draft<'a>(
 
     Some((
         ListItemDraft {
+            raw_line,
             kind,
             todo,
             indent,
@@ -570,7 +598,10 @@ fn parse_todo_item(kind: ListKind, body: &str) -> (Option<TodoState>, &str) {
     (None, body)
 }
 
-fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
+fn parse_list_draft<'a>(
+    cursor: &mut LineCursor<'_, 'a>,
+    diagnostics: &mut Vec<ParseDiagnostic<'a>>,
+) -> Option<BlockDraft<'a>> {
     let (list_kind, list_indent, _) = list_marker(cursor.peek()?)?;
 
     if list_indent != 0 {
@@ -584,7 +615,7 @@ fn parse_list_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a
         .is_some_and(|line| is_list_marker_at(line, list_indent, list_kind))
     {
         let (mut item, content_indent) = parse_list_item_draft(cursor)?;
-        item.children = parse_list_item_child_drafts(cursor, content_indent);
+        item.children = parse_list_item_child_drafts(cursor, content_indent, diagnostics);
         items.push(item);
 
         if list_kind == ListKind::Ordered
@@ -668,6 +699,8 @@ fn cursor_starts_table(cursor: &LineCursor<'_, '_>) -> bool {
 
 fn parse_table_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'a>> {
     let (header, separator_columns) = parse_table_start(cursor)?;
+    let header_raw_line = cursor.peek()?.raw_line();
+    let separator_raw_line = cursor.lines.get(cursor.pos + 1)?.raw_line();
 
     cursor.next();
     cursor.next();
@@ -675,8 +708,10 @@ fn parse_table_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'
     let mut rows = vec![];
     while let Some(line) = cursor.peek() {
         if parse_table_separator_columns(line) == Some(separator_columns) {
+            let raw_line = line.raw_line();
             cursor.next();
             rows.push(TableRowDraft {
+                raw_line,
                 kind: TableRowKind::Separator,
                 cells: vec![],
             });
@@ -685,15 +720,22 @@ fn parse_table_draft<'a>(cursor: &mut LineCursor<'_, 'a>) -> Option<BlockDraft<'
         let Some(cells) = parse_table_row_cells(line) else {
             break;
         };
+        let raw_line = line.raw_line();
 
         cursor.next();
         rows.push(TableRowDraft {
+            raw_line,
             kind: TableRowKind::Data,
             cells,
         });
     }
 
-    Some(BlockDraft::Table { header, rows })
+    Some(BlockDraft::Table {
+        header_raw_line,
+        separator_raw_line,
+        header,
+        rows,
+    })
 }
 
 fn parse_root_prefixed_body_lines<'a>(
@@ -751,7 +793,7 @@ pub(super) fn build_drafts<'a>(
             Some(draft)
         } else if let Some(draft) = parse_heading_draft(&mut cursor) {
             Some(draft)
-        } else if let Some(draft) = parse_list_draft(&mut cursor) {
+        } else if let Some(draft) = parse_list_draft(&mut cursor, diagnostics) {
             Some(draft)
         } else if let Some(draft) = parse_table_draft(&mut cursor) {
             Some(draft)

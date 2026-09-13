@@ -16,6 +16,10 @@ pub(crate) enum Command {
         file: PathBuf,
         check_external_links: bool,
     },
+    Format {
+        target: FormatTarget,
+        check: bool,
+    },
     Lsp,
 }
 
@@ -23,6 +27,12 @@ pub(crate) enum Command {
 pub(crate) enum VersionFormat {
     Text,
     Json,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum FormatTarget {
+    Stdin,
+    Path(PathBuf),
 }
 
 #[derive(Debug, PartialEq)]
@@ -243,6 +253,30 @@ fn parse_build_args(args: &[String]) -> Result<Command, CliError> {
     })
 }
 
+fn parse_format_args(args: &[String]) -> Result<Command, CliError> {
+    let mut target = None;
+    let mut check = false;
+
+    for argument in args.iter().skip(2) {
+        match argument.as_str() {
+            "--check" => check = true,
+            option if option.starts_with("--") => {
+                return Err(CliError::UnknownOption(option.to_string()));
+            }
+            "-" if target.is_none() => target = Some(FormatTarget::Stdin),
+            path if target.is_none() => {
+                target = Some(FormatTarget::Path(PathBuf::from(path)));
+            }
+            argument => return Err(CliError::UnexpectedArgument(argument.to_string())),
+        }
+    }
+
+    Ok(Command::Format {
+        target: target.unwrap_or_else(|| FormatTarget::Path(PathBuf::from("."))),
+        check,
+    })
+}
+
 pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
     // 0 is the binary name
     let command = args.get(1).ok_or(CliError::MissingCommand)?;
@@ -264,6 +298,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
         }
         "serve" => parse_serve_args(args),
         "build" => parse_build_args(args),
+        "fmt" => parse_format_args(args),
         "lsp" => {
             if let Some(argument) = args.get(2) {
                 return Err(CliError::UnexpectedArgument(argument.clone()));

@@ -11,7 +11,14 @@ use maki_serve::{git_source, metrics::Metrics, web};
 
 use crate::cli::{Command, ServeOptions, ServeSource, VersionFormat};
 use crate::external_links::{diagnostics_for_external_links, diagnostics_with_external_links};
+use crate::format_command::{self, FormatOutcome};
 use crate::output::{emit_parse_warnings, emit_project_diagnostic_summary};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandOutcome {
+    Success,
+    CheckFailed,
+}
 
 #[derive(Debug)]
 pub(crate) enum RunError {
@@ -19,6 +26,7 @@ pub(crate) enum RunError {
     Git(git_source::Error),
     Serve(maki_serve::RunError),
     Maki(MakiError),
+    Format(format_command::Error),
     Lsp(String),
 }
 
@@ -47,6 +55,7 @@ impl Display for RunError {
             RunError::Git(error) => write!(f, "Git source error: {}", error),
             RunError::Serve(error) => write!(f, "Serve error: {}", error),
             RunError::Maki(maki_error) => write!(f, "Maki error: {}", maki_error),
+            RunError::Format(error) => write!(f, "Format error: {error}"),
             RunError::Lsp(message) => write!(f, "LSP error: {message}"),
         }
     }
@@ -221,7 +230,7 @@ fn source_revision() -> Option<&'static str> {
     })
 }
 
-pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
+pub(crate) fn run_command(command: Command) -> Result<CommandOutcome, RunError> {
     match command {
         Command::Version { format } => {
             let version = env!("CARGO_PKG_VERSION");
@@ -236,16 +245,27 @@ pub(crate) fn run_command(command: Command) -> Result<(), RunError> {
                     })
                 ),
             }
-            Ok(())
+            Ok(CommandOutcome::Success)
         }
-        Command::Serve { source, options } => run_serve(source, options),
+        Command::Serve { source, options } => run_serve(source, options).map(success),
         Command::Build {
             file,
             check_external_links,
-        } => run_build(file, check_external_links),
+        } => run_build(file, check_external_links).map(success),
+        Command::Format { target, check } => format_command::run(target, check)
+            .map(|outcome| match outcome {
+                FormatOutcome::Success => CommandOutcome::Success,
+                FormatOutcome::CheckFailed => CommandOutcome::CheckFailed,
+            })
+            .map_err(RunError::Format),
         Command::Lsp => maki_lsp::run_stdio_with_version(env!("CARGO_PKG_VERSION"))
+            .map(success)
             .map_err(|error| RunError::Lsp(error.to_string())),
     }
+}
+
+fn success(_: ()) -> CommandOutcome {
+    CommandOutcome::Success
 }
 
 #[cfg(test)]

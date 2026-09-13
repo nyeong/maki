@@ -31,12 +31,16 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 - document, heading, explicit-ID, Document-local reference와 date marker의 references
 - HTTP/HTTPS target인 일반 Reference Use와 authored URL Link의 document link
 - authored URL Link를 Document-local Reference로 추출하는 `refactor.extract` Code Action
+- 현재 editor buffer를 대상으로 하는 보수적인 전체 문서 formatting
 - document, heading, explicit ID, property key와 관습 value completion
 - heading document symbol
 - document title, heading과 explicit ID workspace symbol
 - property, link resolution, date marker hover
 
 Server는 문서 전체 동기화(`TextDocumentSyncKind::FULL`)를 사용하고 source snapshot 전체를 다시 분석한다.
+`textDocument/formatting`도 저장 전 buffer가 반영된 같은 snapshot과 Core formatter를 사용한다.
+정규형인 문서와 parser warning이 있는 문서에는 edit를 반환하지 않으며, 변경할 때는 UTF-16 전체 문서 범위의 edit 하나만 반환한다.
+Formatting option과 관계없이 Maki 정규형을 적용하고 paragraph, Raw body, line ending과 final newline은 원문 그대로 보존한다.
 Completion은 cursor가 있는 line의 Note Link 또는 property 문맥을 기준으로 동작한다.
 Note Link completion은 현재 Document path와 parsed target prefix를 함께 사용한다.
 

@@ -1148,17 +1148,20 @@ plain text"#;
                 ],
             },
             BlockDraft::Heading {
+                raw_line: "== Heading",
                 level: 2,
                 body: "Heading",
             },
             BlockDraft::List {
                 items: vec![ListItemDraft {
+                    raw_line: "- list",
                     kind: ListKind::Unordered,
                     todo: None,
                     indent: 0,
                     body: "list",
                     children: vec![BlockDraft::List {
                         items: vec![ListItemDraft {
+                            raw_line: "- nested list",
                             kind: ListKind::Unordered,
                             todo: None,
                             indent: 0,
@@ -1172,6 +1175,8 @@ plain text"#;
                 raw_lines: vec!["This is Code Line"],
             },
             BlockDraft::Container {
+                opener_raw_line: "--- code",
+                fence_len: 3,
                 kind: "code",
                 args: vec![],
                 raw_lines: vec!["Container Block"],
@@ -1440,114 +1445,128 @@ fn parse_reports_invalid_property_without_panicking() {
 }
 
 #[test]
-fn parse_reports_unclosed_container() {
-    let parsed = parse(
-        r#"--- code
-fn main() {}"#,
-    );
+fn parse_container_lexical_contract_matrix() {
+    let cases: &[(&str, &str, &[&str], &[&str])] = &[
+        (
+            "---code alpha beta/value\nbody\n---",
+            "code",
+            &["alpha", "beta/value"],
+            &["body"],
+        ),
+        (
+            "---   code  alpha   beta/value\nbody\n---",
+            "code",
+            &["alpha", "beta/value"],
+            &["body"],
+        ),
+        (
+            "----code\n---\n-----\n---- content\n---- \n----",
+            "code",
+            &[],
+            &["---", "-----", "---- content", "---- "],
+        ),
+        (
+            "-----\nunknown raw body\n-----",
+            "",
+            &[],
+            &["unknown raw body"],
+        ),
+        (
+            "--- -code option\nraw body\n---",
+            "-code",
+            &["option"],
+            &["raw body"],
+        ),
+        (
+            "---Custom_123-kind\nbody\n---",
+            "Custom_123-kind",
+            &[],
+            &["body"],
+        ),
+        ("---123\nbody\n---", "123", &[], &["body"]),
+        ("---\tcode\talpha\nbody\n---", "code", &["alpha"], &["body"]),
+        (
+            "---\u{a0}code\u{a0}alpha\nbody\n---",
+            "code",
+            &["alpha"],
+            &["body"],
+        ),
+        ("---code alpha \nbody\n---", "code", &["alpha"], &["body"]),
+    ];
+
+    for &(source, expected_kind, expected_args, expected_lines) in cases {
+        let parsed = parse(source);
+
+        assert!(parsed.diagnostics.is_empty(), "{source:?}");
+        assert_eq!(parsed.document.blocks.len(), 1, "{source:?}");
+        let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
+            panic!("expected a container block for {source:?}");
+        };
+        assert_eq!(*kind, expected_kind, "{source:?}");
+        assert_eq!(args.as_slice(), expected_args, "{source:?}");
+        assert_eq!(lines.as_slice(), expected_lines, "{source:?}");
+    }
+}
+
+#[test]
+fn parse_invalid_container_headers_as_literal_paragraphs() {
+    for source in [
+        "--code",
+        " ---code",
+        "--- [@woohyong]",
+        "---code/bash",
+        "--- 코드",
+    ] {
+        let parsed = parse(source);
+
+        assert!(parsed.diagnostics.is_empty(), "{source:?}");
+        assert_eq!(parsed.document.blocks.len(), 1, "{source:?}");
+        let BlockKind::Paragraph { body } = &parsed.document.blocks[0].kind else {
+            panic!("expected a paragraph block for {source:?}");
+        };
+        assert_eq!(body, &vec![Inline::Text(source)], "{source:?}");
+    }
+}
+
+#[test]
+fn parse_unclosed_container_preserves_non_matching_fences_as_raw_body() {
+    let source = "---- code alpha\n---\n-----\n---- ";
+    let parsed = parse(source);
+
+    let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
+        panic!("expected a container block");
+    };
+    assert_eq!(*kind, "code");
+    assert_eq!(args, &vec!["alpha"]);
+    assert_eq!(lines, &vec!["---", "-----", "---- "]);
 
     assert_eq!(
         parsed.diagnostics,
         vec![ParseDiagnostic {
             line: 1,
-            span: SourceSpan::new(0, 8),
+            span: SourceSpan::new(0, "---- code alpha".len()),
             kind: ParseDiagnosticKind::UnclosedContainer {
-                raw_line: "--- code"
+                raw_line: "---- code alpha"
             },
         }]
     );
 }
 
 #[test]
-fn parse_preserves_shorter_fence_inside_long_container() {
-    let parsed = parse(
-        r#"----- code
----
-body
------"#,
+fn parse_reports_unclosed_container_in_list_child() {
+    let source = "- parent\n  ---code\n  body";
+    let parsed = parse(source);
+
+    assert_eq!(
+        parsed.diagnostics,
+        vec![ParseDiagnostic {
+            line: 2,
+            span: SourceSpan::new(11, 18),
+            kind: ParseDiagnosticKind::UnclosedContainer {
+                raw_line: "---code"
+            },
+        }]
     );
-
-    assert!(parsed.diagnostics.is_empty());
-    assert_eq!(parsed.document.blocks.len(), 1);
-
-    let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
-        panic!("expected a container block");
-    };
-
-    assert_eq!(*kind, "code");
-    assert!(args.is_empty());
-    assert_eq!(lines, &vec!["---", "body"]);
-}
-
-#[test]
-fn parse_treats_empty_kind_container_as_unknown_container() {
-    let parsed = parse(
-        r#"---
-plain
----"#,
-    );
-
-    assert!(parsed.diagnostics.is_empty());
-    assert_eq!(parsed.document.blocks.len(), 1);
-
-    let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
-        panic!("expected a container block");
-    };
-    assert_eq!(*kind, "");
-    assert!(args.is_empty());
-    assert_eq!(lines, &vec!["plain"]);
-}
-
-#[test]
-fn parse_container_kind_without_header_whitespace() {
-    let parsed = parse(
-        r#"---code rust
-fn main() {}
----"#,
-    );
-
-    assert!(parsed.diagnostics.is_empty());
-    let BlockKind::Container { kind, args, lines } = &parsed.document.blocks[0].kind else {
-        panic!("expected a container block");
-    };
-    assert_eq!(*kind, "code");
-    assert_eq!(args, &vec!["rust"]);
-    assert_eq!(lines, &vec!["fn main() {}"]);
-}
-
-#[test]
-fn parse_keeps_invalid_container_kinds_as_paragraphs() {
-    for source in ["--- [@woohyong]", "--- code/bash", "--- 코드"] {
-        let parsed = parse(source);
-
-        assert!(parsed.diagnostics.is_empty(), "{source}");
-        assert_eq!(parsed.document.blocks.len(), 1, "{source}");
-        assert!(
-            matches!(parsed.document.blocks[0].kind, BlockKind::Paragraph { .. }),
-            "{source}"
-        );
-    }
-}
-
-#[test]
-fn parse_accepts_container_kind_character_boundaries() {
-    for kind in ["code", "custom-kind", "custom_kind", "123"] {
-        let source = format!("---{kind}\nbody\n---");
-        let parsed = parse(&source);
-
-        assert!(parsed.diagnostics.is_empty(), "{kind}");
-        let BlockKind::Container {
-            kind: parsed_kind,
-            args,
-            lines,
-        } = &parsed.document.blocks[0].kind
-        else {
-            panic!("expected {kind} to be a container kind");
-        };
-        assert_eq!(*parsed_kind, kind);
-        assert!(args.is_empty());
-        assert_eq!(lines, &vec!["body"]);
-    }
 }
 
 #[test]
