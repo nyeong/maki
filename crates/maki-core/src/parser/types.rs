@@ -669,10 +669,18 @@ impl<'a> Block<'a> {
     pub(crate) fn property_declarations(&self) -> &[PropertyDeclaration<'a>] {
         self.props.declarations()
     }
-}
 
-pub(crate) fn quote_mode_is_raw(mode: Option<&str>) -> bool {
-    matches!(mode, Some("pre" | "text"))
+    pub(crate) fn semantic_quote_lines(&self) -> Option<&[&'a str]> {
+        if matches!(self.property("mode"), Some("pre" | "text")) {
+            return None;
+        }
+
+        match &self.kind {
+            BlockKind::Quote { lines } => Some(lines),
+            BlockKind::Container { kind, lines, .. } if *kind == "quote" => Some(lines),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]

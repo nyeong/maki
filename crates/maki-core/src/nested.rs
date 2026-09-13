@@ -1,4 +1,4 @@
-use crate::parser::{self, Block, BlockKind, ListItem, ReferenceDefinitions, quote_mode_is_raw};
+use crate::parser::{self, Block, BlockKind, ListItem, ReferenceDefinitions};
 use crate::source::{SourceSpan, slice_span};
 
 #[derive(Debug)]
@@ -172,35 +172,19 @@ impl<V: NestedTraversalVisitor> Traversal<'_, V> {
     ) {
         for block in blocks {
             self.visitor.visit_block(block, references, context);
-            match &block.kind {
-                BlockKind::List { items } => {
-                    for item in items {
-                        let mut item_context =
-                            self.visitor.enter_list_item(item, references, context);
-                        self.blocks(
-                            source,
-                            &item.children,
-                            references,
-                            coordinates,
-                            &mut item_context,
-                        );
-                    }
+            if let BlockKind::List { items } = &block.kind {
+                for item in items {
+                    let mut item_context = self.visitor.enter_list_item(item, references, context);
+                    self.blocks(
+                        source,
+                        &item.children,
+                        references,
+                        coordinates,
+                        &mut item_context,
+                    );
                 }
-                BlockKind::Quote { lines } if !quote_mode_is_raw(block.property("mode")) => {
-                    self.nested_lines(source, lines, references, coordinates, context);
-                }
-                BlockKind::Container { kind, lines, .. }
-                    if *kind == "quote" && !quote_mode_is_raw(block.property("mode")) =>
-                {
-                    self.nested_lines(source, lines, references, coordinates, context);
-                }
-                BlockKind::Paragraph { .. }
-                | BlockKind::Code { .. }
-                | BlockKind::Heading { .. }
-                | BlockKind::Quote { .. }
-                | BlockKind::Table { .. }
-                | BlockKind::Container { .. }
-                | BlockKind::ReferenceDefinition { .. } => {}
+            } else if let Some(lines) = block.semantic_quote_lines() {
+                self.nested_lines(source, lines, references, coordinates, context);
             }
         }
     }

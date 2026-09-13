@@ -203,27 +203,12 @@ fn collect_nested_quote_edits(
     edits: &mut Vec<Edit>,
 ) -> Result<(), FormatError> {
     for block in blocks {
-        match &block.kind {
-            BlockKind::List { items } => {
-                for item in items {
-                    collect_nested_quote_edits(source, &item.children, depth, edits)?;
-                }
+        if let BlockKind::List { items } = &block.kind {
+            for item in items {
+                collect_nested_quote_edits(source, &item.children, depth, edits)?;
             }
-            BlockKind::Quote { lines } if !parser::quote_mode_is_raw(block.property("mode")) => {
-                collect_nested_line_edits(source, lines, depth, edits)?;
-            }
-            BlockKind::Container { kind, lines, .. }
-                if *kind == "quote" && !parser::quote_mode_is_raw(block.property("mode")) =>
-            {
-                collect_nested_line_edits(source, lines, depth, edits)?;
-            }
-            BlockKind::Paragraph { .. }
-            | BlockKind::Code { .. }
-            | BlockKind::Heading { .. }
-            | BlockKind::Quote { .. }
-            | BlockKind::Table { .. }
-            | BlockKind::Container { .. }
-            | BlockKind::ReferenceDefinition { .. } => {}
+        } else if let Some(lines) = block.semantic_quote_lines() {
+            collect_nested_line_edits(source, lines, depth, edits)?;
         }
     }
 
@@ -447,11 +432,7 @@ fn block_semantically_equal(left: &Block<'_>, right: &Block<'_>) -> bool {
             list_items_semantically_equal(left, right)
         }
         (BlockKind::Quote { lines: left_lines }, BlockKind::Quote { lines: right_lines }) => {
-            if parser::quote_mode_is_raw(left.property("mode")) {
-                left_lines == right_lines
-            } else {
-                nested_lines_semantically_equal(left_lines, right_lines)
-            }
+            block_lines_semantically_equal(left, left_lines, right_lines)
         }
         (
             BlockKind::Table {
@@ -483,17 +464,21 @@ fn block_semantically_equal(left: &Block<'_>, right: &Block<'_>) -> bool {
         ) => {
             left_kind == right_kind
                 && left_args == right_args
-                && if *left_kind == "quote" && !parser::quote_mode_is_raw(left.property("mode")) {
-                    nested_lines_semantically_equal(left_lines, right_lines)
-                } else {
-                    left_lines == right_lines
-                }
+                && block_lines_semantically_equal(left, left_lines, right_lines)
         }
         (
             BlockKind::ReferenceDefinition { definitions: left },
             BlockKind::ReferenceDefinition { definitions: right },
         ) => left == right,
         _ => false,
+    }
+}
+
+fn block_lines_semantically_equal(block: &Block<'_>, left: &[&str], right: &[&str]) -> bool {
+    if block.semantic_quote_lines().is_some() {
+        nested_lines_semantically_equal(left, right)
+    } else {
+        left == right
     }
 }
 
