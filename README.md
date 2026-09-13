@@ -111,10 +111,20 @@ usage or operational failures exit 2. If only some sources cannot be read,
 readable findings remain in the report, JSON sets `complete` to `false`, and
 the command exits 2. Reports go to stdout and operational details to stderr.
 
-The three validation surfaces have separate jobs: the LSP reports the same
-Core diagnostics interactively for open editor buffers, `maki fmt --check`
-only detects non-canonical formatting, and `maki check` validates the on-disk
-snapshot as a batch or CI gate.
+Formatting and validation have separate jobs: the LSP reports the same Core
+diagnostics interactively for open editor buffers, `maki fmt --check` only
+detects non-canonical syntax formatting, and `maki check` validates the
+on-disk snapshot as a batch or CI gate. Neither formatting nor checking runs an
+evaluator or updates generated results.
+
+Core also defines an IO-free ownership, freshness, effect, and source-edit
+plan contract for materializer implementations. In this revision those values
+are not wired into parsing, project diagnostics, the CLI, or the LSP: there is no
+`maki update` command or materialization code action, and reserved properties
+remain ordinary preserved metadata. See the
+[materialization contract](docs/materialization.maki) for the exact current
+boundary. Declaring an effect in source never grants `filesystem-read`,
+`process`, `network`, or `clock/random/secrets` capabilities.
 
 `maki lsp` starts the stdio language server for editor integration.
 
@@ -163,6 +173,7 @@ truth.
 - [Project configuration](docs/maki-toml.maki)
 - [Web server and routes](docs/web.maki)
 - [Language server](docs/lsp.maki)
+- [Materialization contract and current boundaries](docs/materialization.maki)
 - [Documentation index](docs/index.maki)
 
 ## Web Routes

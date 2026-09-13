@@ -1,0 +1,239 @@
+--^ title: Materialization Contract
+--^ updated: [2026-09-13]
+
+= 개요
+
+Maki source는 사람이 작성한 내용과 그 내용에서 계산해 source에 고정한 결과를 함께 담을 수 있다.
+`maki-core::materialization`은 producer, generated artifact, dependency, provenance, 상태와 source edit plan을 표현하는 IO 없는 공통 계약을 제공한다.
+
+이 revision에서 제공하는 것은 Core의 value model과 pure `ReconcilePlan` 적용 계약이다.
+Parser는 아래의 예약 property를 일반 case-insensitive property key로 보존하지만 아직 producer나 generated artifact로 수집하지 않는다.
+구체 materializer, evaluator, materialization diagnostic, `maki update` CLI와 LSP update action도 아직 제공하지 않는다.
+따라서 property를 source에 쓰는 것만으로 code를 실행하거나 table을 계산하거나 파일을 갱신하지 않는다.
+
+문법과 property 부착 규칙은 [[maki-syntax]], snapshot과 source span은 [[core-analysis]], adapter 경계는 [[architecture]]가 정의한다.
+
+= Semantic fixed point
+
+Materialization은 같은 선언, declared input과 실행 환경에서 source에 저장한 파생 결과가 하나의 고정점에 도달하는 것을 목표로 한다.
+`U_E`를 고정된 environment `E`에서 성공한 deterministic materialization update, `C_m`을 materialization finding만 검사하는 함수라고 하면 다음 invariant를 사용한다.
+
+--v lang: text
+: U_E(U_E(D)) = U_E(D)
+: C_m(U_E(D)) = clean
+
+이 식에는 다음 전제가 있다.
+
+- update 이전의 parser와 materialization 이외 semantic finding은 별도다.
+- declared input이 모두 존재하고 dependency graph를 결정할 수 있다.
+- transform, executor identity와 config를 포함한 environment가 두 실행 사이에 같다.
+- 선택한 materializer가 결정적으로 성공했고 source revision이 도중에 바뀌지 않았다.
+- `blocked`, `frozen`, `volatile` 또는 `unverifiable` result를 강제로 clean으로 간주하지 않는다.
+
+따라서 일반적인 모든 Document에 대해 현재 `maki check(update(D)) = clean`이라고 주장하지 않는다.
+현재 `maki check`는 이 materialization model에 연결되어 있지 않으며 parser와 기존 project semantic diagnostic만 읽기 전용으로 검사한다.
+
+Syntax formatter의 fixed point는 이 계약과 별개다.
+현재 Core formatter는 parse-format-parse와 formatter idempotence를 검증하지만 generated result를 평가하거나 reconcile하지 않는다.
+Save orchestration이 두 기능을 합성하더라도 syntax formatting과 safe reconcile은 독립 phase다.
+
+= Ownership와 identity
+
+Authored 영역은 사용자가 소유한 선언과 입력이다.
+Generated 영역은 materializer가 만든 결과와 성공 provenance를 보존하는 source 영역이다.
+Generated 영역을 사용자가 수정하면 authored input으로 승격되지 않고 output fingerprint 불일치인 `modified-output` 상태가 된다.
+
+Producer identity는 다음 규칙을 따른다.
+
+- `producer-id` 값은 project 전체에서 유일한 durable identity다.
+- Document path, source span과 block 순서는 producer identity가 아니다.
+- 기존 `id` property가 만드는 document-local explicit block ID와도 별개다.
+- Producer를 다른 위치나 Document로 옮겨도 `producer-id`를 유지하면 association을 유지할 수 있다.
+- Producer를 복제해 같은 identity가 둘 이상 생기면 어느 쪽도 임의로 선택하지 않고 `ambiguous`다. 복제한 producer에 새 identity를 부여해야 한다.
+
+Generated artifact는 `generated-from` 값으로 producer identity를 역참조한다.
+Producer 바로 다음 block이라는 위치 관계는 association이 아니다.
+알 수 없는 identity를 가리키면 `orphan`, 같은 producer를 가리키는 후보나 producer 자체가 유일하지 않으면 `ambiguous`다.
+
+이 revision의 parser와 analysis는 이 identity를 해석하거나 project-global uniqueness를 진단하지 않는다.
+Core model은 구체 materializer가 수집한 identity와 occurrence를 protocol-neutral 값으로 전달받는 경계만 제공한다.
+
+= 예약 property vocabulary
+
+Property key는 기존 Property 문법처럼 case-insensitive이고 value 원문은 보존된다.
+아래 이름은 materializer들이 공유할 generic vocabulary다.
+나열한 value token, producer identity와 fingerprint 비교는 case-sensitive하다.
+
+- `producer-id`: project-global durable producer identity. 1에서 128 ASCII byte이고 첫 문자는 영문자나 숫자, 나머지는 영문자, 숫자, `-`, `_`, `.`만 허용한다.
+- `result-policy`: `replace`, `append`, `frozen`, `manual`, `volatile`, `cache` 중 하나.
+- `materialize-input`: declared input 하나. 반복할 수 있으며 `kind:value` 형식이다.
+- `effect`: 필요한 effect class. 값은 `pure-document`, `pure-project`, `filesystem-read`, `process`, `network`, `clock/random/secrets` 중 하나이며 선언일 뿐 capability grant가 아니다.
+- `output-kind`: built-in `text`, `maki`, `table`, `file` 또는 materializer가 정의한 `namespace/name` custom token. Custom token은 최대 64 byte이고 slash 하나로 나눈 non-empty lowercase ASCII segment 두 개이며 각 segment 첫 문자는 영문자나 숫자, 나머지는 영문자, 숫자, `-`, `_`만 허용한다.
+- `generated-from`: artifact가 역참조하는 producer identity.
+- `generated-input`: 마지막 성공 시점의 input fingerprint.
+- `generated-output`: 저장된 result와 비교할 output fingerprint.
+- `generated-transform`: transform kind.
+- `generated-version`: transform version.
+- `generated-executor`: executor identity.
+- `generated-executor-config`: 마지막 성공의 executor config fingerprint.
+- `generated-effect`: 마지막 성공에 사용한 effect class.
+- `generated-status`: 마지막 성공 provenance를 나타내는 정확한 값 `success`.
+
+`generated-input`, `generated-output`과 `generated-executor-config` fingerprint는 `sha256:`와 lowercase hex 64자로 쓴다.
+
+`materialize-input` kind는 다음 다섯 가지다.
+
+- `producer`: 다른 producer의 materialized output.
+- `block`: 선언된 block input.
+- `table`: 선언된 table input.
+- `config`: 의미 있는 configuration input.
+- `file`: adapter가 명시적으로 식별하는 file input. Project snapshot 밖을 읽으면 `filesystem-read` effect가 필요하다.
+
+Input value는 trim된 non-empty scalar이고 control character 없이 최대 1024 byte다.
+`producer` kind의 value는 `producer-id` 규칙도 만족해야 한다.
+Transform kind, version과 executor identity도 trim된 non-empty scalar이고 control character 없이 각각 최대 256 byte다.
+
+실패한 실행은 `generated-status`를 실패로 덮어쓰거나 기존 provenance와 result를 교체하지 않는다.
+Secret value 자체, 암묵적인 environment와 무관한 문서 전체는 provenance에 기록하지 않는다.
+Concrete producer와 result block의 허용 위치, transform별 property와 value validation은 각 materializer가 정의해야 한다.
+
+= Dependency와 fingerprint
+
+Input fingerprint는 materialized result가 어떤 선언과 입력으로부터 나왔는지 비교하기 위한 값이다.
+구체 materializer는 최소한 다음 의미 입력을 포함한다.
+
+- producer body와 결과에 영향을 주는 property. 공통 builder가 요구하는 `result-policy`와 `output-kind` drift도 포함한다.
+- 반복 가능한 `materialize-input`으로 선언한 direct input
+- producer dependency의 transitive input fingerprint와 output fingerprint
+- transform kind와 version
+- trusted effect class, executor identity와 executor config fingerprint
+
+자기 generated result, provenance property, source path/span과 무관한 Document 전체는 자기 input fingerprint에 넣지 않는다.
+그렇게 하면 result를 쓰는 행위 자체가 다음 검사에서 영구적인 stale 상태를 만들기 때문이다.
+Output fingerprint는 generated 영역에서 materializer가 소유한 결과를 비교하며 provenance metadata 자체는 제외한다.
+
+Core 계약은 fingerprint를 domain-separated, length-framed SHA-256으로 만들고 `sha256:` 뒤에 lowercase hex 64자를 붙여 보존한다.
+어떤 byte나 semantic value를 canonicalize할지는 concrete materializer가 결정하며 같은 의미 입력에서 같은 fingerprint를 만들어야 한다.
+
+Core의 `MaterializationProducer`는 별도의 임의 dependency 목록을 받지 않고 validated `DeclaredInput` 전체를 보존한다.
+Producer dependency edge는 그중 `producer` kind에서만 유도하므로 fingerprint용 declaration과 상태 전파 graph가 서로 어긋나지 않는다.
+`CurrentInput::Available`은 모든 의미 입력을 포함한 fingerprint, `Blocked`는 declared prerequisite를 구할 수 없는 상태, `Unverifiable`은 현재 snapshot만으로 비교할 수 없는 상태다.
+Concrete materializer는 자신이 정의한 의미 property와 모든 resolved declared/transitive input을 builder에 추가해야 하며 Core가 알 수 없는 transform별 입력을 임의로 생략해서는 안 된다.
+
+Dependency graph는 producer identity를 기준으로 결정적인 순서를 사용한다.
+Cycle에 속한 producer는 `blocked`이며 실행하지 않는다.
+Missing, orphan, ambiguous, cycle 또는 blocked upstream을 요구하는 downstream은 `blocked`다.
+Stale 또는 modified upstream은 downstream의 input을 `stale-input`으로 만들고, unverifiable 또는 volatile upstream은 downstream에 `unverifiable`을 전파한다.
+Downstream 자신의 output이 수정된 경우에는 propagated 상태보다 `modified-output`이 우선한다.
+이 상태에서는 부분 update를 만들지 않는다.
+서로 독립적인 producer의 순서와 diagnostic 순서는 source 배치 우연이 아니라 stable identity와 source location의 명시된 정렬 규칙을 사용해야 한다.
+
+= Materialization state
+
+한 result의 상태는 서로 다른 세 축을 함께 보존한다.
+
+1. `Association`: `Matched`, `Missing`, `Orphan`, `Ambiguous`로 producer와 artifact가 unique하게 연결되는지 나타낸다.
+2. `Freshness`: `Fresh`, `StaleInput`, `ModifiedOutput`, `Blocked`, `Unverifiable`로 current input과 stored input, current output과 stored output의 비교 및 dependency 상태를 나타낸다.
+3. `PolicyState`: `Managed`, `Frozen`, `Volatile`로 update policy를 나타낸다. `replace`, `append`, `manual`, `cache`는 managed이고 `frozen`, `volatile`은 각각 별도 policy state다.
+
+UI나 diagnostic이 대표 상태 하나를 표시해야 할 때는 다음 precedence를 사용한다.
+
+1. `ambiguous`: producer identity 또는 artifact association이 유일하지 않다.
+2. `orphan`: artifact가 unique producer를 찾지 못한다.
+3. `missing`: result를 기대하는 unique producer에 artifact가 없다.
+4. `modified-output`: 저장된 output fingerprint와 generated 영역이 다르다.
+5. `blocked`: cycle, unavailable dependency 또는 실패한 prerequisite 때문에 plan을 만들 수 없다.
+6. `frozen`: frozen policy가 현재 result 교체를 금지한다.
+7. `volatile`: 같은 입력에서도 재현 가능성을 보장하지 않는 result다.
+8. `unverifiable`: 현재 snapshot과 provenance만으로 freshness를 판정할 수 없다.
+9. `stale-input`: current input fingerprint가 마지막 성공 input과 다르다.
+10. `fresh`: association, input과 output이 모두 일치한다.
+
+대표 상태는 나머지 축의 정보를 지우지 않는다.
+예를 들어 frozen result의 input도 달라질 수 있지만 primary status는 `frozen`이고 underlying freshness는 stale로 남는다.
+수동 수정과 input 변경이 동시에 있으면 `modified-output`이 먼저 보이지만 update 판단에는 두 비교 결과가 모두 전달된다.
+
+`replace`는 기존 artifact를 교체한다.
+`append`도 producer 하나에 generated 영역 하나만 연결하고, materializer가 그 영역 안의 deterministic history를 소유한다. 여러 history block을 같은 producer의 독립 artifact로 취급하지 않는다.
+`manual`은 자동 reconcile 대상이 아니며 명시적으로 선택해야 한다.
+`frozen`은 저장된 결과를 보존하고 자동 교체하지 않는다.
+`volatile`은 nondeterministic input을 재현 가능한 fresh 결과처럼 가장하지 않는다.
+`cache`는 provenance가 검증되는 동안 저장 결과를 재사용하는 정책이며 숨은 cache나 database를 source of truth로 만들지 않는다.
+
+= Effect와 capability
+
+Effect class는 transform이 결과를 만들기 위해 요구하는 능력을 기술한다.
+
+- `pure-document`: 현재 Document snapshot만 읽는 결정적 변환.
+- `pure-project`: 같은 immutable project snapshot만 읽는 결정적 변환.
+- `filesystem-read`: snapshot 밖의 명시된 filesystem input을 읽는다.
+- `process`: 외부 process를 실행한다.
+- `network`: network를 사용한다.
+- `clock/random/secrets`: 시간, 난수 또는 secret input을 사용한다.
+
+`pure-document`와 `pure-project`만 safe automation 후보다.
+나머지는 workspace trust와 해당 capability를 가진 명시적 execution surface가 없으면 실행하지 않는다.
+특히 source의 raw `effect: process` 또는 `effect: network` 선언은 요구 능력을 설명할 뿐 사용자 동의, trust 또는 authority를 부여하지 않는다.
+상위 effect를 선언하지 않았다고 adapter가 암묵적으로 능력을 추가해서도 안 된다.
+Authorization은 registry나 concrete materializer가 제공한 trusted `EffectClass`를 검사한다.
+Authored `effect` value로 trusted class를 낮추거나 capability grant를 만들어서는 안 된다.
+
+Core의 surface authorization은 다음과 같다.
+
+- Formatter, check와 LSP diagnostics에서는 pure transform도 실행하지 않는다.
+- Save에서는 사용자가 명시적으로 opt-in한 `pure-document` 또는 `pure-project`만 실행할 수 있다.
+- Update, explicit LSP command와 evaluator/export는 항상 explicit authorization이 필요하다.
+- 그 세 surface의 non-pure effect는 trusted workspace와 exact trusted effect class의 capability grant도 모두 필요하다.
+
+= Surface 책임과 현재 상태
+
+| Surface | Materialization 책임 | 현재 상태 |
+|---+---+---|
+| syntax formatter | 표현만 정규화하고 result body와 provenance 의미를 보존하며 실행하지 않는다 | `maki fmt`와 LSP formatting 제공 |
+| safe reconcile | pure-document와 pure-project plan만 opt-in save orchestration에 합성한다 | orchestration과 collector 미제공 |
+| `maki check` | 저장된 provenance로 syntax, semantic, freshness와 invariant를 읽기 전용 검사한다 | parser와 기존 semantic 검사만 제공 |
+| `maki update` | 선택한 producer 또는 safe set의 plan을 명시적으로 적용한다 | command 미제공 |
+| evaluator와 export | 외부 effect를 명시적 capability와 trusted execution에서만 수행한다 | materialization evaluator 미제공 |
+| LSP | Core diagnostic, targeted update와 safe profile의 UI를 제공한다 | materialization diagnostic과 action 미제공 |
+
+Formatter, check, build, document open과 diagnostic publish는 materialization evaluator를 호출하지 않는다.
+Check는 `ReconcilePlan`을 적용하지 않고 evaluator도 실행하지 않는다.
+LSP materialization에서 `process`, `network`, `filesystem-read` 또는 `clock/random/secrets`가 필요하면 preview 중 호출될 수 있는 `codeAction/resolve`가 아니라 사용자가 명시적으로 실행하는 command surface만 허용한다.
+
+현재 bare URL의 page title을 가져오는 `refactor.extract` Code Action resolve는 authored URL metadata extraction 기능이다.
+이는 generated artifact나 `ReconcilePlan`을 사용하는 materialization evaluator가 아니며 [[lsp]]에 기록된 별도 bounded network 정책을 따른다.
+
+= ReconcilePlan
+
+`maki-core::materialization::ReconcilePlan`은 evaluator나 filesystem을 소유하지 않는 source edit 계획이다.
+Plan은 같은 snapshot에서 계산한 다음 정보를 함께 보존한다.
+
+- opaque `SnapshotRevision` precondition
+- plan이 읽거나 바꾸는 각 source의 exact original source precondition
+- trusted effect class 하나
+- normalized source-root-relative target path. Empty path, absolute path와 `..` component는 거부하고 `.` component 및 반복되거나 뒤에 붙은 separator는 canonical path로 정규화한다.
+- zero-based half-open UTF-8 source span과 replacement text
+
+Edit span은 UTF-8 character boundary여야 하고 같은 source의 edit는 서로 겹치지 않아야 한다.
+Plan 생성은 edit를 path/span 순서로 정렬하고 같은 위치의 insertion을 포함한 conflict를 거부하며 original slice와 replacement가 같은 no-op edit를 제거한다.
+Core의 pure apply는 revision, 모든 exact-source precondition과 모든 edit를 먼저 검증한 뒤 새 `ProjectSnapshot` 전체를 반환한다.
+어느 하나라도 stale하거나 invalid하면 새 snapshot을 반환하지 않으므로 caller가 관찰할 partial in-memory mutation은 없다.
+
+`SnapshotRevision`은 한 process 안의 immutable `ProjectSnapshot` generation을 구분하는 opaque token이다.
+Persisted provenance fingerprint, filesystem revision 또는 content hash가 아니다.
+따라서 adapter는 plan 적용 직전에 editor document version이나 disk source를 다시 읽어 exact source도 확인해야 한다.
+Stale revision에서 plan을 다시 해석하거나 일부 edit만 적용해서는 안 된다.
+
+Core의 all-or-none은 in-memory source set에 대한 계약이다.
+이 module은 filesystem write나 LSP `WorkspaceEdit` 적용을 수행하지 않는다.
+Adapter는 모든 evaluation과 staging이 성공한 뒤 교체하고 실패하면 기존 source를 보존해야 하지만, 이 revision은 여러 filesystem file에 대한 crash-atomic transaction을 제공하거나 주장하지 않는다.
+현재 formatter의 file별 atomic rename도 materialization의 cross-file transaction 구현이 아니다.
+
+= Materialized snapshot과 dynamic view
+
+Source에 저장한 result는 review, version control과 offline inspection이 필요한 snapshot이다.
+반대로 backlink query, 진행률이나 agenda처럼 render 시점에만 계산하는 view는 generated source artifact가 아닐 수 있다.
+Dynamic view는 `generated-from`이나 stored provenance를 강제로 만들지 않으며, source에 고정하기로 명시한 경우에만 이 materialization 계약을 사용한다.
+
+숨은 cache나 database는 authored source와 materialized result를 대신하는 source of truth가 아니다.
+Concrete code result, table calculation, query snapshot과 generated asset은 별도 identity나 freshness model을 만들지 않고 이 공통 계약을 사용해야 한다.
