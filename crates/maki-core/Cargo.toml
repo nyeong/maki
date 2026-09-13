@@ -8,3 +8,6 @@ repository.workspace = true
 homepage.workspace = true
 publish.workspace = true
 description = "Core parsing and project analysis for Maki"
+
+[dependencies]
+sha2 = "0.10"

@@ -4,7 +4,7 @@
 = 개요
 
 `maki-core`가 parser, renderer, search, diagnostics, LSP에 제공하는 IO 없는 분석 계약을 기록한다.
-Maki 언어 문법은 [[maki-syntax]]가 정의하며 이 문서는 구현 자료 구조와 source 위치 규칙만 다룬다.
+Maki 언어 문법은 [[maki-syntax]], authored/generated result의 공통 계약은 [[materialization]]이 정의하며 이 문서는 구현 자료 구조와 source 위치 규칙을 다룬다.
 
 = Source Model
 
@@ -107,6 +107,36 @@ Explicit block ID index의 key는 `(DocumentRef, LocalId)`다.
 `LocalId` 비교와 중복 검사는 case-sensitive이며 다른 Document의 같은 문자열은 서로 다른 key다.
 Heading의 explicit ID도 block ID index에 들어간다.
 기존 `#id`와 canonical `@id`는 같은 Heading을 가리키며 LSP references와 HTML fragment처럼 identity가 필요한 소비 계층은 둘을 같은 대상으로 정규화할 수 있다.
+
+= Materialization Core Contract
+
+`maki_core::materialization`은 기존 parser AST와 `ProjectAnalysis`에서 독립된 sans-IO module이다.
+Project-global producer identity, generated artifact association, declared input, fingerprint/provenance, result policy, effect와 materialization state를 owned value로 표현한다.
+State는 `Association`, `Freshness`, `PolicyState` 세 축을 보존하고 대표 `FreshnessState`가 필요할 때 [[materialization]]의 precedence를 사용한다.
+`DeclaredInput`은 invalid scalar를 직접 구성할 수 없는 validated value이고 producer dependency graph는 `MaterializationProducer::declared_inputs`의 `producer` kind에서만 유도한다.
+`CurrentInput`은 모든 의미 입력을 포함한 `Available` fingerprint, prerequisite가 없는 `Blocked`, 현재 snapshot만으로 비교할 수 없는 `Unverifiable`을 구분한다.
+공통 input fingerprint builder는 result policy도 required field로 받아 policy drift를 생략할 수 없게 한다.
+
+`ReconcilePlan`은 plan을 계산한 opaque `SnapshotRevision`, normalized source-root-relative path별 exact original source와 zero-based half-open UTF-8 edit를 가진다.
+`SourcePrecondition`은 edit target뿐 아니라 plan 계산 때 읽은 producer와 transitive input source도 보호할 수 있으며, 해당 path에 edit가 없어도 유지된다.
+Apply는 다음을 모두 검사한 뒤에만 replacement `ProjectSnapshot`을 반환한다.
+
+- caller가 제시한 revision과 plan revision이 같은지
+- 등록한 모든 precondition의 current source와 exact original source가 같은지
+- 모든 span이 source 범위 안의 UTF-8 character boundary인지
+- 같은 source의 edit가 서로 겹치지 않는지
+
+Plan은 edit를 path/span 순서로 canonicalize하고 conflicting edit를 거부하며 source slice와 replacement가 같은 no-op edit를 제거한다.
+검사나 edit 하나라도 실패하면 replacement `ProjectSnapshot`을 반환하지 않는다.
+Core apply는 filesystem, process, network와 clock을 사용하지 않고 caller source를 직접 mutation하지 않는다.
+이 all-or-none 계약은 in-memory result에 한정하며 여러 filesystem file의 crash-atomic transaction을 뜻하지 않는다.
+
+`SnapshotRevision`은 현재 process에서 immutable snapshot generation을 구분하는 token이다.
+Input/output fingerprint나 disk revision을 대신하지 않으므로 CLI/LSP adapter가 생기면 적용 직전에 exact disk source 또는 editor document version을 별도로 다시 확인해야 한다.
+
+현재 `DocumentAnalysis`는 materialization producer/artifact occurrence를 수집하지 않는다.
+`ProjectSnapshot::validation_report()`, `maki check`와 LSP diagnostic에도 materialization state를 합성하지 않으며 formatter도 plan을 만들거나 적용하지 않는다.
+Concrete collector, materializer, evaluator와 adapter command는 이 revision의 API가 아니다.
 
 = Diagnostics
 

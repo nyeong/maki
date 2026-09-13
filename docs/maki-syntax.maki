@@ -126,7 +126,13 @@ container는 그럴 수 없는 경우에 한정적으로 사용한다.
 
 == Artifact Model
 
-1. Source는 입력이자 동시에 결과여야한다.
+1. Source는 입력이자 동시에 version control에 보존하는 결과여야한다.
+2. 사용자가 소유한 authored 영역과 transform이 소유한 generated 영역은 property로 명시적으로 구분해야 한다.
+3. Generated artifact는 위치가 아니라 project-global producer identity의 역참조로 연결해야 한다.
+4. 같은 선언, declared input과 실행 환경에서는 materialized source가 의미적 fixed point에 도달해야 한다.
+
+공통 ownership, freshness, effect와 update plan 계약은 [[materialization]]이 정의한다.
+현재 parser는 materialization property를 일반 property로 보존하며 아직 그 의미를 해석하거나 evaluator를 실행하지 않는다.
 
 = Block
 
@@ -526,6 +532,40 @@ Property Value는 property key에 대응하는 scalar metadata value이다.
 --v lang: maki
 : --v deadline: <2026-09-01>
 : = Task
+
+== Materialization Property Vocabulary
+
+Materializer가 공유하는 다음 property key를 예약한다.
+Key는 다른 property와 마찬가지로 case-insensitive하고 value source는 그대로 보존된다.
+나열한 value token, producer identity와 fingerprint 비교는 case-sensitive하다.
+
+- `producer-id`: Document path, source span과 document-local `id`와 독립적인 project-global durable producer identity. 1에서 128 ASCII byte이고 첫 문자는 영문자나 숫자, 나머지는 영문자, 숫자, `-`, `_`, `.`만 허용한다.
+- `result-policy`: `replace`, `append`, `frozen`, `manual`, `volatile`, `cache` 중 하나.
+- `materialize-input`: 반복 가능한 declared input이며 `kind:value` 형식. Kind는 `producer`, `block`, `table`, `config`, `file` 중 하나고 value는 trim된 non-empty scalar다.
+- `effect`: `pure-document`, `pure-project`, `filesystem-read`, `process`, `network`, `clock/random/secrets` 중 하나.
+- `output-kind`: built-in `text`, `maki`, `table`, `file` 또는 materializer가 정의한 `namespace/name` custom token. Custom token은 최대 64 byte이고 slash 하나로 나눈 non-empty lowercase ASCII segment 두 개이며 각 segment 첫 문자는 영문자나 숫자, 나머지는 영문자, 숫자, `-`, `_`만 허용한다.
+- `generated-from`: generated artifact가 역참조하는 producer identity.
+- `generated-input`: 마지막 성공의 input fingerprint.
+- `generated-output`: 마지막 성공의 output fingerprint.
+- `generated-transform`: 마지막 성공의 transform kind.
+- `generated-version`: 마지막 성공의 transform version.
+- `generated-executor`: 마지막 성공의 executor identity.
+- `generated-executor-config`: 마지막 성공의 executor config fingerprint.
+- `generated-effect`: 마지막 성공에 사용한 effect class.
+- `generated-status`: 마지막 성공 provenance를 나타내는 정확한 값 `success`.
+
+`generated-input`, `generated-output`과 `generated-executor-config` fingerprint는 `sha256:`와 lowercase hex 64자로 쓴다.
+
+`producer-id`를 유지한 block은 이동 뒤에도 같은 producer를 나타낼 수 있다.
+복사해 같은 identity가 둘 이상 생기면 association은 ambiguous하며 복제한 producer에 새 identity가 필요하다.
+Generated artifact는 `generated-from` property를 가진 block이며 producer 바로 다음에 있다는 이유만으로 generated가 되지 않는다.
+
+Raw authored `effect` value는 transform이 요구하는 능력을 선언할 뿐 process, network, filesystem, clock, random 또는 secret 접근 권한을 부여하지 않는다.
+실패한 실행은 성공 provenance를 실패 상태로 덮어쓰지 않는다.
+
+이 revision에는 이 vocabulary를 AST에서 producer나 artifact로 수집하는 기능, value validation, concrete materializer와 실행 command가 없다.
+따라서 parser는 잘못된 예약 value도 다른 unknown custom property value처럼 문자열로 보존하며 어떤 block도 실행하지 않는다.
+현재 지원 경계와 상태 의미는 [[materialization]]을 따른다.
 
 == Reference Definition
 

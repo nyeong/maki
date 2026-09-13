@@ -21,6 +21,7 @@ Maki는 line-first lightweight markup language이자 `.maki` 프로젝트를 HTM
 = 개념과 구현
 
 - [[about-maki]]: Maki의 목적과 문서 모델
+- [[materialization]]: authored source와 generated result의 공통 Core 계약과 현재 지원 경계
 - [[architecture]]: workspace crate와 parse/analysis 경계
 - [[core-analysis]]: source span과 sans-I/O analysis 계약
 
