@@ -1740,7 +1740,7 @@ fn parse_reports_duplicate_reference_definitions_and_uses_the_first() {
         parsed.diagnostics[0],
         ParseDiagnostic {
             line: 3,
-            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { key: "link", .. },
             ..
         }
     ));
@@ -1763,7 +1763,7 @@ fn trimmed_definition_keys_share_a_first_wins_namespace() {
         parsed.diagnostics[0],
         ParseDiagnostic {
             line: 3,
-            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { .. },
+            kind: ParseDiagnosticKind::DuplicateReferenceDefinition { key: "same", .. },
             ..
         }
     ));

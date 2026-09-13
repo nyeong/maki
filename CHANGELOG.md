@@ -8,6 +8,10 @@ the canonical Forgejo repository.
 
 ### Added
 
+- Added `maki check [PATH] [--format text|json]`, a read-only, offline
+  validation surface with stable Core-owned diagnostic codes, source ranges,
+  deterministic output, and distinct clean, finding, and operational exit
+  statuses.
 - Added a conservative, semantics-checked Maki formatter shared by
   `maki fmt`, `maki fmt --check`, stdin/stdout, and LSP whole-document
   formatting. It preserves authored paragraph wrapping, line endings, and raw

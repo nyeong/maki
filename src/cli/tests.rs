@@ -234,6 +234,61 @@ fn test_parse_format_rejects_unknown_or_extra_arguments() {
 }
 
 #[test]
+fn test_parse_check_defaults_to_current_directory_and_text() {
+    assert_eq!(
+        parse_args(&args(&["maki", "check"])),
+        Ok(Command::Check {
+            path: PathBuf::from("."),
+            format: CheckFormat::Text,
+        })
+    );
+}
+
+#[test]
+fn test_parse_check_path_and_format_in_either_position() {
+    for input in [
+        ["maki", "check", "docs", "--format", "json"],
+        ["maki", "check", "--format", "json", "docs"],
+    ] {
+        assert_eq!(
+            parse_args(&args(&input)),
+            Ok(Command::Check {
+                path: PathBuf::from("docs"),
+                format: CheckFormat::Json,
+            })
+        );
+    }
+
+    assert_eq!(
+        parse_args(&args(&["maki", "check", "--format", "text"])),
+        Ok(Command::Check {
+            path: PathBuf::from("."),
+            format: CheckFormat::Text,
+        })
+    );
+}
+
+#[test]
+fn test_parse_check_rejects_invalid_options_and_extra_paths() {
+    assert_eq!(
+        parse_args(&args(&["maki", "check", "--format"])),
+        Err(CliError::MissingOptionValue("--format".to_string()))
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "check", "--format", "yaml"])),
+        Err(CliError::InvalidCheckFormat("yaml".to_string()))
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "check", "--json"])),
+        Err(CliError::UnknownOption("--json".to_string()))
+    );
+    assert_eq!(
+        parse_args(&args(&["maki", "check", "one", "two"])),
+        Err(CliError::UnexpectedArgument("two".to_string()))
+    );
+}
+
+#[test]
 fn test_parse_missing_command() {
     assert_eq!(parse_args(&args(&["maki"])), Err(CliError::MissingCommand))
 }

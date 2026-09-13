@@ -12,18 +12,19 @@ use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
     CodeActionResponse, CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
-    CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams, DocumentLink,
-    DocumentLinkOptions, DocumentLinkParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, InitializeParams, Location, MarkupContent, MarkupKind, OneOf, Position,
-    PositionEncodingKind, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
-    SymbolInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
-    WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    CompletionTextEdit, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, InitializeParams, Location,
+    MarkupContent, MarkupKind, OneOf, Position, PositionEncodingKind, PublishDiagnosticsParams,
+    Range, ReferenceParams, ServerCapabilities, SymbolInformation, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use maki_core::analysis::{
-    AnalysisBlockKind, AnalysisDiagnosticKind, DateMarkerOccurrence, DateOrigin,
-    DateTargetIdentity, DefinitionTarget, DefinitionTargetKind, DocumentAnalysis,
+    AnalysisBlockKind, AnalysisDiagnostic, AnalysisDiagnosticSeverity, DateMarkerOccurrence,
+    DateOrigin, DateTargetIdentity, DefinitionTarget, DefinitionTargetKind, DocumentAnalysis,
     DocumentSelection, HeadingOccurrence, LinkResolution, ProjectAnalysis, ProjectSnapshot,
     ReferenceDefinitionId, property_description,
 };
@@ -343,47 +344,62 @@ impl Server {
     }
 
     fn publish_diagnostics(&self, connection: &Connection) -> LspResult<()> {
-        for path in self.document_versions.keys() {
+        let report = self.snapshot.validation_report();
+        for (path, version) in &self.document_versions {
             let Some(source) = self.snapshot.source(path) else {
                 continue;
             };
-            let diagnostics = self
-                .snapshot
-                .analysis()
-                .diagnostics
+            let diagnostics = report
+                .diagnostics()
                 .iter()
-                .filter(|diagnostic| diagnostic.path == *path)
-                .filter_map(|diagnostic| {
-                    Some(Diagnostic {
-                        range: lsp_range(source, diagnostic.span)?,
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        source: Some("maki".to_string()),
-                        code: Some(lsp_types::NumberOrString::String(
-                            diagnostic_code(diagnostic.kind).to_string(),
-                        )),
-                        message: diagnostic.message.clone(),
-                        ..Diagnostic::default()
-                    })
-                })
+                .filter(|diagnostic| diagnostic.source_path() == path)
+                .filter_map(|diagnostic| self.lsp_diagnostic(source, diagnostic))
                 .collect();
-            self.send_diagnostics(connection, path, diagnostics)?;
+            self.send_diagnostics(connection, path, Some(*version), diagnostics)?;
         }
         Ok(())
     }
 
     fn publish_empty_diagnostics(&self, connection: &Connection, path: &Path) -> LspResult<()> {
-        self.send_diagnostics(connection, path, Vec::new())
+        self.send_diagnostics(connection, path, None, Vec::new())
+    }
+
+    fn lsp_diagnostic(&self, source: &str, diagnostic: &AnalysisDiagnostic) -> Option<Diagnostic> {
+        let related_information = diagnostic
+            .related()
+            .iter()
+            .filter_map(|related| {
+                let location = self.symbol_location(&related.path, related.span)?;
+                Some(DiagnosticRelatedInformation {
+                    location,
+                    message: related.message.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Some(Diagnostic {
+            range: lsp_range(source, diagnostic.span())?,
+            severity: Some(lsp_diagnostic_severity(diagnostic.severity())),
+            source: Some("maki".to_string()),
+            code: Some(lsp_types::NumberOrString::String(
+                diagnostic.code().to_string(),
+            )),
+            message: diagnostic.message().to_string(),
+            related_information: (!related_information.is_empty()).then_some(related_information),
+            ..Diagnostic::default()
+        })
     }
 
     fn send_diagnostics(
         &self,
         connection: &Connection,
         path: &Path,
+        version: Option<i32>,
         diagnostics: Vec<Diagnostic>,
     ) -> LspResult<()> {
         let uri = Url::from_file_path(self.source_root.join(path))
             .map_err(|_| "failed to create document URI")?;
-        let params = PublishDiagnosticsParams::new(uri, diagnostics, None);
+        let params = PublishDiagnosticsParams::new(uri, diagnostics, version);
         connection
             .sender
             .send(Message::Notification(Notification::new(
@@ -1247,17 +1263,12 @@ fn span_touches(span: SourceSpan, offset: usize) -> bool {
     span.contains(offset)
 }
 
-fn diagnostic_code(kind: AnalysisDiagnosticKind) -> &'static str {
-    match kind {
-        AnalysisDiagnosticKind::ParseWarning => "parse-warning",
-        AnalysisDiagnosticKind::DuplicateId => "duplicate-id",
-        AnalysisDiagnosticKind::UnresolvedReference => "unresolved-reference",
-        AnalysisDiagnosticKind::BrokenNoteLink => "broken-note-link",
-        AnalysisDiagnosticKind::AmbiguousNoteLink => "ambiguous-note-link",
-        AnalysisDiagnosticKind::BrokenHeadingLink => "broken-heading-link",
-        AnalysisDiagnosticKind::AmbiguousHeadingLink => "ambiguous-heading-link",
-        AnalysisDiagnosticKind::BrokenIdLink => "broken-id-link",
-        AnalysisDiagnosticKind::AmbiguousIdLink => "ambiguous-id-link",
+fn lsp_diagnostic_severity(severity: AnalysisDiagnosticSeverity) -> DiagnosticSeverity {
+    match severity {
+        AnalysisDiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
+        AnalysisDiagnosticSeverity::Warning => DiagnosticSeverity::WARNING,
+        AnalysisDiagnosticSeverity::Information => DiagnosticSeverity::INFORMATION,
+        AnalysisDiagnosticSeverity::Hint => DiagnosticSeverity::HINT,
     }
 }
 
@@ -1712,6 +1723,67 @@ mod tests {
             panic!("resolved edits should preserve the current document version");
         };
         assert_eq!(document_edits[0].text_document.version, Some(42));
+    }
+
+    #[test]
+    fn did_close_clears_diagnostics_without_republishing_the_closed_document() {
+        let workspace = temp_workspace("diagnostics-close");
+        write_workspace_file(&workspace, "index.maki", "= Clean on disk\n");
+        let path = PathBuf::from("index.maki");
+        let uri = Url::from_file_path(workspace.root.join(&path)).unwrap();
+        let mut server =
+            Server::new(workspace.root.clone(), all_extraction_capabilities()).unwrap();
+        let (server_connection, client_connection) = Connection::memory();
+
+        server
+            .handle_notification(
+                &server_connection,
+                Notification {
+                    method: "textDocument/didOpen".to_string(),
+                    params: serde_json::to_value(DidOpenTextDocumentParams {
+                        text_document: lsp_types::TextDocumentItem::new(
+                            uri.clone(),
+                            "maki".to_string(),
+                            9,
+                            "[[missing]]\n".to_string(),
+                        ),
+                    })
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        let Message::Notification(open_notification) = client_connection.receiver.recv().unwrap()
+        else {
+            panic!("expected diagnostics for the opened document");
+        };
+        let open: PublishDiagnosticsParams =
+            serde_json::from_value(open_notification.params).unwrap();
+        assert_eq!(open.version, Some(9));
+        assert_eq!(open.diagnostics.len(), 1);
+
+        server
+            .handle_notification(
+                &server_connection,
+                Notification {
+                    method: "textDocument/didClose".to_string(),
+                    params: serde_json::to_value(DidCloseTextDocumentParams {
+                        text_document: lsp_types::TextDocumentIdentifier::new(uri.clone()),
+                    })
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+
+        let messages = client_connection.receiver.try_iter().collect::<Vec<_>>();
+        let [Message::Notification(clear_notification)] = messages.as_slice() else {
+            panic!("didClose should emit exactly one clear notification");
+        };
+        let clear: PublishDiagnosticsParams =
+            serde_json::from_value(clear_notification.params.clone()).unwrap();
+        assert_eq!(clear.uri, uri);
+        assert_eq!(clear.version, None);
+        assert!(clear.diagnostics.is_empty());
+        assert!(!server.document_versions.contains_key(&path));
     }
 
     #[test]
@@ -3016,12 +3088,82 @@ mod tests {
         let params: PublishDiagnosticsParams =
             serde_json::from_value(notification.params.clone()).unwrap();
         assert_eq!(params.uri.as_str(), "file:///workspace/open.maki");
+        assert_eq!(params.version, Some(1));
         assert_eq!(params.diagnostics.len(), 1);
+        assert_eq!(
+            params.diagnostics[0].severity,
+            Some(DiagnosticSeverity::WARNING)
+        );
         assert_eq!(
             params.diagnostics[0].code,
             Some(lsp_types::NumberOrString::String(
                 "broken-note-link".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn diagnostics_preserve_each_core_parser_code() {
+        let documents = BTreeMap::from([
+            (
+                PathBuf::from("a-invalid-property.maki"),
+                "--^ invalid-property\n".to_string(),
+            ),
+            (
+                PathBuf::from("b-unclosed-container.maki"),
+                "---code\nbody\n".to_string(),
+            ),
+            (
+                PathBuf::from("c-property-on-property.maki"),
+                "--v title: pending\n--^ title: ignored\n= Heading\n".to_string(),
+            ),
+            (
+                PathBuf::from("d-duplicate-reference.maki"),
+                "[link]: first\n[link]: second\n".to_string(),
+            ),
+        ]);
+        let document_versions = documents.keys().cloned().map(|path| (path, 7)).collect();
+        let server = Server {
+            source_root: PathBuf::from("/workspace"),
+            snapshot: ProjectSnapshot::compile(documents),
+            document_versions,
+            page_title_provider: no_page_title_provider(),
+            extraction_capabilities: all_extraction_capabilities(),
+        };
+        let (server_connection, client_connection) = Connection::memory();
+
+        server.publish_diagnostics(&server_connection).unwrap();
+
+        let mut codes = client_connection
+            .receiver
+            .try_iter()
+            .map(|message| {
+                let Message::Notification(notification) = message else {
+                    panic!("expected a diagnostics notification");
+                };
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(notification.params).unwrap();
+                assert_eq!(params.version, Some(7));
+                let [diagnostic] = params.diagnostics.as_slice() else {
+                    panic!("expected one parser diagnostic per document");
+                };
+                assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::WARNING));
+                match diagnostic.code.as_ref().unwrap() {
+                    lsp_types::NumberOrString::String(code) => code.clone(),
+                    lsp_types::NumberOrString::Number(_) => panic!("expected a string code"),
+                }
+            })
+            .collect::<Vec<_>>();
+        codes.sort();
+
+        assert_eq!(
+            codes,
+            vec![
+                "duplicate-reference-definition",
+                "invalid-property",
+                "property-on-property",
+                "unclosed-container",
+            ]
         );
     }
 
@@ -3101,6 +3243,17 @@ mod tests {
                 "broken-id-link"
             ]
         );
+        for diagnostic in &params.diagnostics[..2] {
+            let [related] = diagnostic
+                .related_information
+                .as_deref()
+                .expect("duplicate IDs should identify the conflicting declaration")
+            else {
+                panic!("expected one related duplicate declaration");
+            };
+            assert_eq!(related.location.uri.as_str(), "file:///workspace/open.maki");
+            assert_eq!(related.message, "other declaration of id: same");
+        }
     }
 
     #[test]

@@ -20,11 +20,21 @@ pub(crate) enum Command {
         target: FormatTarget,
         check: bool,
     },
+    Check {
+        path: PathBuf,
+        format: CheckFormat,
+    },
     Lsp,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum VersionFormat {
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckFormat {
     Text,
     Json,
 }
@@ -69,6 +79,7 @@ pub(crate) enum CliError {
     InvalidDuration(String),
     InvalidMetricsEndpoint(String),
     InvalidPort(String),
+    InvalidCheckFormat(String),
     InvalidServeSource(String),
     UnexpectedArgument(String),
 }
@@ -83,6 +94,7 @@ impl Display for CliError {
             CliError::InvalidDuration(s) => write!(f, "Invalid duration: {}", s),
             CliError::InvalidMetricsEndpoint(s) => write!(f, "Invalid metrics endpoint: {}", s),
             CliError::InvalidPort(s) => write!(f, "Invalid port: {}", s),
+            CliError::InvalidCheckFormat(s) => write!(f, "Invalid check format: {}", s),
             CliError::InvalidServeSource(s) => write!(f, "Invalid serve source: {}", s),
             CliError::UnexpectedArgument(s) => write!(f, "Unexpected argument: {}", s),
         }
@@ -277,6 +289,39 @@ fn parse_format_args(args: &[String]) -> Result<Command, CliError> {
     })
 }
 
+fn parse_check_args(args: &[String]) -> Result<Command, CliError> {
+    let mut path = None;
+    let mut format = CheckFormat::Text;
+    let mut index = 2;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::MissingOptionValue("--format".to_string()))?;
+                format = match value.as_str() {
+                    "text" => CheckFormat::Text,
+                    "json" => CheckFormat::Json,
+                    value => return Err(CliError::InvalidCheckFormat(value.to_string())),
+                };
+            }
+            option if option.starts_with("--") => {
+                return Err(CliError::UnknownOption(option.to_string()));
+            }
+            value if path.is_none() => path = Some(PathBuf::from(value)),
+            argument => return Err(CliError::UnexpectedArgument(argument.to_string())),
+        }
+        index += 1;
+    }
+
+    Ok(Command::Check {
+        path: path.unwrap_or_else(|| PathBuf::from(".")),
+        format,
+    })
+}
+
 pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
     // 0 is the binary name
     let command = args.get(1).ok_or(CliError::MissingCommand)?;
@@ -299,6 +344,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, CliError> {
         "serve" => parse_serve_args(args),
         "build" => parse_build_args(args),
         "fmt" => parse_format_args(args),
+        "check" => parse_check_args(args),
         "lsp" => {
             if let Some(argument) = args.get(2) {
                 return Err(CliError::UnexpectedArgument(argument.clone()));
