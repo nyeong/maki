@@ -65,6 +65,8 @@ maki --version --json
 maki serve .
 maki build docs/index.maki > index.html
 maki build docs/index.maki --check-external-links > index.html
+maki check .
+maki check docs/index.maki --format json
 maki fmt .
 maki fmt --check
 maki fmt - < draft.maki > formatted.maki
@@ -91,6 +93,28 @@ uses its configured source root; a directory outside that source is handled as
 a standalone note directory. Pass `--check` to report files that would change
 without writing them. A dirty check exits with status 1. Use `-` to read one
 document from stdin and write the formatted document to stdout.
+
+`maki check [path]` runs the parser and semantic project diagnostics without
+writing source files, contacting the network, or opening an editor. The path
+defaults to the current directory. A directory in a discovered project checks
+the configured source root; a standalone directory checks all of its notes.
+A file in a project is analyzed with the full project context, while only
+findings owned by that file are reported. A file outside a project receives
+parser and file-local validation.
+
+Text output uses `path:line:column: severity[code]: message`. Pass
+`--format json` for the versioned machine-readable report; JSON byte ranges are
+zero-based, half-open UTF-8 ranges, while its line and column values are
+one-based Unicode-scalar positions. Project paths are source-root-relative and
+use `/` separators. A successful clean check exits 0, findings exit 1, and
+usage or operational failures exit 2. If only some sources cannot be read,
+readable findings remain in the report, JSON sets `complete` to `false`, and
+the command exits 2. Reports go to stdout and operational details to stderr.
+
+The three validation surfaces have separate jobs: the LSP reports the same
+Core diagnostics interactively for open editor buffers, `maki fmt --check`
+only detects non-canonical formatting, and `maki check` validates the on-disk
+snapshot as a batch or CI gate.
 
 `maki lsp` starts the stdio language server for editor integration.
 

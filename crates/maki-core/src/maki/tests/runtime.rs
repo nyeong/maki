@@ -74,15 +74,28 @@ fn project_compile_uses_supplied_source_metadata() {
 #[test]
 fn project_compile_preserves_read_failures_as_snapshot_data() {
     let mut project = test_project("read-failure");
-    project.add_empty_source("index.maki");
+    project.add_source("index.maki", "--^ invalid-property");
     project.add_read_failure("broken.maki");
 
     let maki = project.compile();
+    let report = maki.validation_report();
 
     assert!(matches!(
         maki.analysis(),
         Err(Error::ReadNoteFailed(path)) if path == project.root.join("broken.maki")
     ));
+    assert_eq!(
+        maki.source(Path::new("index.maki")),
+        Some("--^ invalid-property")
+    );
+    assert!(!report.is_complete());
+    assert!(report.has_findings());
+    assert_eq!(
+        report.unavailable_sources(),
+        &[PathBuf::from("broken.maki")]
+    );
+    assert_eq!(report.summary().warnings(), 1);
+    assert_eq!(report.diagnostics()[0].code(), "invalid-property");
     assert!(maki.diagnostics().iter().any(|diagnostic| {
         diagnostic.source_path() == Path::new("broken.maki")
             && matches!(diagnostic.kind(), ProjectDiagnosticKind::ReadFailed)

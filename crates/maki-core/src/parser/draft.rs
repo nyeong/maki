@@ -848,6 +848,7 @@ fn collect_duplicate_reference_diagnostics<'a>(
                     line: definition.line,
                     span: definition.span,
                     kind: ParseDiagnosticKind::DuplicateReferenceDefinition {
+                        key: definition.key,
                         raw_line: definition.raw_line,
                     },
                 });

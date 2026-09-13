@@ -104,9 +104,14 @@ pub fn external_link_diagnostics(
 
 fn project_diagnostic_kind(diagnostic: &AnalysisDiagnostic) -> Option<ProjectDiagnosticKind> {
     match diagnostic.kind {
-        AnalysisDiagnosticKind::ParseWarning => Some(ProjectDiagnosticKind::ParseWarning {
-            message: diagnostic.message.clone(),
-        }),
+        AnalysisDiagnosticKind::InvalidProperty
+        | AnalysisDiagnosticKind::UnclosedContainer
+        | AnalysisDiagnosticKind::PropertyOnProperty
+        | AnalysisDiagnosticKind::DuplicateReferenceDefinition => {
+            Some(ProjectDiagnosticKind::ParseWarning {
+                message: diagnostic.message.clone(),
+            })
+        }
         AnalysisDiagnosticKind::DuplicateId => {
             let AnalysisDiagnosticSubject::Id(id) = &diagnostic.subject else {
                 return None;

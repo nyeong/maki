@@ -433,7 +433,10 @@ fn analysis_date_kind_label(kind: DateStampKind, origin: &AnalysisDateOrigin) ->
 
 fn diagnostic_kind_label(kind: AnalysisDiagnosticKind) -> &'static str {
     match kind {
-        AnalysisDiagnosticKind::ParseWarning => "parse_warning",
+        AnalysisDiagnosticKind::InvalidProperty
+        | AnalysisDiagnosticKind::UnclosedContainer
+        | AnalysisDiagnosticKind::PropertyOnProperty
+        | AnalysisDiagnosticKind::DuplicateReferenceDefinition => "parse_warning",
         AnalysisDiagnosticKind::DuplicateId => "duplicate_id",
         AnalysisDiagnosticKind::UnresolvedReference => "unresolved_reference",
         AnalysisDiagnosticKind::BrokenNoteLink => "broken_note_link",

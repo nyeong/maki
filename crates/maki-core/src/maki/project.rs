@@ -200,6 +200,17 @@ impl Maki {
         &self.root
     }
 
+    pub fn source(&self, path: &Path) -> Option<&str> {
+        self.snapshot.source(path)
+    }
+
+    pub fn validation_report(&self) -> analysis::ValidationReport<'_> {
+        analysis::ValidationReport::new(
+            &self.snapshot.analysis().diagnostics,
+            &self.snapshot.read_failures,
+        )
+    }
+
     pub fn notes(&self) -> impl Iterator<Item = &Note> {
         self.notes.values()
     }
@@ -254,7 +265,7 @@ impl Maki {
 
     pub fn analysis(&self) -> Result<ProjectAnalysis, Error> {
         if let Some(path) = self.snapshot.first_read_failure() {
-            return Err(Error::ReadNoteFailed(path.to_path_buf()));
+            return Err(Error::ReadNoteFailed(self.root.join(path)));
         }
 
         Ok(self.snapshot.analysis().clone())
@@ -330,10 +341,12 @@ impl Maki {
                 Some(source) => {
                     sources.insert(path, source);
                 }
-                None => read_failures.push(note.absolute_path.clone()),
+                None => read_failures.push(path),
             }
             notes.insert(note.note_ref(), note);
         }
+
+        read_failures.sort();
 
         let snapshot = ProjectSnapshot::new(sources, read_failures);
 

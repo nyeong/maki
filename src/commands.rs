@@ -9,6 +9,7 @@ use maki_fs::{
 };
 use maki_serve::{git_source, metrics::Metrics, web};
 
+use crate::check_command::{self, CheckOutcome};
 use crate::cli::{Command, ServeOptions, ServeSource, VersionFormat};
 use crate::external_links::{diagnostics_for_external_links, diagnostics_with_external_links};
 use crate::format_command::{self, FormatOutcome};
@@ -18,6 +19,7 @@ use crate::output::{emit_parse_warnings, emit_project_diagnostic_summary};
 pub(crate) enum CommandOutcome {
     Success,
     CheckFailed,
+    OperationalFailure,
 }
 
 #[derive(Debug)]
@@ -26,6 +28,7 @@ pub(crate) enum RunError {
     Git(git_source::Error),
     Serve(maki_serve::RunError),
     Maki(MakiError),
+    Check(check_command::Error),
     Format(format_command::Error),
     Lsp(String),
 }
@@ -55,9 +58,16 @@ impl Display for RunError {
             RunError::Git(error) => write!(f, "Git source error: {}", error),
             RunError::Serve(error) => write!(f, "Serve error: {}", error),
             RunError::Maki(maki_error) => write!(f, "Maki error: {}", maki_error),
+            RunError::Check(error) => write!(f, "Check error: {error}"),
             RunError::Format(error) => write!(f, "Format error: {error}"),
             RunError::Lsp(message) => write!(f, "LSP error: {message}"),
         }
+    }
+}
+
+impl RunError {
+    pub(crate) fn exit_code(&self) -> i32 {
+        if matches!(self, Self::Check(_)) { 2 } else { 1 }
     }
 }
 
@@ -258,6 +268,13 @@ pub(crate) fn run_command(command: Command) -> Result<CommandOutcome, RunError> 
                 FormatOutcome::CheckFailed => CommandOutcome::CheckFailed,
             })
             .map_err(RunError::Format),
+        Command::Check { path, format } => check_command::run(&path, format)
+            .map(|outcome| match outcome {
+                CheckOutcome::Clean => CommandOutcome::Success,
+                CheckOutcome::Findings => CommandOutcome::CheckFailed,
+                CheckOutcome::Incomplete => CommandOutcome::OperationalFailure,
+            })
+            .map_err(RunError::Check),
         Command::Lsp => maki_lsp::run_stdio_with_version(env!("CARGO_PKG_VERSION"))
             .map(success)
             .map_err(|error| RunError::Lsp(error.to_string())),

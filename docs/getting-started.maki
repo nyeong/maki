@@ -76,6 +76,32 @@ Project 밖의 파일이거나 `maki.toml`이 없으면 standalone HTML로 rende
 외부 link 검사 결과는 기존 project warning과 함께 stderr에 출력하고 HTML은 계속 stdout에 출력한다.
 이 선택은 CLI 실행에만 적용하며 `maki.toml`에서 network 검사를 켤 수 없다.
 
+= 문서 검증하기
+
+Editor를 열지 않고 disk의 Maki 문서를 검증하려면 `maki check`를 실행한다.
+
+--v lang: bash
+: maki check .
+
+경로를 생략하면 현재 디렉토리에서 project를 찾는다.
+Project root 또는 configured source 안의 디렉토리는 source root 전체를 검사하고, standalone 디렉토리는 그 아래의 모든 `.maki` 파일을 함께 검사한다.
+Project source 안의 단일 파일은 project 전체를 link resolution context로 사용하지만 그 파일 소유의 finding만 출력한다.
+Project 밖의 단일 파일은 parser와 file-local validation만 실행한다.
+
+기본 text report의 각 줄은 `path:line:column: severity[code]: message` 형식이다.
+자동화에서는 versioned JSON report를 사용할 수 있다.
+
+--v lang: bash
+: maki check . --format json
+
+Report만 stdout에 기록하고 read 또는 project load 같은 operational error는 stderr에 기록한다.
+정상 실행에서 finding이 없으면 status 0, finding이 있으면 status 1, usage 또는 operational error가 있으면 status 2다.
+일부 source만 읽지 못하면 읽을 수 있는 source의 finding을 유지하고 JSON의 `complete`를 `false`로 표시한 뒤 status 2로 종료한다.
+검사는 source를 바꾸거나 network, 외부 process, key 또는 prompt를 사용하지 않는다.
+
+`maki lsp`는 열린 editor buffer를 같은 Core diagnostics로 즉시 검사한다.
+`maki fmt --check`는 semantic finding이 아니라 canonical formatting 차이만 검사하고, `maki check`는 disk snapshot의 parser·semantic finding을 batch와 CI에서 검사한다.
+
 = 문서 포맷하기
 
 Project 전체의 구조적 공백과 들여쓰기를 정규화한다.
@@ -115,5 +141,6 @@ Maki 문법 전체는 [[maki-syntax]], manifest 설정은 [[maki-toml]]을 참�
 - `maki serve [path]`: local project 또는 note directory serve
 - `maki serve --git <url>`: Git branch를 주기적으로 갱신하며 serve
 - `maki build <file> [--check-external-links]`: 기본 offline으로 HTML을 stdout에 출력하고, 선택하면 외부 HTTP(S) link도 검사
+- `maki check [path] [--format text|json]`: 기본 경로는 `.`, finding은 status 1, usage·read·load error는 status 2
 - `maki fmt [--check] [path|-]`: 기본 경로는 `.`, `--check`는 파일을 쓰지 않고 차이가 있으면 status 1
 - `maki lsp`: stdio language server 실행

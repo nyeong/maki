@@ -1,0 +1,3 @@
+a.maki:1:5: warning[broken-note-link]: broken note link: missing
+a.maki:2:1: warning[invalid-property]: invalid property: --^ invalid-property
+z.maki:2:1: warning[duplicate-reference-definition]: duplicate reference definition: [dup]: second

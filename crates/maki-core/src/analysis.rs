@@ -97,6 +97,10 @@ impl ProjectSnapshot {
         &self.analysis
     }
 
+    pub fn validation_report(&self) -> ValidationReport<'_> {
+        self.analysis.validation_report()
+    }
+
     pub(crate) fn title_origin(&self, path: &Path) -> DocumentTitleOrigin {
         self.title_origins
             .get(path)
@@ -135,6 +139,12 @@ pub struct DocumentAnalysis {
     pub date_markers: Vec<DateMarkerOccurrence>,
     pub dates: Vec<DateOccurrence>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
+}
+
+impl DocumentAnalysis {
+    pub fn validation_report(&self) -> ValidationReport<'_> {
+        ValidationReport::new(&self.diagnostics, &[])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -544,9 +554,51 @@ pub struct AnalysisDiagnostic {
     pub kind: AnalysisDiagnosticKind,
     pub subject: AnalysisDiagnosticSubject,
     pub message: String,
+    pub related: Vec<AnalysisRelatedLocation>,
+}
+
+impl AnalysisDiagnostic {
+    pub fn code(&self) -> &'static str {
+        self.kind.code()
+    }
+
+    pub fn severity(&self) -> AnalysisDiagnosticSeverity {
+        self.kind.severity()
+    }
+
+    pub fn source_path(&self) -> &Path {
+        &self.path
+    }
+
+    pub const fn span(&self) -> SourceSpan {
+        self.span
+    }
+
+    pub const fn kind(&self) -> AnalysisDiagnosticKind {
+        self.kind
+    }
+
+    pub fn subject(&self) -> &AnalysisDiagnosticSubject {
+        &self.subject
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn related(&self) -> &[AnalysisRelatedLocation] {
+        &self.related
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisRelatedLocation {
+    pub path: PathBuf,
+    pub span: SourceSpan,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AnalysisDiagnosticSubject {
     None,
     Id(String),
@@ -554,9 +606,12 @@ pub enum AnalysisDiagnosticSubject {
     Link(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AnalysisDiagnosticKind {
-    ParseWarning,
+    InvalidProperty,
+    UnclosedContainer,
+    PropertyOnProperty,
+    DuplicateReferenceDefinition,
     DuplicateId,
     UnresolvedReference,
     BrokenNoteLink,
@@ -565,6 +620,140 @@ pub enum AnalysisDiagnosticKind {
     AmbiguousHeadingLink,
     BrokenIdLink,
     AmbiguousIdLink,
+}
+
+impl AnalysisDiagnosticKind {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidProperty => "invalid-property",
+            Self::UnclosedContainer => "unclosed-container",
+            Self::PropertyOnProperty => "property-on-property",
+            Self::DuplicateReferenceDefinition => "duplicate-reference-definition",
+            Self::DuplicateId => "duplicate-id",
+            Self::UnresolvedReference => "unresolved-reference",
+            Self::BrokenNoteLink => "broken-note-link",
+            Self::AmbiguousNoteLink => "ambiguous-note-link",
+            Self::BrokenHeadingLink => "broken-heading-link",
+            Self::AmbiguousHeadingLink => "ambiguous-heading-link",
+            Self::BrokenIdLink => "broken-id-link",
+            Self::AmbiguousIdLink => "ambiguous-id-link",
+        }
+    }
+
+    pub const fn severity(self) -> AnalysisDiagnosticSeverity {
+        match self {
+            Self::InvalidProperty
+            | Self::UnclosedContainer
+            | Self::PropertyOnProperty
+            | Self::DuplicateReferenceDefinition
+            | Self::DuplicateId
+            | Self::UnresolvedReference
+            | Self::BrokenNoteLink
+            | Self::AmbiguousNoteLink
+            | Self::BrokenHeadingLink
+            | Self::AmbiguousHeadingLink
+            | Self::BrokenIdLink
+            | Self::AmbiguousIdLink => AnalysisDiagnosticSeverity::Warning,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisDiagnosticSeverity {
+    Error,
+    Warning,
+    Information,
+    Hint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidationReport<'a> {
+    diagnostics: &'a [AnalysisDiagnostic],
+    unavailable_sources: &'a [PathBuf],
+}
+
+impl<'a> ValidationReport<'a> {
+    pub(crate) const fn new(
+        diagnostics: &'a [AnalysisDiagnostic],
+        unavailable_sources: &'a [PathBuf],
+    ) -> Self {
+        Self {
+            diagnostics,
+            unavailable_sources,
+        }
+    }
+
+    pub const fn is_complete(&self) -> bool {
+        self.unavailable_sources.is_empty()
+    }
+
+    pub const fn has_findings(&self) -> bool {
+        !self.diagnostics.is_empty()
+    }
+
+    pub const fn diagnostics(&self) -> &'a [AnalysisDiagnostic] {
+        self.diagnostics
+    }
+
+    pub const fn unavailable_sources(&self) -> &'a [PathBuf] {
+        self.unavailable_sources
+    }
+
+    pub fn summary(&self) -> ValidationSummary {
+        ValidationSummary::from_diagnostics(self.diagnostics)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ValidationSummary {
+    total: usize,
+    errors: usize,
+    warnings: usize,
+    information: usize,
+    hints: usize,
+}
+
+impl ValidationSummary {
+    pub fn from_diagnostics(diagnostics: &[AnalysisDiagnostic]) -> Self {
+        Self::from_severities(diagnostics.iter().map(AnalysisDiagnostic::severity))
+    }
+
+    pub fn from_severities(
+        severities: impl IntoIterator<Item = AnalysisDiagnosticSeverity>,
+    ) -> Self {
+        let mut summary = Self::default();
+        for severity in severities {
+            summary.total += 1;
+            match severity {
+                AnalysisDiagnosticSeverity::Error => summary.errors += 1,
+                AnalysisDiagnosticSeverity::Warning => summary.warnings += 1,
+                AnalysisDiagnosticSeverity::Information => summary.information += 1,
+                AnalysisDiagnosticSeverity::Hint => summary.hints += 1,
+            }
+        }
+
+        summary
+    }
+
+    pub const fn total(&self) -> usize {
+        self.total
+    }
+
+    pub const fn errors(&self) -> usize {
+        self.errors
+    }
+
+    pub const fn warnings(&self) -> usize {
+        self.warnings
+    }
+
+    pub const fn information(&self) -> usize {
+        self.information
+    }
+
+    pub const fn hints(&self) -> usize {
+        self.hints
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -592,6 +781,59 @@ pub struct DefinitionTarget {
     pub selection_span: SourceSpan,
     pub kind: DefinitionTargetKind,
     pub fragment: Option<String>,
+}
+
+fn analysis_kind_for_parse_diagnostic(
+    kind: &parser::ParseDiagnosticKind<'_>,
+) -> AnalysisDiagnosticKind {
+    match kind {
+        parser::ParseDiagnosticKind::InvalidProperty { .. } => {
+            AnalysisDiagnosticKind::InvalidProperty
+        }
+        parser::ParseDiagnosticKind::UnclosedContainer { .. } => {
+            AnalysisDiagnosticKind::UnclosedContainer
+        }
+        parser::ParseDiagnosticKind::PropertyOnProperty { .. } => {
+            AnalysisDiagnosticKind::PropertyOnProperty
+        }
+        parser::ParseDiagnosticKind::DuplicateReferenceDefinition { .. } => {
+            AnalysisDiagnosticKind::DuplicateReferenceDefinition
+        }
+    }
+}
+
+fn analysis_diagnostic_for_parse(
+    path: &Path,
+    diagnostic: &parser::ParseDiagnostic<'_>,
+    span: SourceSpan,
+) -> AnalysisDiagnostic {
+    let subject = match &diagnostic.kind {
+        parser::ParseDiagnosticKind::DuplicateReferenceDefinition { key, .. } => {
+            AnalysisDiagnosticSubject::Reference((*key).to_string())
+        }
+        parser::ParseDiagnosticKind::InvalidProperty { .. }
+        | parser::ParseDiagnosticKind::UnclosedContainer { .. }
+        | parser::ParseDiagnosticKind::PropertyOnProperty { .. } => AnalysisDiagnosticSubject::None,
+    };
+
+    AnalysisDiagnostic {
+        path: path.to_path_buf(),
+        span,
+        kind: analysis_kind_for_parse_diagnostic(&diagnostic.kind),
+        subject,
+        message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
+        related: Vec::new(),
+    }
+}
+
+fn sort_analysis_diagnostics(diagnostics: &mut [AnalysisDiagnostic]) {
+    diagnostics.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.span.cmp(&right.span))
+            .then_with(|| left.code().cmp(right.code()))
+            .then_with(|| left.message.cmp(&right.message))
+    });
 }
 
 pub fn analyze_document(path: &Path, source: &str) -> DocumentAnalysis {
@@ -650,13 +892,7 @@ fn analyze_parsed_document_with_title_origin(
     let mut diagnostics = parsed
         .diagnostics
         .iter()
-        .map(|diagnostic| AnalysisDiagnostic {
-            path: path.to_path_buf(),
-            span: diagnostic.span,
-            kind: AnalysisDiagnosticKind::ParseWarning,
-            subject: AnalysisDiagnosticSubject::None,
-            message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
-        })
+        .map(|diagnostic| analysis_diagnostic_for_parse(path, diagnostic, diagnostic.span))
         .collect::<Vec<_>>();
     diagnostics.extend(duplicate_id_diagnostics(
         path,
@@ -676,9 +912,10 @@ fn analyze_parsed_document_with_title_origin(
                 kind: AnalysisDiagnosticKind::UnresolvedReference,
                 subject: AnalysisDiagnosticSubject::Reference(usage.key.clone()),
                 message: format!("unresolved reference: {}", usage.key),
+                related: Vec::new(),
             }),
     );
-    diagnostics.sort_by_key(|diagnostic| diagnostic.span);
+    sort_analysis_diagnostics(&mut diagnostics);
 
     (
         DocumentAnalysis {
@@ -784,6 +1021,7 @@ pub(crate) fn analyze_project_with_title_origins(
                 kind,
                 subject: AnalysisDiagnosticSubject::Link(target.clone()),
                 message,
+                related: Vec::new(),
             });
         }
         if let Some(occurrence) = analysis
@@ -795,11 +1033,7 @@ pub(crate) fn analyze_project_with_title_origins(
         }
     }
 
-    diagnostics.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then_with(|| left.span.cmp(&right.span))
-    });
+    sort_analysis_diagnostics(&mut diagnostics);
     analysis.diagnostics = diagnostics;
 
     (analysis, title_origins)
@@ -836,6 +1070,10 @@ fn build_date_marker_index(
 }
 
 impl ProjectAnalysis {
+    pub fn validation_report(&self) -> ValidationReport<'_> {
+        ValidationReport::new(&self.diagnostics, &[])
+    }
+
     pub fn documents(&self) -> &BTreeMap<PathBuf, DocumentAnalysis> {
         &self.documents
     }
@@ -1118,13 +1356,8 @@ impl NestedDocumentObserver for NestedOccurrenceCollector<'_> {
         let mut nested = collect_document_occurrences(&mapped.text, &parsed.document);
         self.diagnostics
             .extend(parsed.diagnostics.iter().filter_map(|diagnostic| {
-                Some(AnalysisDiagnostic {
-                    path: self.path.to_path_buf(),
-                    span: mapped.map_span(diagnostic.span)?,
-                    kind: AnalysisDiagnosticKind::ParseWarning,
-                    subject: AnalysisDiagnosticSubject::None,
-                    message: parser::format_parse_diagnostic_kind(&diagnostic.kind),
-                })
+                let span = mapped.map_span(diagnostic.span)?;
+                Some(analysis_diagnostic_for_parse(self.path, diagnostic, span))
             }));
 
         let nested_reference_graph = std::mem::take(&mut nested.references).finish();
@@ -1140,6 +1373,7 @@ impl NestedDocumentObserver for NestedOccurrenceCollector<'_> {
                         kind: AnalysisDiagnosticKind::UnresolvedReference,
                         subject: AnalysisDiagnosticSubject::Reference(usage.key.clone()),
                         message: format!("unresolved reference: {}", usage.key),
+                        related: Vec::new(),
                     })
                 }),
         );
@@ -1351,9 +1585,7 @@ fn merge_nested_into_document(
         &document.block_ids,
         &document.headings,
     ));
-    document
-        .diagnostics
-        .sort_by_key(|diagnostic| diagnostic.span);
+    sort_analysis_diagnostics(&mut document.diagnostics);
 }
 
 fn collect_reference_definitions(
@@ -1960,29 +2192,54 @@ fn duplicate_id_diagnostics(
     let mut diagnostics = Vec::new();
     for (id, occurrences) in &by_id {
         if occurrences.len() > 1 {
-            diagnostics.extend(occurrences.iter().map(|occurrence| AnalysisDiagnostic {
-                path: path.to_path_buf(),
-                span: occurrence.value_span,
-                kind: AnalysisDiagnosticKind::DuplicateId,
-                subject: AnalysisDiagnosticSubject::Id((*id).to_string()),
-                message: format!("duplicate id: {id}"),
+            diagnostics.extend(occurrences.iter().enumerate().map(|(index, occurrence)| {
+                let related_occurrence = if index == 0 {
+                    occurrences[1]
+                } else {
+                    occurrences[0]
+                };
+
+                AnalysisDiagnostic {
+                    path: path.to_path_buf(),
+                    span: occurrence.value_span,
+                    kind: AnalysisDiagnosticKind::DuplicateId,
+                    subject: AnalysisDiagnosticSubject::Id((*id).to_string()),
+                    message: format!("duplicate id: {id}"),
+                    related: vec![AnalysisRelatedLocation {
+                        path: path.to_path_buf(),
+                        span: related_occurrence.value_span,
+                        message: format!("other declaration of id: {id}"),
+                    }],
+                }
             }));
         }
     }
     for block_id in block_ids {
-        if by_id.get(block_id.id.as_str()).map(Vec::len) == Some(1)
-            && headings
-                .iter()
-                .any(|heading| block_id_conflicts_with_heading(block_id, heading))
-        {
-            diagnostics.push(AnalysisDiagnostic {
-                path: path.to_path_buf(),
-                span: block_id.value_span,
-                kind: AnalysisDiagnosticKind::DuplicateId,
-                subject: AnalysisDiagnosticSubject::Id(block_id.id.clone()),
-                message: format!("id conflicts with heading anchor: {}", block_id.id),
-            });
+        if by_id.get(block_id.id.as_str()).map(Vec::len) != Some(1) {
+            continue;
         }
+
+        let related = headings
+            .iter()
+            .filter(|heading| block_id_conflicts_with_heading(block_id, heading))
+            .map(|heading| AnalysisRelatedLocation {
+                path: path.to_path_buf(),
+                span: heading.title_span,
+                message: format!("conflicting heading anchor: {}", block_id.id),
+            })
+            .collect::<Vec<_>>();
+        if related.is_empty() {
+            continue;
+        }
+
+        diagnostics.push(AnalysisDiagnostic {
+            path: path.to_path_buf(),
+            span: block_id.value_span,
+            kind: AnalysisDiagnosticKind::DuplicateId,
+            subject: AnalysisDiagnosticSubject::Id(block_id.id.clone()),
+            message: format!("id conflicts with heading anchor: {}", block_id.id),
+            related,
+        });
     }
     diagnostics
 }
@@ -2351,6 +2608,207 @@ mod tests {
         let project = analyze_project(&[SourceSnapshot { path, source }]);
 
         assert_eq!(project.document(path), Some(&standalone));
+    }
+
+    #[test]
+    fn parser_diagnostics_keep_independent_core_codes_and_severity() {
+        let cases = [
+            (
+                "--^ invalid-property",
+                AnalysisDiagnosticKind::InvalidProperty,
+                "invalid-property",
+            ),
+            (
+                "---quote\nbody",
+                AnalysisDiagnosticKind::UnclosedContainer,
+                "unclosed-container",
+            ),
+            (
+                "--v title: pending\n--^ title: ignored\n= Heading",
+                AnalysisDiagnosticKind::PropertyOnProperty,
+                "property-on-property",
+            ),
+            (
+                "[same]: first\n[same]: second",
+                AnalysisDiagnosticKind::DuplicateReferenceDefinition,
+                "duplicate-reference-definition",
+            ),
+        ];
+
+        for (source, expected_kind, expected_code) in cases {
+            let analysis = analyze_document(Path::new("index.maki"), source);
+            let diagnostics = analysis.validation_report().diagnostics();
+
+            assert_eq!(diagnostics.len(), 1, "source: {source:?}");
+            assert_eq!(diagnostics[0].kind(), expected_kind, "source: {source:?}");
+            assert_eq!(diagnostics[0].code(), expected_code, "source: {source:?}");
+            assert_eq!(
+                diagnostics[0].severity(),
+                AnalysisDiagnosticSeverity::Warning,
+                "source: {source:?}"
+            );
+            if expected_kind == AnalysisDiagnosticKind::DuplicateReferenceDefinition {
+                assert_eq!(
+                    diagnostics[0].subject(),
+                    &AnalysisDiagnosticSubject::Reference("same".to_string())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_parser_diagnostics_map_utf8_and_crlf_spans_to_the_root_source() {
+        let source = "😀\r\n\r\n> --^ invalid-property\r\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+        let diagnostic = analysis
+            .validation_report()
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.kind() == AnalysisDiagnosticKind::InvalidProperty)
+            .expect("nested parser diagnostic should be retained");
+
+        assert_eq!(
+            &source[diagnostic.span().start..diagnostic.span().end],
+            "--^ invalid-property"
+        );
+        assert_eq!(diagnostic.source_path(), Path::new("index.maki"));
+    }
+
+    #[test]
+    fn project_snapshot_validation_report_is_complete_and_summarizes_findings() {
+        let snapshot = ProjectSnapshot::compile(BTreeMap::from([(
+            PathBuf::from("index.maki"),
+            "--^ invalid-property".to_string(),
+        )]));
+        let report = snapshot.validation_report();
+        let summary = report.summary();
+
+        assert!(report.is_complete());
+        assert!(report.has_findings());
+        assert!(report.unavailable_sources().is_empty());
+        assert_eq!(summary.total(), 1);
+        assert_eq!(summary.errors(), 0);
+        assert_eq!(summary.warnings(), 1);
+        assert_eq!(summary.information(), 0);
+        assert_eq!(summary.hints(), 0);
+        assert_eq!(
+            snapshot
+                .analysis()
+                .validation_report()
+                .diagnostics()
+                .as_ptr(),
+            report.diagnostics().as_ptr()
+        );
+    }
+
+    #[test]
+    fn validation_summary_aggregates_a_severity_iterator() {
+        let summary = ValidationSummary::from_severities([
+            AnalysisDiagnosticSeverity::Error,
+            AnalysisDiagnosticSeverity::Warning,
+            AnalysisDiagnosticSeverity::Warning,
+            AnalysisDiagnosticSeverity::Information,
+            AnalysisDiagnosticSeverity::Hint,
+        ]);
+
+        assert_eq!(summary.total(), 5);
+        assert_eq!(summary.errors(), 1);
+        assert_eq!(summary.warnings(), 2);
+        assert_eq!(summary.information(), 1);
+        assert_eq!(summary.hints(), 1);
+    }
+
+    #[test]
+    fn diagnostic_sorting_uses_path_span_code_and_message_ties() {
+        let diagnostic = |path: &str,
+                          span: SourceSpan,
+                          kind: AnalysisDiagnosticKind,
+                          message: &str| AnalysisDiagnostic {
+            path: PathBuf::from(path),
+            span,
+            kind,
+            subject: AnalysisDiagnosticSubject::None,
+            message: message.to_string(),
+            related: Vec::new(),
+        };
+        let mut diagnostics = vec![
+            diagnostic(
+                "b.maki",
+                SourceSpan::new(0, 1),
+                AnalysisDiagnosticKind::InvalidProperty,
+                "a",
+            ),
+            diagnostic(
+                "a.maki",
+                SourceSpan::new(1, 2),
+                AnalysisDiagnosticKind::InvalidProperty,
+                "a",
+            ),
+            diagnostic(
+                "a.maki",
+                SourceSpan::new(0, 1),
+                AnalysisDiagnosticKind::PropertyOnProperty,
+                "a",
+            ),
+            diagnostic(
+                "a.maki",
+                SourceSpan::new(0, 1),
+                AnalysisDiagnosticKind::InvalidProperty,
+                "z",
+            ),
+            diagnostic(
+                "a.maki",
+                SourceSpan::new(0, 1),
+                AnalysisDiagnosticKind::InvalidProperty,
+                "a",
+            ),
+        ];
+
+        sort_analysis_diagnostics(&mut diagnostics);
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| (
+                    diagnostic.source_path(),
+                    diagnostic.span(),
+                    diagnostic.code(),
+                    diagnostic.message(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    Path::new("a.maki"),
+                    SourceSpan::new(0, 1),
+                    "invalid-property",
+                    "a",
+                ),
+                (
+                    Path::new("a.maki"),
+                    SourceSpan::new(0, 1),
+                    "invalid-property",
+                    "z",
+                ),
+                (
+                    Path::new("a.maki"),
+                    SourceSpan::new(0, 1),
+                    "property-on-property",
+                    "a",
+                ),
+                (
+                    Path::new("a.maki"),
+                    SourceSpan::new(1, 2),
+                    "invalid-property",
+                    "a",
+                ),
+                (
+                    Path::new("b.maki"),
+                    SourceSpan::new(0, 1),
+                    "invalid-property",
+                    "a",
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -3160,7 +3618,32 @@ mod tests {
         assert!(duplicates.iter().all(|diagnostic| {
             &source[diagnostic.span.start..diagnostic.span.end] == "same"
                 && diagnostic.message == "duplicate id: same"
+                && diagnostic.related.len() == 1
+                && &source[diagnostic.related[0].span.start..diagnostic.related[0].span.end]
+                    == "same"
+                && diagnostic.related[0].span != diagnostic.span
         }));
+    }
+
+    #[test]
+    fn duplicate_id_diagnostics_keep_one_deterministic_related_location() {
+        let source = "first\n--^ id: same\nsecond\n--^ id: same\nthird\n--^ id: same\n";
+        let analysis = analyze_document(Path::new("index.maki"), source);
+        let duplicates = analysis
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::DuplicateId)
+            .collect::<Vec<_>>();
+
+        assert_eq!(duplicates.len(), 3);
+        assert!(
+            duplicates
+                .iter()
+                .all(|diagnostic| diagnostic.related.len() == 1)
+        );
+        assert_eq!(duplicates[0].related[0].span, duplicates[1].span);
+        assert_eq!(duplicates[1].related[0].span, duplicates[0].span);
+        assert_eq!(duplicates[2].related[0].span, duplicates[0].span);
     }
 
     #[test]
@@ -3243,6 +3726,10 @@ mod tests {
         assert!(document.diagnostics.iter().any(|diagnostic| {
             diagnostic.kind == AnalysisDiagnosticKind::DuplicateId
                 && diagnostic.message == "id conflicts with heading anchor: shared"
+                && diagnostic.related.iter().any(|related| {
+                    &source[related.span.start..related.span.end] == "shared"
+                        && related.span != diagnostic.span
+                })
         }));
         assert_eq!(
             document.note_links[0].resolution,

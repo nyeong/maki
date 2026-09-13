@@ -45,6 +45,12 @@ pub struct Utf16Position {
     pub character: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnicodeScalarPosition {
+    pub line: usize,
+    pub column: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceMap<'a> {
     source: &'a str,
@@ -112,6 +118,17 @@ impl<'a> SourceMap<'a> {
         Some(Utf16Position {
             line: position.line,
             character,
+        })
+    }
+
+    pub fn scalar_position(&self, offset: usize) -> Option<UnicodeScalarPosition> {
+        let position = self.position(offset)?;
+        let line_start = self.line_starts[position.line];
+        let column = self.source[line_start..offset].chars().count();
+
+        Some(UnicodeScalarPosition {
+            line: position.line,
+            column,
         })
     }
 
@@ -200,6 +217,36 @@ mod tests {
             }),
             None,
             "a UTF-16 position cannot split an emoji surrogate pair"
+        );
+    }
+
+    #[test]
+    fn source_map_reports_unicode_scalar_columns_without_changing_byte_columns() {
+        let source = "한😀x\r\nnext";
+        let map = SourceMap::new(source);
+        let x_offset = source.find('x').expect("x should exist");
+
+        assert_eq!(
+            map.position(x_offset),
+            Some(SourcePosition {
+                line: 0,
+                column: x_offset,
+            })
+        );
+        assert_eq!(
+            map.scalar_position(x_offset),
+            Some(UnicodeScalarPosition { line: 0, column: 2 })
+        );
+        assert_eq!(
+            map.utf16_position(x_offset),
+            Some(Utf16Position {
+                line: 0,
+                character: 3,
+            })
+        );
+        assert_eq!(
+            map.scalar_position(source.find("next").expect("next should exist")),
+            Some(UnicodeScalarPosition { line: 1, column: 0 })
         );
     }
 }

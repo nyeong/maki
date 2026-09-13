@@ -1,5 +1,5 @@
 --^ title: Maki LSP
---^ updated: [2026-09-07]
+--^ updated: [2026-09-13]
 
 = 개요
 
@@ -26,7 +26,7 @@ Server는 workspace에서 `maki.toml`을 찾고 project source root의 `.maki` �
 
 = 지원 기능
 
-- parser warning과 깨진/모호한 document·heading·explicit-ID link, unresolved explicit reference, duplicate ID diagnostics
+- 네 종류의 parser warning과 깨진/모호한 document·heading·explicit-ID link, unresolved explicit reference, duplicate ID diagnostics
 - document, heading, explicit-ID link, Document-local reference와 date marker의 definition
 - document, heading, explicit-ID, Document-local reference와 date marker의 references
 - HTTP/HTTPS target인 일반 Reference Use와 authored URL Link의 document link
@@ -124,6 +124,20 @@ Explicit ID의 canonical source selector는 `@`지만 HTML destination fragment�
 `id` property hover는 그 값이 case-sensitive한 document-local block identifier임을 설명한다.
 
 모든 completion edit, definition, references, hover와 diagnostic range는 UTF-16 code unit 위치를 사용한다.
+
+== Diagnostics
+
+LSP diagnostic은 `maki-core`의 validation report를 그대로 소비한다.
+Core가 정한 stable code, severity, message와 related location은 LSP protocol 표현으로만 변환하며 LSP 전용 rule을 만들지 않는다.
+Parser diagnostic은 `invalid-property`, `unclosed-container`, `property-on-property`,
+`duplicate-reference-definition`을 구분하고 semantic diagnostic은 [[core-analysis]]의 여덟 code를 사용한다.
+
+Project snapshot 전체를 분석하더라도 diagnostic publish는 열린 document에만 한정한다.
+열린 buffer의 version을 publish 결과에 싣고, 저장하지 않은 source의 byte span을 UTF-16 range로 검증해 변환한다.
+Document를 닫으면 해당 URI의 diagnostic을 비운 뒤 disk snapshot으로 돌아간다.
+
+Editor 밖의 전체 project 또는 standalone note directory를 검사하는 batch/CI surface는 `maki check`다.
+`maki lsp`는 열린 buffer의 interactive feedback을, `maki check`는 disk snapshot의 deterministic report를 담당한다.
 
 Active Reference Definition value가 정확히 하나의 유효한 HTTP/HTTPS Hyper Link면 일반 Reference Use인 `[key][]`와 `[title][key]` marker 전체를 `textDocument/documentLink`로 제공한다.
 URL 모양 text라도 angle-bracket Hyper Link가 아닌 Prose value면 document link를 만들지 않는다.
