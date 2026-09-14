@@ -170,7 +170,7 @@ fn maki_check_rejects_non_utf8_paths_without_lossy_output() {
 
     let project = temp_project("check-non-utf8-path");
     let path = PathBuf::from(OsString::from_vec(b"invalid-\xff.maki".to_vec()));
-    fs::write(project.root.join(&path), "--^ invalid-property\n").unwrap();
+    // Argument validation must reject this path before accessing the filesystem.
 
     let output = Command::new(BIN)
         .current_dir(&project.root)
@@ -189,7 +189,8 @@ fn maki_check_rejects_non_utf8_paths_without_lossy_output() {
     );
 }
 
-#[cfg(unix)]
+// These fixtures need byte-oriented filenames, which macOS filesystems reject.
+#[cfg(target_os = "linux")]
 #[test]
 fn maki_check_keeps_findings_when_a_non_utf8_source_is_unavailable() {
     use std::ffi::OsString;
@@ -211,7 +212,8 @@ fn maki_check_keeps_findings_when_a_non_utf8_source_is_unavailable() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("failed to read Maki source"));
 }
 
-#[cfg(unix)]
+// These fixtures need byte-oriented filenames, which macOS filesystems reject.
+#[cfg(target_os = "linux")]
 #[test]
 fn maki_check_rejects_non_utf8_diagnostic_owner_paths() {
     use std::ffi::OsString;
