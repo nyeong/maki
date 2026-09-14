@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use crate::{
@@ -25,18 +26,41 @@ use super::{
 pub struct Maki {
     pub(super) root: PathBuf, // caller-supplied project identity root
     pub(super) notes: BTreeMap<NoteRef, Note>, // root-relative maki paths
-    pub(super) index: NoteIndex,
-    public_note_refs: BTreeSet<NoteRef>,
-    public_index: NoteIndex,
     pub(super) snapshot: ProjectSnapshot,
-    pub(super) search_entries: Vec<SearchEntry>,
-    public_search_entries: Vec<SearchEntry>,
-    pub(super) recent_entries: Vec<RecentEntry>,
-    public_recent_entries: Vec<RecentEntry>,
-    pub(super) sitemap_entries: Vec<SitemapEntry>,
-    public_sitemap_entries: Vec<SitemapEntry>,
+    private_projection: ProjectProjection,
+    public_projection: OnceLock<PublicProjection>,
     pub(super) config: MakiConfig,
     snapshot_compile_duration: Duration,
+}
+
+struct ProjectProjection {
+    index: NoteIndex,
+    search_entries: Vec<SearchEntry>,
+    recent_entries: Vec<RecentEntry>,
+    sitemap_entries: Vec<SitemapEntry>,
+}
+
+struct PublicProjection {
+    note_refs: BTreeSet<NoteRef>,
+    analysis: ProjectAnalysis,
+    surfaces: ProjectProjection,
+}
+
+struct ActiveProjection<'a> {
+    visible_note_refs: Option<&'a BTreeSet<NoteRef>>,
+    analysis: &'a ProjectAnalysis,
+    surfaces: &'a ProjectProjection,
+}
+
+impl ActiveProjection<'_> {
+    fn contains_note(&self, note_ref: &NoteRef) -> bool {
+        self.visible_note_refs
+            .is_none_or(|visible| visible.contains(note_ref))
+    }
+
+    fn note_count(&self, all_notes: usize) -> usize {
+        self.visible_note_refs.map_or(all_notes, BTreeSet::len)
+    }
 }
 
 pub(super) struct ProjectSnapshot {
@@ -89,8 +113,8 @@ impl ProjectSnapshot {
         self.compiled.analysis()
     }
 
-    pub(super) fn public_analysis(&self) -> &ProjectAnalysis {
-        self.compiled.public_analysis()
+    fn build_public_analysis(&self) -> ProjectAnalysis {
+        self.compiled.build_public_analysis()
     }
 
     fn is_public_source(&self, path: &Path) -> bool {
@@ -131,6 +155,80 @@ fn snapshot_note_metadata_entry(snapshot: &ProjectSnapshot, note: &Note) -> Note
     note.metadata_entry_with_title(document.title.clone(), uses_path_label)
 }
 
+fn collect_note_metadata_entries<'a>(
+    notes: impl IntoIterator<Item = &'a Note>,
+    snapshot: &ProjectSnapshot,
+) -> Vec<NoteMetadataEntry> {
+    notes
+        .into_iter()
+        .map(|note| snapshot_note_metadata_entry(snapshot, note))
+        .collect()
+}
+
+impl ProjectProjection {
+    fn build<'a>(
+        notes: impl IntoIterator<Item = (&'a NoteRef, &'a Note)>,
+        snapshot: &ProjectSnapshot,
+        analysis: &ProjectAnalysis,
+    ) -> Self {
+        let notes = notes.into_iter().collect::<Vec<_>>();
+        let note_metadata_entries =
+            collect_note_metadata_entries(notes.iter().map(|(_note_ref, note)| *note), snapshot);
+        let index = NoteIndex::build(notes.iter().map(|(note_ref, _note)| *note_ref));
+        let search_entries = collect_search_entries(
+            notes.iter().map(|(_note_ref, note)| *note),
+            &note_metadata_entries,
+            analysis,
+        );
+        let sitemap_entries = note_metadata_entries
+            .iter()
+            .cloned()
+            .map(NoteMetadataEntry::into_sitemap_entry)
+            .collect();
+        let recent_entries = collect_recent_entries(note_metadata_entries);
+
+        Self {
+            index,
+            search_entries,
+            recent_entries,
+            sitemap_entries,
+        }
+    }
+
+    fn refresh_recent_entries<'a>(
+        &mut self,
+        notes: impl IntoIterator<Item = &'a Note>,
+        snapshot: &ProjectSnapshot,
+    ) {
+        self.recent_entries =
+            collect_recent_entries(collect_note_metadata_entries(notes, snapshot));
+    }
+}
+
+impl PublicProjection {
+    fn build(notes: &BTreeMap<NoteRef, Note>, snapshot: &ProjectSnapshot) -> Self {
+        let note_refs = notes
+            .iter()
+            .filter(|(_note_ref, note)| snapshot.is_public_source(note.source_path()))
+            .map(|(note_ref, _note)| note_ref.clone())
+            .collect::<BTreeSet<_>>();
+        let analysis = snapshot.build_public_analysis();
+        let surfaces = ProjectProjection::build(
+            note_refs
+                .iter()
+                .filter_map(|note_ref| notes.get_key_value(note_ref)),
+            snapshot,
+            &analysis,
+        );
+
+        Self {
+            note_refs,
+            analysis,
+            surfaces,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum MakiRoute {
     Home,
@@ -144,22 +242,39 @@ impl Maki {
         *self.config.publish_policy()
     }
 
+    fn public_projection(&self) -> &PublicProjection {
+        self.public_projection
+            .get_or_init(|| PublicProjection::build(&self.notes, &self.snapshot))
+    }
+
+    fn active_projection(&self) -> ActiveProjection<'_> {
+        match self.publish_policy() {
+            PublishPolicy::Private => ActiveProjection {
+                visible_note_refs: None,
+                analysis: self.snapshot.analysis(),
+                surfaces: &self.private_projection,
+            },
+            PublishPolicy::Public => {
+                let projection = self.public_projection();
+                ActiveProjection {
+                    visible_note_refs: Some(&projection.note_refs),
+                    analysis: &projection.analysis,
+                    surfaces: &projection.surfaces,
+                }
+            }
+        }
+    }
+
     fn is_note_visible(&self, note_ref: &NoteRef) -> bool {
-        self.publish_policy() == PublishPolicy::Private || self.public_note_refs.contains(note_ref)
+        self.active_projection().contains_note(note_ref)
     }
 
     fn active_index(&self) -> &NoteIndex {
-        match self.publish_policy() {
-            PublishPolicy::Private => &self.index,
-            PublishPolicy::Public => &self.public_index,
-        }
+        &self.active_projection().surfaces.index
     }
 
     pub(super) fn active_analysis(&self) -> &ProjectAnalysis {
-        match self.publish_policy() {
-            PublishPolicy::Private => self.snapshot.analysis(),
-            PublishPolicy::Public => self.snapshot.public_analysis(),
-        }
+        self.active_projection().analysis
     }
 
     pub(super) fn snapshot_source(&self, path: &Path) -> Option<&str> {
@@ -167,15 +282,17 @@ impl Maki {
     }
 
     fn note(&self, note_ref: &NoteRef) -> Option<&Note> {
-        self.is_note_visible(note_ref)
-            .then(|| self.notes.get(note_ref))
-            .flatten()
+        if !self.is_note_visible(note_ref) {
+            return None;
+        }
+        self.notes.get(note_ref)
     }
 
     fn note_by_source_path(&self, path: &Path) -> Option<&Note> {
         self.notes
-            .values()
-            .find(|note| note.source_path() == path && self.is_note_visible(&note.note_ref()))
+            .iter()
+            .find(|(note_ref, note)| note.source_path() == path && self.is_note_visible(note_ref))
+            .map(|(_note_ref, note)| note)
     }
 
     fn unresolved_note_link(&self, private_resolution: NoteLinkResolution) -> NoteLinkResolution {
@@ -274,24 +391,19 @@ impl Maki {
     }
 
     pub fn notes(&self) -> impl Iterator<Item = &Note> {
+        let projection = self.active_projection();
         self.notes
             .iter()
-            .filter(|(note_ref, _note)| self.is_note_visible(note_ref))
+            .filter(move |(note_ref, _note)| projection.contains_note(note_ref))
             .map(|(_note_ref, note)| note)
     }
 
     pub fn notes_len(&self) -> usize {
-        match self.publish_policy() {
-            PublishPolicy::Private => self.notes.len(),
-            PublishPolicy::Public => self.public_note_refs.len(),
-        }
+        self.active_projection().note_count(self.notes.len())
     }
 
     pub fn search_entries(&self) -> &[SearchEntry] {
-        match self.publish_policy() {
-            PublishPolicy::Private => &self.search_entries,
-            PublishPolicy::Public => &self.public_search_entries,
-        }
+        &self.active_projection().surfaces.search_entries
     }
 
     pub fn published_search_entries(&self) -> &[SearchEntry] {
@@ -299,10 +411,7 @@ impl Maki {
     }
 
     pub fn recent_entries(&self) -> &[RecentEntry] {
-        match self.publish_policy() {
-            PublishPolicy::Private => &self.recent_entries,
-            PublishPolicy::Public => &self.public_recent_entries,
-        }
+        &self.active_projection().surfaces.recent_entries
     }
 
     pub fn apply_recent_modified_times(&mut self, modified_times: &BTreeMap<PathBuf, SystemTime>) {
@@ -312,26 +421,21 @@ impl Maki {
             }
         }
 
-        let note_metadata_entries = self
-            .notes
-            .values()
-            .map(|note| snapshot_note_metadata_entry(&self.snapshot, note))
-            .collect::<Vec<_>>();
-        let public_note_metadata_entries = self
-            .notes
-            .iter()
-            .filter(|(note_ref, _note)| self.public_note_refs.contains(*note_ref))
-            .map(|(_note_ref, note)| snapshot_note_metadata_entry(&self.snapshot, note))
-            .collect();
-        self.recent_entries = collect_recent_entries(note_metadata_entries);
-        self.public_recent_entries = collect_recent_entries(public_note_metadata_entries);
+        self.private_projection
+            .refresh_recent_entries(self.notes.values(), &self.snapshot);
+        if let Some(public_projection) = self.public_projection.get_mut() {
+            public_projection.surfaces.refresh_recent_entries(
+                public_projection
+                    .note_refs
+                    .iter()
+                    .filter_map(|note_ref| self.notes.get(note_ref)),
+                &self.snapshot,
+            );
+        }
     }
 
     pub fn sitemap_entries(&self) -> &[SitemapEntry] {
-        match self.publish_policy() {
-            PublishPolicy::Private => &self.sitemap_entries,
-            PublishPolicy::Public => &self.public_sitemap_entries,
-        }
+        &self.active_projection().surfaces.sitemap_entries
     }
 
     pub fn published_sitemap_entries(&self) -> &[SitemapEntry] {
@@ -429,62 +533,22 @@ impl Maki {
         read_failures.sort();
 
         let snapshot = ProjectSnapshot::new(sources, read_failures);
+        let private_projection =
+            ProjectProjection::build(notes.iter(), &snapshot, snapshot.analysis());
 
-        let index = NoteIndex::build(notes.keys());
-        let public_note_refs = notes
-            .iter()
-            .filter(|(_note_ref, note)| snapshot.is_public_source(note.source_path()))
-            .map(|(note_ref, _note)| note_ref.clone())
-            .collect::<BTreeSet<_>>();
-        let public_index = NoteIndex::build(public_note_refs.iter());
-
-        let note_metadata_entries = notes
-            .values()
-            .map(|note| snapshot_note_metadata_entry(&snapshot, note))
-            .collect::<Vec<_>>();
-        let public_note_metadata_entries = public_note_refs
-            .iter()
-            .filter_map(|note_ref| notes.get(note_ref))
-            .map(|note| snapshot_note_metadata_entry(&snapshot, note))
-            .collect::<Vec<_>>();
-        let search_entries =
-            collect_search_entries(notes.values(), &note_metadata_entries, snapshot.analysis());
-        let public_search_entries = collect_search_entries(
-            public_note_refs
-                .iter()
-                .filter_map(|note_ref| notes.get(note_ref)),
-            &public_note_metadata_entries,
-            snapshot.public_analysis(),
-        );
-        let sitemap_entries = note_metadata_entries
-            .iter()
-            .cloned()
-            .map(NoteMetadataEntry::into_sitemap_entry)
-            .collect();
-        let public_sitemap_entries = public_note_metadata_entries
-            .iter()
-            .cloned()
-            .map(NoteMetadataEntry::into_sitemap_entry)
-            .collect();
-        let recent_entries = collect_recent_entries(note_metadata_entries);
-        let public_recent_entries = collect_recent_entries(public_note_metadata_entries);
-
-        Self {
+        let maki = Self {
             root,
             notes,
-            index,
-            public_note_refs,
-            public_index,
             snapshot,
-            search_entries,
-            public_search_entries,
-            recent_entries,
-            public_recent_entries,
-            sitemap_entries,
-            public_sitemap_entries,
+            private_projection,
+            public_projection: OnceLock::new(),
             config,
             snapshot_compile_duration: Duration::ZERO,
+        };
+        if maki.publish_policy() == PublishPolicy::Public {
+            let _ = maki.public_projection();
         }
+        maki
     }
 
     pub fn render_html(&self, path: &Path) -> Result<String, Error> {

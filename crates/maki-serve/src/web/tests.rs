@@ -451,6 +451,25 @@ fn test_public_policy_projects_every_discovery_surface_from_one_note_set() {
 }
 
 #[test]
+fn test_public_home_redirect_requires_an_available_target() {
+    for target in ["/.maki/events", "/favicon.ico"] {
+        let state = publish_policy_fixture_state(PublishPolicy::Public, Some(target));
+        let response = handle_request(&state, &http::Request::get("/")).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::NotFound);
+        assert_eq!(response.get_header("Location"), None);
+    }
+
+    for target in ["/@/recents", "/.maki/assets/maki.css"] {
+        let state = publish_policy_fixture_state(PublishPolicy::Public, Some(target));
+        let response = handle_request(&state, &http::Request::get("/")).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::Found);
+        assert_eq!(response.get_header("Location"), Some(target));
+    }
+}
+
+#[test]
 fn test_search_index_returns_project_entries() {
     let maki = load_project(&repo_path("docs")).unwrap();
     let state = AppState::new(maki);

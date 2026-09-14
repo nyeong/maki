@@ -603,8 +603,8 @@ fn home_redirect_is_accessible(maki: &Maki, target: &str) -> bool {
         return true;
     }
 
-    if static_route_for_path(target).is_some() {
-        return true;
+    if let Some(route) = static_route_for_path(target) {
+        return route.is_available_in_public(maki);
     }
 
     matches!(
@@ -631,6 +631,24 @@ enum StaticRoute {
 }
 
 impl StaticRoute {
+    fn is_available_in_public(self, maki: &Maki) -> bool {
+        match self {
+            Self::LiveReload => false,
+            Self::Favicon => maki.config().favicon().is_some(),
+            Self::RuntimeAsset(_)
+            | Self::MetaIndex
+            | Self::Recents
+            | Self::Sitemap
+            | Self::SitemapXml
+            | Self::Diagnostics
+            | Self::DatesIndex
+            | Self::DatePeriod(_)
+            | Self::ProjectIndex
+            | Self::SearchIndex
+            | Self::Search => true,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::LiveReload => "events",

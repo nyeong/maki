@@ -18,6 +18,7 @@ pub(super) struct AppState {
     pub(super) project: RwLock<ProjectState>,
     live_reload: Option<LiveReload>,
     metrics: Metrics,
+    // Reapply runtime access even when a reloader supplies a differently configured Maki.
     publish_policy: PublishPolicy,
 }
 

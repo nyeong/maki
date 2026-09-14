@@ -40,7 +40,6 @@ pub struct ProjectSnapshot {
     revision: SnapshotRevision,
     sources: BTreeMap<PathBuf, Arc<str>>,
     analysis: ProjectAnalysis,
-    public_analysis: ProjectAnalysis,
     public_source_paths: BTreeSet<PathBuf>,
     title_origins: BTreeMap<PathBuf, DocumentTitleOrigin>,
 }
@@ -65,13 +64,11 @@ impl ProjectSnapshot {
             .collect::<Vec<_>>();
         let (analysis, title_origins, public_source_paths) =
             analyze_project_with_title_origins(&snapshots);
-        let public_analysis = analysis.public_projection(&public_source_paths);
 
         Self {
             revision: SnapshotRevision(NEXT_SNAPSHOT_REVISION.fetch_add(1, Ordering::Relaxed)),
             sources,
             analysis,
-            public_analysis,
             public_source_paths,
             title_origins,
         }
@@ -106,8 +103,8 @@ impl ProjectSnapshot {
         &self.analysis
     }
 
-    pub(crate) fn public_analysis(&self) -> &ProjectAnalysis {
-        &self.public_analysis
+    pub(crate) fn build_public_analysis(&self) -> ProjectAnalysis {
+        self.analysis.public_projection(&self.public_source_paths)
     }
 
     pub(crate) fn is_public_source(&self, path: &Path) -> bool {
@@ -1012,17 +1009,29 @@ pub(crate) fn analyze_project_with_title_origins(
         documents,
         date_index,
         external_links.into_iter().collect(),
-        false,
+        UnresolvedTargetPolicy::Preserve,
     );
 
     (analysis, title_origins, public_source_paths)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnresolvedTargetPolicy {
+    Preserve,
+    Redact,
+}
+
+impl UnresolvedTargetPolicy {
+    fn redacts(self) -> bool {
+        self == Self::Redact
+    }
 }
 
 fn finish_project_analysis(
     documents: BTreeMap<PathBuf, DocumentAnalysis>,
     date_index: DateIndex,
     external_links: Vec<ProjectExternalLink>,
-    redact_unresolved_targets: bool,
+    unresolved_targets: UnresolvedTargetPolicy,
 ) -> ProjectAnalysis {
     let document_index = DocumentIndex::new(&documents);
     let mut diagnostics = documents
@@ -1047,7 +1056,7 @@ fn finish_project_analysis(
                 .iter()
                 .enumerate()
                 .map(|(index, occurrence)| {
-                    let resolution = if redact_unresolved_targets
+                    let resolution = if unresolved_targets.redacts()
                         && occurrence.target == REDACTED_NOTE_LINK_TEXT
                     {
                         LinkResolution::BrokenNote
@@ -1067,7 +1076,7 @@ fn finish_project_analysis(
 
     let mut redacted_target_spans = BTreeMap::<PathBuf, BTreeSet<SourceSpan>>::new();
     for (path, index, target_span, target, resolution) in resolutions {
-        let diagnostic_target = if redact_unresolved_targets {
+        let diagnostic_target = if unresolved_targets.redacts() {
             REDACTED_NOTE_LINK_TEXT
         } else {
             &target
@@ -1087,7 +1096,7 @@ fn finish_project_analysis(
             .get_mut(&path)
             .and_then(|document| document.note_links.get_mut(index))
         {
-            if redact_unresolved_targets && !matches!(&resolution, LinkResolution::Found(_)) {
+            if unresolved_targets.redacts() && !matches!(&resolution, LinkResolution::Found(_)) {
                 occurrence.target = REDACTED_NOTE_LINK_TEXT.to_string();
                 occurrence.title = Some(REDACTED_NOTE_LINK_TEXT.to_string());
                 redacted_target_spans
@@ -1214,7 +1223,15 @@ impl ProjectAnalysis {
             .cloned()
             .collect();
 
-        let mut projection = finish_project_analysis(documents, date_index, external_links, true);
+        let mut projection = finish_project_analysis(
+            documents,
+            date_index,
+            external_links,
+            UnresolvedTargetPolicy::Redact,
+        );
+        // Redacting a heading changes the public document index. That can make links to the
+        // old heading target unresolved and require another redaction pass. Each pass only
+        // replaces authored heading data, so this fixed-point loop always converges.
         loop {
             let (headings_changed, redacted_source_paths) =
                 redact_public_heading_surfaces(&mut projection.documents);
@@ -1231,7 +1248,12 @@ impl ProjectAnalysis {
                 external_links,
                 ..
             } = projection;
-            projection = finish_project_analysis(documents, date_index, external_links, true);
+            projection = finish_project_analysis(
+                documents,
+                date_index,
+                external_links,
+                UnresolvedTargetPolicy::Redact,
+            );
         }
     }
 

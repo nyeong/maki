@@ -79,6 +79,15 @@ pub enum ServeRuntime {
     Publish,
 }
 
+impl ServeRuntime {
+    pub const fn publish_policy(self) -> PublishPolicy {
+        match self {
+            Self::Development => PublishPolicy::Private,
+            Self::Publish => PublishPolicy::Public,
+        }
+    }
+}
+
 pub struct ServeConfig<'a> {
     pub host: &'a str,
     pub port: u16,
@@ -130,12 +139,8 @@ where
         metrics_endpoint,
     } = config;
 
-    let publish_policy = match runtime {
-        ServeRuntime::Development => PublishPolicy::Private,
-        ServeRuntime::Publish => PublishPolicy::Public,
-    };
+    let publish_policy = runtime.publish_policy();
     maki.set_publish_policy(publish_policy);
-    let config_overrides = config_overrides.with_publish_policy(publish_policy);
 
     let listener =
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;
