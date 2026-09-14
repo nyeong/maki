@@ -64,6 +64,10 @@ impl MakiConfig {
         self.home_mode = HomeMode::Redirect(path.into());
     }
 
+    pub(crate) fn set_publish_policy(&mut self, publish_policy: PublishPolicy) {
+        self.publish_policy = publish_policy;
+    }
+
     fn set_home_note_ref(&mut self, note_ref: impl AsRef<str>) {
         self.set_home_redirect(note_ref_to_redirect_path(note_ref.as_ref()));
     }
@@ -76,7 +80,7 @@ impl Default for MakiConfig {
             source_dir: PathBuf::from("."),
             favicon: None,
             home_mode: HomeMode::Redirect("/README".to_string()),
-            publish_policy: PublishPolicy::PublishAll,
+            publish_policy: PublishPolicy::Private,
         }
     }
 }
@@ -84,16 +88,28 @@ impl Default for MakiConfig {
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct MakiConfigOverrides {
     home_redirect: Option<String>,
+    publish_policy: Option<PublishPolicy>,
 }
 
 impl MakiConfigOverrides {
     pub fn from_home_redirect(home_redirect: Option<String>) -> Self {
-        Self { home_redirect }
+        Self {
+            home_redirect,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_publish_policy(mut self, publish_policy: PublishPolicy) -> Self {
+        self.publish_policy = Some(publish_policy);
+        self
     }
 
     pub fn apply_to(&self, config: &mut MakiConfig) {
         if let Some(home_redirect) = &self.home_redirect {
             config.set_home_redirect(home_redirect.clone());
+        }
+        if let Some(publish_policy) = self.publish_policy {
+            config.set_publish_policy(publish_policy);
         }
     }
 }
@@ -395,10 +411,11 @@ fn invalid_project_file(path: &Path, line_number: usize, message: &str) -> Error
     Error::InvalidProjectFile(path.to_path_buf(), format!("line {line_number}: {message}"))
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PublishPolicy {
-    PublishAll,
-    // TODO: TaggedOnly: publish 설정한 파일만 접근 가능하게 하기,
+    #[default]
+    Private,
+    Public,
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -1,0 +1,4 @@
+--^ title: PRIVATE_WRONG_VALUE_TITLE_CANARY_32
+--^ publish: everything
+
+A non-canonical publish value must fail closed.

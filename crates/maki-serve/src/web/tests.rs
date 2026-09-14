@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::metrics::Metrics;
-use maki_core::{MakiConfig, MakiConfigOverrides};
+use maki_core::{DatePeriod, MakiConfig, MakiConfigOverrides, PublishPolicy};
 use maki_fs::{
     list_maki_files, load_project, load_project_config, load_project_with_config,
     load_project_with_config_metered,
@@ -27,6 +27,53 @@ fn repo_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(path)
+}
+
+const PRIVATE_PUBLISH_CANARIES: &[&str] = &[
+    "PRIVATE_LINK_TARGET_CANARY_32",
+    "PRIVATE_REFERENCE_TARGET_CANARY_32",
+    "PRIVATE_REFERENCE_TITLE_CANARY_32",
+    "PRIVATE_REFERENCE_BODY_CANARY_32",
+    "PRIVATE_TITLE_CANARY_32",
+    "PRIVATE_BODY_CANARY_32",
+    "PRIVATE_HEADING_CANARY_32",
+    "PRIVATE_ID_CANARY_32",
+    "PRIVATE_BROKEN_LINK_CANARY_32",
+    "PRIVATE_REFERENCE_CANARY_32",
+    "PRIVATE_CHILD_TITLE_CANARY_32",
+    "PRIVATE_CHILD_BODY_CANARY_32",
+    "PRIVATE_TWIN_TITLE_CANARY_32",
+    "PRIVATE_TWIN_BODY_CANARY_32",
+    "PRIVATE_NESTED_TITLE_CANARY_32",
+    "PRIVATE_WRONG_VALUE_TITLE_CANARY_32",
+    "PRIVATE_PARENT_TITLE_CANARY_32",
+    "PRIVATE_LABEL_BODY_CANARY_32",
+    "public-home/private-child.maki",
+    "private-space/twin.maki",
+    "private-label/same.maki",
+    "nested-publish-canary-32.maki",
+    "wrong-publish-canary-32.maki",
+    "private-parent-canary-32.maki",
+];
+
+fn publish_policy_fixture_state(policy: PublishPolicy, home_redirect: Option<&str>) -> AppState {
+    let root = repo_path("tests/fixtures/publish-policy");
+    let mut config = load_project_config(&root).unwrap();
+    MakiConfigOverrides::from_home_redirect(home_redirect.map(str::to_string))
+        .with_publish_policy(policy)
+        .apply_to(&mut config);
+    let maki = load_project_with_config(&root, config).unwrap();
+    AppState::new(maki)
+}
+
+fn assert_response_excludes_private_publish_canaries(target: &str, response: &http::Response) {
+    let raw = String::from_utf8(response.to_bytes()).unwrap();
+    for canary in PRIVATE_PUBLISH_CANARIES {
+        assert!(
+            !raw.contains(canary),
+            "public response for {target} leaked private canary {canary:?}: {raw}"
+        );
+    }
 }
 
 fn timing_millis(body: &str, label: &str) -> u128 {
@@ -232,6 +279,194 @@ fn test_source_note_does_not_include_live_reload_script() {
 
     assert!(!body.contains("new EventSource(\"/.maki/events\")"));
     assert!(!body.contains("maki-timing-footer"));
+}
+
+#[test]
+fn test_public_policy_hides_private_routes_and_disables_every_source_route() {
+    let public = publish_policy_fixture_state(PublishPolicy::Public, None);
+    let private = publish_policy_fixture_state(PublishPolicy::Private, None);
+
+    for target in [
+        "/public-home",
+        "/public-home/public-child",
+        "/public-space/twin",
+        "/private-parent-canary-32/public-descendant",
+    ] {
+        let response = handle_request(&public, &http::Request::get(target)).unwrap();
+        assert_eq!(
+            response.status(),
+            http::StatusCode::Ok,
+            "expected published note {target} to remain available"
+        );
+        assert_response_excludes_private_publish_canaries(target, &response);
+    }
+
+    for target in [
+        "/PRIVATE_LINK_TARGET_CANARY_32",
+        "/PRIVATE_REFERENCE_TARGET_CANARY_32",
+        "/public-home/private-child",
+        "/private-space/twin",
+        "/nested-publish-canary-32",
+        "/wrong-publish-canary-32",
+        "/private-parent-canary-32",
+    ] {
+        let private_response = handle_request(&private, &http::Request::get(target)).unwrap();
+        let public_response = handle_request(&public, &http::Request::get(target)).unwrap();
+        assert_eq!(
+            private_response.status(),
+            http::StatusCode::Ok,
+            "private runtime should preserve access to {target}"
+        );
+        assert_eq!(
+            public_response.status(),
+            http::StatusCode::NotFound,
+            "public runtime should make {target} indistinguishable from a missing note"
+        );
+        assert_eq!(
+            route_label_for_request(&public, &http::Request::get(target)),
+            "not_found"
+        );
+    }
+
+    let fixture_root = repo_path("tests/fixtures/publish-policy");
+    for relative_path in list_maki_files(&fixture_root).unwrap() {
+        let target = format!("/{}", relative_path.display());
+        let private_response = handle_request(&private, &http::Request::get(&target)).unwrap();
+        let public_response = handle_request(&public, &http::Request::get(&target)).unwrap();
+        assert_eq!(
+            private_response.status(),
+            http::StatusCode::Ok,
+            "private runtime should serve source {target}"
+        );
+        assert_eq!(
+            public_response.status(),
+            http::StatusCode::NotFound,
+            "public runtime must disable source route {target} even when its note is published"
+        );
+        assert_eq!(
+            route_label_for_request(&public, &http::Request::get(&target)),
+            "not_found"
+        );
+    }
+
+    let public_home = handle_request(&public, &http::Request::get("/public-home")).unwrap();
+    let public_home_body = String::from_utf8(public_home.body().to_vec()).unwrap();
+    assert!(public_home_body.contains("href=\"/public-space/twin\""));
+    assert_eq!(public_home_body.matches("[데이터 말소]").count(), 4);
+
+    let public_children = handle_request(&public, &http::Request::get("/public-home/")).unwrap();
+    let public_children_body = String::from_utf8(public_children.body().to_vec()).unwrap();
+    let private_children = handle_request(&private, &http::Request::get("/public-home/")).unwrap();
+    let private_children_body = String::from_utf8(private_children.body().to_vec()).unwrap();
+    assert!(public_children_body.contains("Published Child"));
+    assert!(!public_children_body.contains("PRIVATE_CHILD_TITLE_CANARY_32"));
+    assert!(private_children_body.contains("PRIVATE_CHILD_TITLE_CANARY_32"));
+}
+
+#[test]
+fn test_public_policy_projects_every_discovery_surface_from_one_note_set() {
+    let public = publish_policy_fixture_state(PublishPolicy::Public, None);
+
+    for target in [
+        "/",
+        "/public-home",
+        "/public-home/",
+        "/private-parent-canary-32/public-descendant",
+        "/@/",
+        "/@/recents",
+        "/@/sitemap",
+        "/sitemap.xml",
+        "/@/diagnostics",
+        "/@/dates",
+        "/@/dates/2099",
+        "/@/dates/2099-12",
+        "/@/dates/2099-12-31",
+        "/@/dates/2042-04-03",
+        "/.maki/search-index.json",
+        "/.maki/search?q=PRIVATE",
+        "/.maki/project-index.json",
+    ] {
+        let response = handle_request(&public, &http::Request::get(target)).unwrap();
+        assert_response_excludes_private_publish_canaries(target, &response);
+    }
+
+    let home = handle_request(&public, &http::Request::get("/")).unwrap();
+    assert_eq!(home.status(), http::StatusCode::Found);
+    assert_eq!(home.get_header("Location"), Some("/public-home"));
+
+    let recents = handle_request(&public, &http::Request::get("/@/recents")).unwrap();
+    let recents_body = String::from_utf8(recents.body().to_vec()).unwrap();
+    assert!(recents_body.contains("href=\"/public-label/same\">same</a>"));
+    assert!(!recents_body.contains("href=\"/public-label/same\">public-label/same</a>"));
+
+    let diagnostics = handle_request(&public, &http::Request::get("/@/diagnostics")).unwrap();
+    let diagnostics_body = String::from_utf8(diagnostics.body().to_vec()).unwrap();
+    assert!(diagnostics_body.contains("across 5 note(s)"));
+
+    let dates = handle_request(&public, &http::Request::get("/@/dates")).unwrap();
+    let dates_body = String::from_utf8(dates.body().to_vec()).unwrap();
+    assert!(!dates_body.contains("2099"));
+    let project_index =
+        handle_request(&public, &http::Request::get("/.maki/project-index.json")).unwrap();
+    let project_index_body = String::from_utf8(project_index.body().to_vec()).unwrap();
+    assert!(!project_index_body.contains("2099-12-31"));
+
+    let private_home = publish_policy_fixture_state(
+        PublishPolicy::Public,
+        Some("/PRIVATE_LINK_TARGET_CANARY_32"),
+    );
+    let response = handle_request(&private_home, &http::Request::get("/")).unwrap();
+    assert_eq!(response.status(), http::StatusCode::NotFound);
+    assert_eq!(response.get_header("Location"), None);
+    assert_response_excludes_private_publish_canaries("/ with a private home", &response);
+
+    let private = publish_policy_fixture_state(PublishPolicy::Private, None);
+    let mut private_output = String::new();
+    for target in [
+        "/PRIVATE_LINK_TARGET_CANARY_32",
+        "/PRIVATE_LINK_TARGET_CANARY_32.maki",
+        "/PRIVATE_REFERENCE_TARGET_CANARY_32",
+        "/public-home/private-child",
+        "/private-space/twin",
+        "/private-label/same",
+        "/@/recents",
+        "/@/sitemap",
+        "/sitemap.xml",
+        "/@/diagnostics",
+        "/@/dates",
+        "/@/dates/2099-12-31",
+        "/.maki/search-index.json",
+        "/.maki/search?q=PRIVATE",
+        "/.maki/project-index.json",
+    ] {
+        let response = handle_request(&private, &http::Request::get(target)).unwrap();
+        private_output.push_str(&String::from_utf8(response.to_bytes()).unwrap());
+    }
+    for canary in PRIVATE_PUBLISH_CANARIES {
+        assert!(
+            private_output.contains(canary),
+            "fixture did not exercise private canary {canary:?} on any private surface"
+        );
+    }
+}
+
+#[test]
+fn test_public_home_redirect_requires_an_available_target() {
+    for target in ["/.maki/events", "/favicon.ico"] {
+        let state = publish_policy_fixture_state(PublishPolicy::Public, Some(target));
+        let response = handle_request(&state, &http::Request::get("/")).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::NotFound);
+        assert_eq!(response.get_header("Location"), None);
+    }
+
+    for target in ["/@/recents", "/.maki/assets/maki.css"] {
+        let state = publish_policy_fixture_state(PublishPolicy::Public, Some(target));
+        let response = handle_request(&state, &http::Request::get("/")).unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::Found);
+        assert_eq!(response.get_header("Location"), Some(target));
+    }
 }
 
 #[test]
@@ -711,6 +946,135 @@ fn test_warm_response_cache_populates_eager_routes_and_lazily_caches_subdocument
     let subdocuments = handle_request(&state, &http::Request::get("/index/")).unwrap();
     assert_eq!(subdocuments.status(), http::StatusCode::Ok);
     assert_eq!(state.cached_response_count(), expected_entries + 1);
+}
+
+#[test]
+fn test_public_cache_warmup_never_enqueues_or_caches_private_notes_and_dates() {
+    let state = publish_policy_fixture_state(PublishPolicy::Public, None);
+    let warmup_keys = {
+        let project = state.project.read().unwrap();
+        response_cache_warmup_keys(&project.maki)
+    };
+
+    assert!(
+        warmup_keys.contains(&ResponseCacheKey::NotePage(PathBuf::from(
+            "public-home.maki"
+        )))
+    );
+    assert!(warmup_keys.contains(&ResponseCacheKey::DatePeriodPage(DatePeriod::Year(2042))));
+    assert!(
+        !warmup_keys.contains(&ResponseCacheKey::NotePage(PathBuf::from(
+            "PRIVATE_LINK_TARGET_CANARY_32.maki"
+        )))
+    );
+    assert!(
+        !warmup_keys.contains(&ResponseCacheKey::NotePage(PathBuf::from(
+            "public-home/private-child.maki"
+        )))
+    );
+    assert!(!warmup_keys.contains(&ResponseCacheKey::DatePeriodPage(DatePeriod::Year(2099))));
+
+    warm_response_cache(&state).unwrap();
+
+    let project = state.project.read().unwrap();
+    assert_eq!(project.cached_response_count(), warmup_keys.len());
+    assert!(
+        project
+            .cached_response(&ResponseCacheKey::NotePage(PathBuf::from(
+                "public-home.maki"
+            )))
+            .is_some()
+    );
+    assert!(
+        project
+            .cached_response(&ResponseCacheKey::NotePage(PathBuf::from(
+                "PRIVATE_LINK_TARGET_CANARY_32.maki"
+            )))
+            .is_none()
+    );
+}
+
+#[test]
+fn test_public_reload_applies_publish_transitions_to_routes_home_metrics_and_cache() {
+    let root =
+        std::env::temp_dir().join(format!("maki-public-policy-reload-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("maki.toml"),
+        "[project]\ntitle = \"Reload Fixture\"\nhome = \"changing\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("stable.maki"),
+        "--^ title: Stable\n--^ publish: all\n\nStable body.",
+    )
+    .unwrap();
+    fs::write(
+        root.join("changing.maki"),
+        "--^ title: Changing\n\nFirst private generation.",
+    )
+    .unwrap();
+
+    let overrides = MakiConfigOverrides::default().with_publish_policy(PublishPolicy::Public);
+    let mut config = load_project_config(&root).unwrap();
+    overrides.apply_to(&mut config);
+    let maki = load_project_with_config(&root, config).unwrap();
+    let metrics = Metrics::enabled();
+    let state = AppState::new_with_overrides(root.clone(), maki, overrides, true, metrics.clone());
+
+    let initial = handle_request(&state, &http::Request::get("/changing")).unwrap();
+    let initial_home = handle_request(&state, &http::Request::get("/")).unwrap();
+    assert_eq!(initial.status(), http::StatusCode::NotFound);
+    assert_eq!(initial_home.status(), http::StatusCode::NotFound);
+    assert_eq!(initial_home.get_header("Location"), None);
+    assert!(
+        metrics
+            .to_prometheus_text()
+            .contains("maki_project_notes 1")
+    );
+
+    fs::write(
+        root.join("changing.maki"),
+        "--^ title: Changing\n--^ publish: all\n\nSecond public generation.",
+    )
+    .unwrap();
+    state.reload().unwrap();
+
+    let published = handle_request(&state, &http::Request::get("/changing")).unwrap();
+    let published_body = String::from_utf8(published.body().to_vec()).unwrap();
+    let published_home = handle_request(&state, &http::Request::get("/")).unwrap();
+    assert_eq!(published.status(), http::StatusCode::Ok);
+    assert!(published_body.contains("Second public generation."));
+    assert_eq!(published_home.status(), http::StatusCode::Found);
+    assert_eq!(published_home.get_header("Location"), Some("/changing"));
+    assert_eq!(state.cached_response_count(), 1);
+    assert!(
+        metrics
+            .to_prometheus_text()
+            .contains("maki_project_notes 2")
+    );
+
+    fs::write(
+        root.join("changing.maki"),
+        "--^ title: Changing\n\nThird private generation.",
+    )
+    .unwrap();
+    state.reload().unwrap();
+
+    let private_again = handle_request(&state, &http::Request::get("/changing")).unwrap();
+    let private_home = handle_request(&state, &http::Request::get("/")).unwrap();
+    assert_eq!(private_again.status(), http::StatusCode::NotFound);
+    assert_eq!(private_home.status(), http::StatusCode::NotFound);
+    assert_eq!(private_home.get_header("Location"), None);
+    assert_eq!(state.cached_response_count(), 0);
+    assert!(
+        metrics
+            .to_prometheus_text()
+            .contains("maki_project_notes 1")
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

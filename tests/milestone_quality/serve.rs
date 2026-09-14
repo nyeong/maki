@@ -116,7 +116,7 @@ fn v1_fixture_supports_serve_options_and_live_reload() {
 
     fs::write(
         project.root.join("home.maki"),
-        "--^ title: v1 Live Reload Fixture\n\n= Status\n\nEdited content marker: v1-edited\n",
+        "--^ title: v1 Live Reload Fixture\n--^ publish: all\n\n= Status\n\nEdited content marker: v1-edited\n",
     )
     .unwrap();
 

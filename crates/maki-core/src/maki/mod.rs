@@ -34,7 +34,9 @@ pub use diagnostics::{
 };
 pub use error::Error;
 pub use links::NoteLinkResolution;
-pub(crate) use links::{is_external_href, is_safe_direct_href};
+pub(crate) use links::{
+    REDACTED_NOTE_LINK_HEADING_ID, REDACTED_NOTE_LINK_TEXT, is_external_href, is_safe_direct_href,
+};
 pub use note::{Note, NoteRef, RecentEntry, SearchEntry, SearchEntryKind, SitemapEntry};
 pub use project::{Maki, MakiRoute, ProjectSource};
 

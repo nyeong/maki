@@ -181,7 +181,7 @@ truth.
 - `/`: redirect to the configured home note.
 - `/<note>`: rendered note page.
 - `/<note>/`: direct subdocument index for the note, including an empty state.
-- `/<note>.maki`: raw source text.
+- `/<note>.maki`: raw source text for local serving; always 404 for Git serving.
 - `/@/`: meta index.
 - `/@/recents`: recently modified notes.
 - `/@/sitemap`: human-readable sitemap.
@@ -190,6 +190,28 @@ truth.
 - `/.maki/search`: note, heading, explicit ID, and file search.
 - `/.maki/project-index.json`: versioned project analysis.
 - `/.maki/search-index.json`: search entries.
+
+## Publishing
+
+Local `maki serve <path>` is a private authoring runtime and serves every
+readable project document. `maki serve --git <url>` is a public runtime: each
+public document must opt in independently with a root document property whose
+value is the exact lowercase token `all`:
+
+```maki
+--^ publish: all
+```
+
+Missing, unknown, block-level, nested, or unreadable declarations are private,
+and publishing a parent document does not publish its children. The same public
+document set governs rendered pages, hierarchy navigation, the home redirect,
+search, sitemaps, recents, dates and backlinks, diagnostics, project JSON,
+caches, and public note metrics. If the configured home is private, `/` returns
+404 without a `Location` header.
+
+Public serving returns 404 for every raw `.maki` source route, including public
+documents. Internal note links whose targets are private, missing, or ambiguous
+all render as the same target-free `[데이터 말소]` text.
 
 ## Deployment
 

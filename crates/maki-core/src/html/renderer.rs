@@ -204,14 +204,15 @@ impl<'a> Renderer<'a> {
     ) {
         for block in blocks {
             match &block.kind {
-                BlockKind::Heading { raw_body, .. } => {
+                BlockKind::Heading { raw_body, body, .. } => {
                     let id = if block_id_anchors {
                         block.property("id").filter(|id| !id.is_empty())
                     } else {
                         None
                     }
-                    .unwrap_or(raw_body);
-                    self.reserve_rendered_id(id);
+                    .map(str::to_string)
+                    .unwrap_or_else(|| self.heading_anchor(raw_body, body));
+                    self.reserve_rendered_id(&id);
                 }
                 BlockKind::ReferenceDefinition { .. } => {}
                 _ if block_id_anchors => {
@@ -380,7 +381,31 @@ impl<'a> Renderer<'a> {
             NoteLinkResolution::Ambiguous => {
                 self.render_unresolved_link("ambiguous-link", title.unwrap_or(target), target);
             }
+            NoteLinkResolution::Redacted => self.html.push_str(maki::REDACTED_NOTE_LINK_TEXT),
         }
+    }
+
+    fn heading_anchor(&self, raw_body: &str, body: &[Inline<'_>]) -> String {
+        if self.contains_redacted_note_link(body) {
+            maki::REDACTED_NOTE_LINK_HEADING_ID.to_string()
+        } else {
+            raw_body.to_string()
+        }
+    }
+
+    fn contains_redacted_note_link(&self, inlines: &[Inline<'_>]) -> bool {
+        let Some(context) = &self.context.project else {
+            return false;
+        };
+
+        inlines.iter().any(|inline| match inline {
+            Inline::NoteLink { target, .. } => {
+                (context.resolve_note_link)(target) == NoteLinkResolution::Redacted
+            }
+            _ => inline
+                .nested_inlines()
+                .is_some_and(|body| self.contains_redacted_note_link(body)),
+        })
     }
 
     fn render_direct_link(&mut self, raw: &str, title: &str, target: &str) {
@@ -747,8 +772,9 @@ impl<'a> Renderer<'a> {
                 } else {
                     None
                 }
-                .unwrap_or(raw_body);
-                self.render_heading_with_inlines(level + 1, anchor, body, references);
+                .map(str::to_string)
+                .unwrap_or_else(|| self.heading_anchor(raw_body, body));
+                self.render_heading_with_inlines(level + 1, &anchor, body, references);
             }
             kind => self.render_block_kind(kind, references),
         }

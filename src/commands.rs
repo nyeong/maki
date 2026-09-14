@@ -119,7 +119,9 @@ fn run_git_serve(
     git_config: git_source::GitServeConfig,
     options: ServeOptions,
 ) -> Result<(), RunError> {
-    let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
+    let runtime = web::ServeRuntime::Publish;
+    let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect)
+        .with_publish_policy(runtime.publish_policy());
     let metrics = metrics_for_endpoint(&options.metrics);
     let source = git_source::GitSource::new(git_config);
     eprintln!("Preparing git source...");
@@ -148,7 +150,7 @@ fn run_git_serve(
             host: &options.host,
             port: options.port,
             config_overrides,
-            runtime: web::ServeRuntime::Publish,
+            runtime,
             metrics,
             metrics_endpoint: options.metrics,
         },

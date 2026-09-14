@@ -6,7 +6,8 @@ use crate::http;
 use maki_core::html::{self, AssetMode};
 use maki_core::parser::DateStampKind;
 use maki_core::{
-    DatePeriod, Error as MakiError, HomeMode, Maki, MakiRoute, SearchEntry, SitemapEntry,
+    DatePeriod, Error as MakiError, HomeMode, Maki, MakiRoute, PublishPolicy, SearchEntry,
+    SitemapEntry,
     analysis::{
         AnalysisBlockKind, AnalysisDiagnosticKind, AnalysisDiagnosticSubject,
         DateOrigin as AnalysisDateOrigin, DateTargetIdentity, DefinitionTargetKind, LinkResolution,
@@ -581,6 +582,37 @@ fn inject_favicon_link(html: String, content_type: &str) -> String {
     output
 }
 
+fn not_found_page_response(maki: &Maki, path: &str) -> http::Response {
+    let display_path = match maki.config().publish_policy() {
+        PublishPolicy::Private => path,
+        PublishPolicy::Public => "requested page",
+    };
+    let html = html::render_not_found_page_with_site_header(
+        display_path,
+        AssetMode::External,
+        maki.config().project_title(),
+        maki.config().favicon().is_some(),
+    );
+    http::Response::new(http::StatusCode::NotFound)
+        .set_header("Content-Type", "text/html; charset=utf-8")
+        .set_body(html)
+}
+
+fn home_redirect_is_accessible(maki: &Maki, target: &str) -> bool {
+    if *maki.config().publish_policy() == PublishPolicy::Private {
+        return true;
+    }
+
+    if let Some(route) = static_route_for_path(target) {
+        return route.is_available_in_public(maki);
+    }
+
+    matches!(
+        maki.resolve_route(target),
+        Ok(MakiRoute::NotePage(_) | MakiRoute::SubdocumentsPage(_))
+    )
+}
+
 #[derive(Clone, Copy)]
 enum StaticRoute {
     LiveReload,
@@ -599,6 +631,24 @@ enum StaticRoute {
 }
 
 impl StaticRoute {
+    fn is_available_in_public(self, maki: &Maki) -> bool {
+        match self {
+            Self::LiveReload => false,
+            Self::Favicon => maki.config().favicon().is_some(),
+            Self::RuntimeAsset(_)
+            | Self::MetaIndex
+            | Self::Recents
+            | Self::Sitemap
+            | Self::SitemapXml
+            | Self::Diagnostics
+            | Self::DatesIndex
+            | Self::DatePeriod(_)
+            | Self::ProjectIndex
+            | Self::SearchIndex
+            | Self::Search => true,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::LiveReload => "events",
@@ -919,22 +969,15 @@ fn handle_project_request(
             .set_header("Content-Type", "text/plain; charset=utf-8")
             .set_body(maki.get_raw_content(&path)?)),
         Ok(MakiRoute::Home) => match &maki.config().home_mode() {
-            HomeMode::Redirect(path) => Ok(http::Response::new(http::StatusCode::Found)
-                .set_header("Location", path)
-                .set_header("Content-Type", "text/plain; charset=utf-8")
-                .set_body(path.as_bytes())),
+            HomeMode::Redirect(target) if home_redirect_is_accessible(maki, target) => {
+                Ok(http::Response::new(http::StatusCode::Found)
+                    .set_header("Location", target)
+                    .set_header("Content-Type", "text/plain; charset=utf-8")
+                    .set_body(target.as_bytes()))
+            }
+            HomeMode::Redirect(_) => Ok(not_found_page_response(maki, path)),
         },
-        Err(MakiError::NoteNotFound(_path)) => {
-            let html = html::render_not_found_page_with_site_header(
-                path,
-                AssetMode::External,
-                maki.config().project_title(),
-                maki.config().favicon().is_some(),
-            );
-            Ok(http::Response::new(http::StatusCode::NotFound)
-                .set_header("Content-Type", "text/html; charset=utf-8")
-                .set_body(html))
-        }
+        Err(MakiError::NoteNotFound(_path)) => Ok(not_found_page_response(maki, path)),
         Err(e) => Err(e.into()),
     }
 }

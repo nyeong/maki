@@ -7,7 +7,10 @@ use std::sync::{
 };
 
 use crate::link_target::{DocumentSelector, InnerSelector, NoteLinkTarget, http_url_display_title};
-use crate::maki::{DateIndex, NoteRef, collect_parsed_document_dates};
+use crate::maki::{
+    DateIndex, NoteRef, REDACTED_NOTE_LINK_HEADING_ID, REDACTED_NOTE_LINK_TEXT,
+    collect_parsed_document_dates,
+};
 use crate::nested::{MappedSource, NestedDocumentObserver, traverse_nested_documents};
 use crate::parser::{
     self, Block, BlockKind, Date, DateMonth, DateRange, DateStamp, DateStampKind, DateStampTarget,
@@ -37,6 +40,7 @@ pub struct ProjectSnapshot {
     revision: SnapshotRevision,
     sources: BTreeMap<PathBuf, Arc<str>>,
     analysis: ProjectAnalysis,
+    public_source_paths: BTreeSet<PathBuf>,
     title_origins: BTreeMap<PathBuf, DocumentTitleOrigin>,
 }
 
@@ -58,12 +62,14 @@ impl ProjectSnapshot {
                 source: source.as_ref(),
             })
             .collect::<Vec<_>>();
-        let (analysis, title_origins) = analyze_project_with_title_origins(&snapshots);
+        let (analysis, title_origins, public_source_paths) =
+            analyze_project_with_title_origins(&snapshots);
 
         Self {
             revision: SnapshotRevision(NEXT_SNAPSHOT_REVISION.fetch_add(1, Ordering::Relaxed)),
             sources,
             analysis,
+            public_source_paths,
             title_origins,
         }
     }
@@ -95,6 +101,14 @@ impl ProjectSnapshot {
 
     pub fn analysis(&self) -> &ProjectAnalysis {
         &self.analysis
+    }
+
+    pub(crate) fn build_public_analysis(&self) -> ProjectAnalysis {
+        self.analysis.public_projection(&self.public_source_paths)
+    }
+
+    pub(crate) fn is_public_source(&self, path: &Path) -> bool {
+        self.public_source_paths.contains(path)
     }
 
     pub fn validation_report(&self) -> ValidationReport<'_> {
@@ -946,13 +960,25 @@ pub fn analyze_project(snapshots: &[SourceSnapshot<'_>]) -> ProjectAnalysis {
 
 pub(crate) fn analyze_project_with_title_origins(
     snapshots: &[SourceSnapshot<'_>],
-) -> (ProjectAnalysis, BTreeMap<PathBuf, DocumentTitleOrigin>) {
+) -> (
+    ProjectAnalysis,
+    BTreeMap<PathBuf, DocumentTitleOrigin>,
+    BTreeSet<PathBuf>,
+) {
     let mut documents = BTreeMap::new();
     let mut title_origins = BTreeMap::new();
+    let mut public_source_paths = BTreeSet::new();
     let mut date_index = DateIndex::default();
     let mut external_links = BTreeSet::new();
     for snapshot in snapshots {
         let parsed = parser::parse(snapshot.source);
+        if parsed
+            .document
+            .properties()
+            .any(|(key, value)| key == "publish" && value == "all")
+        {
+            public_source_paths.insert(snapshot.path.to_path_buf());
+        }
         let (mut document, title_origin) =
             analyze_parsed_document_with_title_origin(snapshot.path, snapshot.source, &parsed);
         enrich_document_with_nested_analysis(&mut document, |document, observer| {
@@ -979,6 +1005,34 @@ pub(crate) fn analyze_project_with_title_origins(
         documents.insert(document.path.clone(), document);
     }
     date_index.sort_backlinks();
+    let analysis = finish_project_analysis(
+        documents,
+        date_index,
+        external_links.into_iter().collect(),
+        UnresolvedTargetPolicy::Preserve,
+    );
+
+    (analysis, title_origins, public_source_paths)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnresolvedTargetPolicy {
+    Preserve,
+    Redact,
+}
+
+impl UnresolvedTargetPolicy {
+    fn redacts(self) -> bool {
+        self == Self::Redact
+    }
+}
+
+fn finish_project_analysis(
+    documents: BTreeMap<PathBuf, DocumentAnalysis>,
+    date_index: DateIndex,
+    external_links: Vec<ProjectExternalLink>,
+    unresolved_targets: UnresolvedTargetPolicy,
+) -> ProjectAnalysis {
     let document_index = DocumentIndex::new(&documents);
     let mut diagnostics = documents
         .values()
@@ -991,7 +1045,7 @@ pub(crate) fn analyze_project_with_title_origins(
         diagnostics: Vec::new(),
         date_marker_index,
         date_index,
-        external_links: external_links.into_iter().collect(),
+        external_links,
     };
     let resolutions = analysis
         .documents
@@ -1002,24 +1056,37 @@ pub(crate) fn analyze_project_with_title_origins(
                 .iter()
                 .enumerate()
                 .map(|(index, occurrence)| {
+                    let resolution = if unresolved_targets.redacts()
+                        && occurrence.target == REDACTED_NOTE_LINK_TEXT
+                    {
+                        LinkResolution::BrokenNote
+                    } else {
+                        analysis.resolve_note_link(&document.path, &occurrence.target)
+                    };
                     (
                         document.path.clone(),
                         index,
                         occurrence.target_span,
                         occurrence.target.clone(),
-                        analysis.resolve_note_link(&document.path, &occurrence.target),
+                        resolution,
                     )
                 })
         })
         .collect::<Vec<_>>();
 
+    let mut redacted_target_spans = BTreeMap::<PathBuf, BTreeSet<SourceSpan>>::new();
     for (path, index, target_span, target, resolution) in resolutions {
-        if let Some((kind, message)) = diagnostic_for_resolution(&target, &resolution) {
+        let diagnostic_target = if unresolved_targets.redacts() {
+            REDACTED_NOTE_LINK_TEXT
+        } else {
+            &target
+        };
+        if let Some((kind, message)) = diagnostic_for_resolution(diagnostic_target, &resolution) {
             diagnostics.push(AnalysisDiagnostic {
                 path: path.clone(),
                 span: target_span,
                 kind,
-                subject: AnalysisDiagnosticSubject::Link(target.clone()),
+                subject: AnalysisDiagnosticSubject::Link(diagnostic_target.to_string()),
                 message,
                 related: Vec::new(),
             });
@@ -1029,14 +1096,85 @@ pub(crate) fn analyze_project_with_title_origins(
             .get_mut(&path)
             .and_then(|document| document.note_links.get_mut(index))
         {
+            if unresolved_targets.redacts() && !matches!(&resolution, LinkResolution::Found(_)) {
+                occurrence.target = REDACTED_NOTE_LINK_TEXT.to_string();
+                occurrence.title = Some(REDACTED_NOTE_LINK_TEXT.to_string());
+                redacted_target_spans
+                    .entry(path)
+                    .or_default()
+                    .insert(target_span);
+            }
             occurrence.resolution = Some(resolution);
+        }
+    }
+
+    for (path, target_spans) in redacted_target_spans {
+        let Some(document) = analysis.documents.get_mut(&path) else {
+            continue;
+        };
+        for link in &mut document.reference_links {
+            if target_spans.contains(&link.target_span) {
+                link.target = REDACTED_NOTE_LINK_TEXT.to_string();
+                link.title = REDACTED_NOTE_LINK_TEXT.to_string();
+            }
+        }
+        for definition in &mut document.reference_graph.definitions {
+            if definition
+                .semantic_target_span
+                .is_some_and(|span| target_spans.contains(&span))
+            {
+                definition.value = REDACTED_NOTE_LINK_TEXT.to_string();
+                definition.semantic_target = Some(REDACTED_NOTE_LINK_TEXT.to_string());
+            }
         }
     }
 
     sort_analysis_diagnostics(&mut diagnostics);
     analysis.diagnostics = diagnostics;
+    analysis
+}
 
-    (analysis, title_origins)
+fn redact_public_heading_surfaces(
+    documents: &mut BTreeMap<PathBuf, DocumentAnalysis>,
+) -> (bool, BTreeSet<PathBuf>) {
+    let mut changed = false;
+    let mut redacted_source_paths = BTreeSet::new();
+
+    for document in documents.values_mut() {
+        let redacted_link_spans = document
+            .note_links
+            .iter()
+            .filter(|link| link.target == REDACTED_NOTE_LINK_TEXT)
+            .map(|link| link.span)
+            .collect::<Vec<_>>();
+        if redacted_link_spans.is_empty() {
+            continue;
+        }
+        redacted_source_paths.insert(document.path.clone());
+
+        for heading in &mut document.headings {
+            if !redacted_link_spans.iter().any(|span| {
+                heading.title_span.start <= span.start && span.end <= heading.title_span.end
+            }) {
+                continue;
+            }
+
+            let has_explicit_id = document.block_ids.iter().any(|block_id| {
+                block_id.owner_kind == AnalysisBlockKind::Heading
+                    && block_id.owner_span == heading.span
+            });
+            if !has_explicit_id && heading.anchor != REDACTED_NOTE_LINK_HEADING_ID {
+                heading.anchor = REDACTED_NOTE_LINK_HEADING_ID.to_string();
+                changed = true;
+            }
+            if heading.title != REDACTED_NOTE_LINK_TEXT {
+                heading.title = REDACTED_NOTE_LINK_TEXT.to_string();
+                changed = true;
+            }
+        }
+    }
+
+    (changed, redacted_source_paths)
 }
 
 fn build_date_marker_index(
@@ -1070,6 +1208,55 @@ fn build_date_marker_index(
 }
 
 impl ProjectAnalysis {
+    fn public_projection(&self, source_paths: &BTreeSet<PathBuf>) -> Self {
+        let documents = self
+            .documents
+            .iter()
+            .filter(|(path, _document)| source_paths.contains(*path))
+            .map(|(path, document)| (path.clone(), document.clone()))
+            .collect();
+        let date_index = self.date_index.retaining_source_paths(source_paths);
+        let external_links = self
+            .external_links
+            .iter()
+            .filter(|link| source_paths.contains(&link.path))
+            .cloned()
+            .collect();
+
+        let mut projection = finish_project_analysis(
+            documents,
+            date_index,
+            external_links,
+            UnresolvedTargetPolicy::Redact,
+        );
+        // Redacting a heading changes the public document index. That can make links to the
+        // old heading target unresolved and require another redaction pass. Each pass only
+        // replaces authored heading data, so this fixed-point loop always converges.
+        loop {
+            let (headings_changed, redacted_source_paths) =
+                redact_public_heading_surfaces(&mut projection.documents);
+            projection
+                .date_index
+                .clear_contexts_for_source_paths(&redacted_source_paths);
+            if !headings_changed {
+                return projection;
+            }
+
+            let ProjectAnalysis {
+                documents,
+                date_index,
+                external_links,
+                ..
+            } = projection;
+            projection = finish_project_analysis(
+                documents,
+                date_index,
+                external_links,
+                UnresolvedTargetPolicy::Redact,
+            );
+        }
+    }
+
     pub fn validation_report(&self) -> ValidationReport<'_> {
         ValidationReport::new(&self.diagnostics, &[])
     }
@@ -1173,7 +1360,8 @@ impl ProjectAnalysis {
 
 pub fn conventional_property_keys() -> &'static [&'static str] {
     &[
-        "created", "date", "deadline", "id", "lang", "mode", "status", "title", "updated",
+        "created", "date", "deadline", "id", "lang", "mode", "publish", "status", "title",
+        "updated",
     ]
 }
 
@@ -1183,6 +1371,7 @@ pub fn property_description(key: &str) -> Option<&'static str> {
         "id" => Some("Case-sensitive, document-local explicit block identifier."),
         "lang" => Some("Code language."),
         "mode" => Some("Quote parsing mode: block, pre, or text."),
+        "publish" => Some("Public web visibility: all publishes the root document."),
         "created" | "date" | "deadline" | "updated" => Some("Date metadata."),
         "status" => Some("Conventional workflow status."),
         _ => None,

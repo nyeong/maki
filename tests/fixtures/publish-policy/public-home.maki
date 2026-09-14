@@ -1,0 +1,22 @@
+--^ title: Published Home
+--^ publish: all
+--^ date: [2042-04-02]
+
+= Published Heading
+--^ id: published-id
+
+Published body.
+
+== Redacted heading *[[PRIVATE_LINK_TARGET_CANARY_32]]*
+
+Public backlink context: [2042-04-03] beside [[PRIVATE_LINK_TARGET_CANARY_32]].
+
+Published child: [[/public-home/public-child]].
+
+Private target: [[PRIVATE_LINK_TARGET_CANARY_32]].
+
+Private reference target: [private reference][private-ref].
+
+Only one published basename candidate: [[twin]].
+
+[private-ref]: [[PRIVATE_REFERENCE_TARGET_CANARY_32]]

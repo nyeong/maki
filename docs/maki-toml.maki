@@ -1,5 +1,5 @@
 --^ title: maki.toml
---^ updated: [2026-09-12]
+--^ updated: [2026-09-14]
 --^ status: stable
 
 = 개요
@@ -115,6 +115,9 @@ Note link도 source root를 기준으로 해석하므로 `[[project/plan]]`처�
 CLI의 `maki serve --index-redirect <route>`를 사용하면 `maki.toml`의 `home`보다 우선한다.
 NixOS module에서는 target의 `indexRedirect`가 같은 override 역할을 한다.
 
+Public policy에서는 최종 home target이 public set에 있을 때만 `/`가 redirect한다.
+Configured home이나 override target이 private이면 `/`는 404를 반환하며, private route를 담은 `Location` header를 보내지 않는다.
+
 = [serve]
 
 `[serve]` table은 `maki serve`가 HTTP로 내보내는 부가 파일을 설정한다.
@@ -163,6 +166,22 @@ Maki는 크기별 icon metadata, 자동 resize, app manifest와 Apple touch icon
 
 Git source serving은 publish runtime으로 동작하며, configured branch를 주기적으로 fetch한다.
 Repository 안의 symlink는 지원하지 않는다.
+
+Publish runtime은 fail-closed Public policy를 사용한다.
+각 `.maki` 파일은 자신의 root document property에 정확한 lowercase value로 아래 opt-in을 선언해야 한다.
+
+--v lang: maki
+: --^ publish: all
+
+선언이 없거나 값이 다르고, block 또는 nested body에만 선언이 있거나, 파일을 읽지 못하면 해당 Document는 private이다.
+Parent Document의 opt-in은 child와 descendant Document에 상속되지 않는다.
+
+Private Document는 note route뿐 아니라 navigation, home redirect, Recents, Sitemap, Search, Project Index, Diagnostics, Dates와 backlink, cache 및 공개 metric count에서도 제외된다.
+Public policy에서는 public Document를 포함한 모든 `.maki` raw source route가 404다.
+Private, missing 또는 ambiguous internal Note Link는 모두 target-free `[데이터 말소]`로 표현한다.
+
+Local path의 `maki serve <path>`는 Private policy를 사용하므로, project authoring과 preview에서는 `publish` opt-in과 관계없이 읽을 수 있는 Document 전체를 제공한다.
+자세한 route와 redaction 규칙은 [[web#Runtime Access Policy]]를 참고한다.
 
 = 이 저장소의 설정
 

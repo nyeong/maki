@@ -353,7 +353,7 @@ fn commit_git_project(repo: &Path, message: &str, body: &str) {
     fs::create_dir_all(repo.join("docs")).unwrap();
     fs::write(
         repo.join("docs").join("home.maki"),
-        format!("--^ title: Git Home\n\n{body}\n"),
+        format!("--^ title: Git Home\n--^ publish: all\n\n{body}\n"),
     )
     .unwrap();
     commit_git_project_at(repo, message, "2001-01-01T00:00:00+0000");
