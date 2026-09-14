@@ -1,6 +1,6 @@
 --^ title: Maki Syntax
 --^ created: [2026-06-24]
---^ updated: [2026-09-12]
+--^ updated: [2026-09-14]
 --^ status: stable
 
 = 개요
@@ -532,6 +532,34 @@ Property Value는 property key에 대응하는 scalar metadata value이다.
 --v lang: maki
 : --v deadline: <2026-09-01>
 : = Task
+
+== Publish Property
+
+`publish` document property는 publish runtime이 외부에 공개할 Document를 명시적으로 선택한다.
+
+공개 opt-in form은 아래와 같다.
+
+--v lang: maki
+: --^ publish: all
+:
+: = Public Note
+
+`--^ publish: all`이 첫 non-property block보다 앞에 있어 document property가 되고, trim한 value가 정확히 lowercase ASCII `all`일 때만 해당 Document가 public이다.
+Property key는 일반 Property Key와 마찬가지로 case-insensitive하지만 `all` token은 case-sensitive하다.
+
+다음 Document는 모두 private이다.
+
+- `publish` property가 없는 Document
+- value가 비었거나 `all` 이외의 값인 Document. `All`과 `ALL`도 포함한다.
+- `publish`가 Heading, Paragraph, List Item 등 block property인 Document
+- nested Maki body 안에만 `publish`가 있는 Document
+- source를 읽거나 parse하여 이 선언을 확인할 수 없는 Document
+
+Canonical path의 parent 또는 ancestor Document에 `publish: all`이 있어도 child와 descendant Document는 이를 상속하지 않는다.
+각 `.maki` 파일이 자신의 root document property로 별도 opt-in해야 한다.
+
+Private development runtime, build, check와 LSP는 이 property로 Project 분석 대상을 줄이지 않는다.
+Public runtime에서의 route, link와 project-wide index 표현 규칙은 [[web#Runtime Access Policy]]를 따른다.
 
 == Materialization Property Vocabulary
 

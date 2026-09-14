@@ -34,7 +34,7 @@ impl Maki {
     ) -> Vec<ProjectDiagnostic> {
         let mut diagnostics = self.collect_note_diagnostics();
         diagnostics.extend(external_link_diagnostics(
-            self.snapshot.analysis().external_links(),
+            self.active_analysis().external_links(),
             checks,
         ));
         diagnostics
@@ -44,16 +44,16 @@ impl Maki {
         let mut diagnostics = vec![];
 
         let mut diagnostics_by_path = BTreeMap::<&Path, Vec<&AnalysisDiagnostic>>::new();
-        for diagnostic in &self.snapshot.analysis().diagnostics {
+        for diagnostic in &self.active_analysis().diagnostics {
             diagnostics_by_path
                 .entry(&diagnostic.path)
                 .or_default()
                 .push(diagnostic);
         }
 
-        for note in self.notes.values() {
+        for note in self.notes() {
             let source_path = note.source_path();
-            let Some(source) = self.snapshot.source(source_path) else {
+            let Some(source) = self.snapshot_source(source_path) else {
                 diagnostics.push(ProjectDiagnostic::new(
                     source_path,
                     None,

@@ -1,0 +1,5 @@
+--^ title: PRIVATE_NESTED_TITLE_CANARY_32
+
+> --^ publish: all
+>
+> A nested declaration must not publish its root document.

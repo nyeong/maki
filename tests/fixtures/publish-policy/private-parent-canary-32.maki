@@ -1,0 +1,3 @@
+--^ title: PRIVATE_PARENT_TITLE_CANARY_32
+
+The parent is private even though one descendant is published.

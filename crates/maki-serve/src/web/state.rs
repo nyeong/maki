@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::http;
 use crate::metrics::Metrics;
-use maki_core::{DatePeriod, Error as MakiError, Maki, MakiConfigOverrides};
+use maki_core::{DatePeriod, Error as MakiError, Maki, MakiConfigOverrides, PublishPolicy};
 use maki_fs::{load_project_config, load_project_with_config_metered};
 
 use super::MAX_SSE_CLIENTS;
@@ -18,6 +18,7 @@ pub(super) struct AppState {
     pub(super) project: RwLock<ProjectState>,
     live_reload: Option<LiveReload>,
     metrics: Metrics,
+    publish_policy: PublishPolicy,
 }
 
 pub(super) struct ProjectState {
@@ -123,6 +124,7 @@ impl AppState {
         live_reload: bool,
         metrics: Metrics,
     ) -> Self {
+        let publish_policy = *maki.config().publish_policy();
         metrics.set_project_notes(maki.notes_len());
         metrics.set_response_cache_entries(0);
 
@@ -132,6 +134,7 @@ impl AppState {
             project: RwLock::new(ProjectState::new(maki)),
             live_reload: live_reload.then(|| LiveReload::new(MAX_SSE_CLIENTS)),
             metrics,
+            publish_policy,
         }
     }
 
@@ -148,7 +151,8 @@ impl AppState {
         result
     }
 
-    pub(super) fn replace_maki(&self, next: Maki) -> Result<(), MakiError> {
+    pub(super) fn replace_maki(&self, mut next: Maki) -> Result<(), MakiError> {
+        next.set_publish_policy(self.publish_policy);
         let root = next.root().to_path_buf();
         let notes_len = next.notes_len();
         {

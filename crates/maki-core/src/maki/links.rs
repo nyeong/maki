@@ -7,6 +7,9 @@ use crate::parser;
 
 use super::note::NoteRef;
 
+pub(crate) const REDACTED_NOTE_LINK_HEADING_ID: &str = "maki-redacted-heading";
+pub(crate) const REDACTED_NOTE_LINK_TEXT: &str = "[데이터 말소]";
+
 #[derive(Default)]
 pub(super) struct NoteIndex {
     exact_paths: BTreeMap<PathBuf, NoteRef>,
@@ -80,4 +83,5 @@ pub enum NoteLinkResolution {
     FoundId { note: NoteRef, id: String },
     Broken,
     Ambiguous,
+    Redacted,
 }

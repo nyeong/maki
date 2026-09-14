@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use crate::RunError;
 use crate::metrics::Metrics;
-use maki_core::{Maki, MakiConfigOverrides};
+use maki_core::{Maki, MakiConfigOverrides, PublishPolicy};
 
 mod cache_warmer;
 mod error;
@@ -73,6 +73,7 @@ pub struct MetricsEndpoint {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServeRuntime {
     Development,
     Publish,
@@ -112,7 +113,7 @@ pub fn serve_project(
 }
 
 pub fn serve_with_runtime<F>(
-    maki: Maki,
+    mut maki: Maki,
     project_root: PathBuf,
     config: ServeConfig<'_>,
     setup: F,
@@ -128,6 +129,13 @@ where
         metrics,
         metrics_endpoint,
     } = config;
+
+    let publish_policy = match runtime {
+        ServeRuntime::Development => PublishPolicy::Private,
+        ServeRuntime::Publish => PublishPolicy::Public,
+    };
+    maki.set_publish_policy(publish_policy);
+    let config_overrides = config_overrides.with_publish_policy(publish_policy);
 
     let listener =
         TcpListener::bind((host, port)).map_err(|source| RunError::IoError { source })?;

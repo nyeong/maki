@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::parser::{Date, DateStampKind, DateStampTarget};
@@ -76,6 +76,29 @@ pub enum DateRelation {
 
 #[allow(dead_code)]
 impl DateIndex {
+    pub(crate) fn retaining_source_paths(&self, source_paths: &BTreeSet<PathBuf>) -> Self {
+        let mut filtered = Self::default();
+        for occurrence in self
+            .occurrences
+            .values()
+            .filter(|occurrence| source_paths.contains(&occurrence.source_path))
+        {
+            filtered.insert_occurrence(occurrence.clone());
+        }
+        filtered.sort_backlinks();
+        filtered
+    }
+
+    pub(crate) fn clear_contexts_for_source_paths(&mut self, source_paths: &BTreeSet<PathBuf>) {
+        for occurrence in self
+            .occurrences
+            .values_mut()
+            .filter(|occurrence| source_paths.contains(&occurrence.source_path))
+        {
+            occurrence.context.clear();
+        }
+    }
+
     pub(in crate::maki::dates) fn insert_occurrence(&mut self, occurrence: DateOccurrence) {
         let id = occurrence.id.clone();
 

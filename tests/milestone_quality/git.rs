@@ -44,14 +44,14 @@ fn git_serve_recents_use_commit_times() {
     .unwrap();
     fs::write(
         repo.root.join("docs").join("old.maki"),
-        "--^ title: Old Note\n\nOld body.\n",
+        "--^ title: Old Note\n--^ publish: all\n\nOld body.\n",
     )
     .unwrap();
     commit_git_project_at(&repo.root, "old", "2001-01-01T00:00:00+0000");
 
     fs::write(
         repo.root.join("docs").join("new.maki"),
-        "--^ title: New Note\n\nNew body.\n",
+        "--^ title: New Note\n--^ publish: all\n\nNew body.\n",
     )
     .unwrap();
     commit_git_project_at(&repo.root, "new", "2001-01-02T00:00:00+0000");
@@ -73,4 +73,84 @@ fn git_serve_recents_use_commit_times() {
             "Old Note",
         ],
     );
+}
+
+#[test]
+fn git_serve_uses_public_policy_for_routes_sources_and_discovery() {
+    if !git_is_available() {
+        return;
+    }
+
+    const PRIVATE_CANARIES: &[&str] = &[
+        "GIT_PRIVATE_PATH_CANARY_32",
+        "GIT_PRIVATE_TITLE_CANARY_32",
+        "GIT_PRIVATE_BODY_CANARY_32",
+        "GIT_PRIVATE_ID_CANARY_32",
+        "GIT_PRIVATE_LINK_CANARY_32",
+    ];
+
+    let repo = temp_project("git-public-policy-repo");
+    run_git(&repo.root, &["init", "--initial-branch", "main"]);
+    run_git(&repo.root, &["config", "user.name", "Maki Test"]);
+    run_git(
+        &repo.root,
+        &["config", "user.email", "maki-test@example.invalid"],
+    );
+    fs::create_dir_all(repo.root.join("docs")).unwrap();
+    fs::write(
+        repo.root.join("maki.toml"),
+        "[project]\ntitle = \"Git Public Fixture\"\nsource = \"docs\"\nhome = \"home\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.root.join("docs/home.maki"),
+        "--^ title: Git Public Home\n--^ publish: all\n\n[[GIT_PRIVATE_PATH_CANARY_32]]\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.root.join("docs/GIT_PRIVATE_PATH_CANARY_32.maki"),
+        "--^ title: GIT_PRIVATE_TITLE_CANARY_32\n--^ date: [2099-11-30]\n\nGIT_PRIVATE_BODY_CANARY_32\n--^ id: GIT_PRIVATE_ID_CANARY_32\n\n[[GIT_PRIVATE_LINK_CANARY_32]]\n",
+    )
+    .unwrap();
+    commit_git_project_at(&repo.root, "public policy", "2001-01-01T00:00:00+0000");
+
+    let state = temp_project("git-public-policy-state");
+    let port = free_port();
+    let _server = start_git_server(&repo.root, &state.root, port);
+
+    let home = http_get(port, "/");
+    home.assert_status("HTTP/1.1 302 Found");
+    home.assert_header_contains("location: /home");
+
+    let page = http_get(port, "/home");
+    page.assert_status("HTTP/1.1 200 OK");
+    page.assert_body_contains("[데이터 말소]");
+    let private_page = http_get(port, "/GIT_PRIVATE_PATH_CANARY_32");
+    private_page.assert_status("HTTP/1.1 404 Not Found");
+    let published_source = http_get(port, "/home.maki");
+    published_source.assert_status("HTTP/1.1 404 Not Found");
+    let private_source = http_get(port, "/GIT_PRIVATE_PATH_CANARY_32.maki");
+    private_source.assert_status("HTTP/1.1 404 Not Found");
+
+    for target in [
+        "/home",
+        "/@/recents",
+        "/@/sitemap",
+        "/sitemap.xml",
+        "/@/diagnostics",
+        "/@/dates",
+        "/@/dates/2099-11-30",
+        "/.maki/search-index.json",
+        "/.maki/project-index.json",
+    ] {
+        let response = http_get(port, target);
+        response.assert_status("HTTP/1.1 200 OK");
+        for canary in PRIVATE_CANARIES {
+            response.assert_body_excludes(canary);
+            assert!(
+                !response.headers.contains(canary),
+                "expected headers for {target} not to contain {canary:?}"
+            );
+        }
+    }
 }

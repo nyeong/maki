@@ -1,5 +1,5 @@
 --^ title: Web Server and Routes
---^ updated: [2026-09-08]
+--^ updated: [2026-09-14]
 
 = Local source serve
 
@@ -38,12 +38,38 @@ Maki는 가장 가까운 `maki.toml`을 찾고 [[maki-toml]]의 source root와 h
 Git update를 가져오면 새 project state를 load한 뒤 교체한다.
 Load에 실패하면 기존 state를 계속 제공하고 오류를 기록한다.
 
+= Runtime Access Policy
+
+Maki web server에는 source 종류에 따라 두 access policy가 있다.
+
+- `maki serve <path>` local source serve는 Private policy다. 읽을 수 있는 Project Document 전체를 기존과 같이 제공한다.
+- `maki serve --git <url>` Git source serve는 Public policy다. 각 파일의 root document property가 정확히 `--^ publish: all`인 Document만 public set에 포함한다.
+
+`publish` syntax와 fail-closed 판정은 [[maki-syntax#Publish Property]]를 따른다.
+선언이 없거나 값이 다르고, block 또는 nested body에만 선언이 있거나, source를 읽지 못하면 private이다.
+Parent Document의 선언은 child나 descendant Document에 상속되지 않는다.
+
+Public policy에서는 모든 project surface가 같은 public set을 사용한다.
+Rendered note와 subdocument route뿐 아니라 navigation, home redirect, Recents, Sitemap, XML sitemap, Search와 search index, Project Index, Diagnostics, Dates와 backlink, cache warmup, 공개 note 수 metric도 private Document를 입력이나 후보로 사용하지 않는다.
+따라서 private Document의 content, title, canonical path, ID, date, diagnostic, link target이나 존재 여부가 이 surface를 통해 노출되지 않는다.
+
+Public link resolution도 public set 안에서만 후보를 찾는다.
+Public Document의 internal Note Link가 private, missing 또는 ambiguous target을 가리키면 세 경우를 구분하지 않고 link target이 없는 고정 text `[데이터 말소]`로 렌더한다.
+Candidate title, path, fragment와 authored raw target은 public HTML이나 Project Index에 남기지 않는다.
+
+Public policy에서는 공개 여부와 관계없이 모든 `/<note>.maki` raw source route가 404다.
+공개 source에 적힌 private target을 raw text로 우회해서 읽을 수 없다.
+Private Document의 slashless note route와 trailing-slash subdocument route도 missing Document와 동일한 404를 반환한다.
+
+Configured home이 public set에 없으면 `/`는 redirect하지 않고 404를 반환한다.
+응답에 private route를 담은 `Location` header도 넣지 않는다.
+
 = Note route
 
 - `/`: configured home note로 redirect
 - `/<note>`: rendered HTML
 - `/<note>/`: 해당 note의 direct subdocument index
-- `/<note>.maki`: raw Maki source
+- `/<note>.maki`: Private policy의 raw Maki source. Public policy에서는 항상 404
 - `/favicon.ico`: `[serve].favicon`을 설정했을 때의 favicon
 
 Note identity와 route는 configured source root 기준의 extension 없는 relative path다.
@@ -107,6 +133,8 @@ Search나 다른 Project-wide discovery가 source Note Link를 생성할 때는 
 
 Project index schema version 2에는 document, block, block ID owner/declaration, heading, raw note link target와 structured resolution이 포함된다.
 Property에는 parser가 확정한 Document/Block owner가, date occurrence에는 normalized target identity가, diagnostic에는 typed subject가 포함되며 모든 located 값은 원본 source span을 사용한다.
+Public policy의 Project Index는 이 schema를 public projection에 적용한다.
+Private target으로 이어질 수 있는 raw Note Link target과 resolution detail은 위 Runtime Access Policy에 따라 고정된 target-free redaction으로 바꾼다.
 
 = Runtime asset과 live reload
 

@@ -1,3 +1,4 @@
 --^ title: v1 Other Note
+--^ publish: all
 
 This file exists so the watcher sees a small project, not a single file.

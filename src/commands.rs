@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
 use maki_core::analysis::{self, ProjectExternalLink};
-use maki_core::{Error as MakiError, MakiConfig, MakiConfigOverrides, html, parser};
+use maki_core::{Error as MakiError, MakiConfig, MakiConfigOverrides, PublishPolicy, html, parser};
 use maki_fs::{
     find_project_root, load_project_config, load_project_with_config,
     load_project_with_config_metered, render_file_html,
@@ -119,7 +119,8 @@ fn run_git_serve(
     git_config: git_source::GitServeConfig,
     options: ServeOptions,
 ) -> Result<(), RunError> {
-    let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect);
+    let config_overrides = MakiConfigOverrides::from_home_redirect(options.index_redirect)
+        .with_publish_policy(PublishPolicy::Public);
     let metrics = metrics_for_endpoint(&options.metrics);
     let source = git_source::GitSource::new(git_config);
     eprintln!("Preparing git source...");
