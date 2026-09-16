@@ -108,8 +108,14 @@ fn maki_fmt_check_defaults_to_the_configured_project_source() {
     assert_eq!(check.status.code(), Some(1));
     assert!(check.stdout.is_empty());
     let stderr = String::from_utf8(check.stderr).unwrap();
-    assert!(stderr.contains(&format!("would reformat: {}", first.display())));
-    assert!(stderr.contains(&format!("would reformat: {}", nested.display())));
+    assert!(stderr.contains(&format!(
+        "would reformat: {}",
+        first.canonicalize().unwrap().display()
+    )));
+    assert!(stderr.contains(&format!(
+        "would reformat: {}",
+        nested.canonicalize().unwrap().display()
+    )));
     assert!(!stderr.contains("outside.maki"));
     assert_eq!(fs::read_to_string(&first).unwrap(), unformatted);
 
@@ -183,13 +189,18 @@ fn maki_fmt_rejects_non_maki_files() {
 #[cfg(unix)]
 #[test]
 fn maki_fmt_rejects_non_regular_maki_paths() {
-    use std::os::unix::net::UnixListener;
-
     let project = temp_project("format-non-regular");
-    let socket = project.root.join("page.maki");
-    let _listener = UnixListener::bind(&socket).unwrap();
+    let fifo = project.root.join("page.maki");
+    // A FIFO exercises the same rejection without Unix socket path-length limits.
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
 
-    let output = Command::new(BIN).arg("fmt").arg(&socket).output().unwrap();
+    let output = Command::new(BIN).arg("fmt").arg(&fifo).output().unwrap();
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
