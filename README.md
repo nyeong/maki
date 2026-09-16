@@ -1,14 +1,10 @@
 # Maki
 
-Maki is a line-first lightweight markup language and personal wiki runtime for
-`.maki` files.
+Maki is a simple, readable, and extensible markup language.
 
-It is built around a project directory, a small `maki.toml` manifest, and plain
-text notes that can be served as HTML.
-
-The canonical source is the anonymously readable
-[Forgejo repository](https://git.eska.nyeong.me/nyeong/maki). The CLI and LSP
-share one release version; see the [release contract](RELEASES.md) and
+The canonical source is maintained in a private [Forgejo repository](https://git.eska.nyeong.me/nyeong/maki).
+A public mirror is available at [nyeong/maki](https://github.com/nyeong/maki).
+The CLI and LSP share one release version; see the [release contract](RELEASES.md) and
 [changelog](CHANGELOG.md) for provenance and release history.
 
 ## Quick Start

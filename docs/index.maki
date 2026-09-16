@@ -1,4 +1,5 @@
 --^ title: Maki Documentation
+--^ publish: all
 
 Maki는 line-first lightweight markup language이자 `.maki` 프로젝트를 HTML로 build·serve하는 personal wiki runtime이다.
 

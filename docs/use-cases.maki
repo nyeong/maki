@@ -1,5 +1,6 @@
 --^ title: Use Cases
 --^ updated: [2026-08-31]
+--^ publish: all
 
 Maki는 plain text source, project 단위 link resolution, metadata와 HTML server를 함께 사용하는 개인 문서 도구다.
 
