@@ -262,6 +262,14 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
 }
 
 #[test]
+fn inline_should_not_contains_start_token() {
+    let parsed = parser::parse(r#"/italic/"#);
+    let html = render_document(&parsed.document);
+    assert!(!html.contains("<p>/<em>"));
+    assert!(html.contains("<em>italic</em>"));
+}
+
+#[test]
 fn render_stable_inline_and_footnote_syntax() {
     let parsed = parser::parse(
         r#"Use /italic/, *strong*, ^{sup}, _{sub}, +{inserted}, -{deleted}, and ::highlight:: with <https://example.com> and <http://example.com/docs>.[^note][]
