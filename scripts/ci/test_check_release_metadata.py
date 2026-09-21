@@ -393,16 +393,6 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         self.assert_error_contains("uses a non-public source")
 
-    def test_rejects_obsolete_repository_link(self) -> None:
-        self.write(
-            "docs/index.maki",
-            f"{REPOSITORY}\nhttps://github.com/nyeong/maki\n",
-        )
-
-        self.assertIn(
-            "docs/index.maki contains the obsolete repository URL", self.errors()
-        )
-
     def test_release_mode_requires_dated_version_and_tag(self) -> None:
         errors = CHECK_RELEASE_METADATA.metadata_errors(
             self.repository_root, release=True

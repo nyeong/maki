@@ -487,7 +487,8 @@ fn close_formatting<'a>(
     }
 
     let body = inlines.split_off(opener_index + 1);
-    debug_assert_eq!(inlines.pop(), Some(Inline::Text(marker)));
+    let popped = inlines.pop();
+    debug_assert_eq!(popped, Some(Inline::Text(marker)));
     let inline = match kind {
         FormattingKind::Italic => Inline::Italic(body),
         FormattingKind::Strong => Inline::Strong(body),
