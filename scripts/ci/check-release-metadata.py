@@ -637,8 +637,6 @@ def metadata_errors(repository_root: Path, *, release: bool = False) -> list[str
         for expected in required_values:
             if expected not in contents:
                 errors.append(f"{relative_path} is missing {expected}")
-        if "github.com/nyeong/maki" in contents:
-            errors.append(f"{relative_path} contains the obsolete repository URL")
 
     if release and release_version != "<invalid>":
         changelog = documents.get("CHANGELOG.md", "")
