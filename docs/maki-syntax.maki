@@ -1,4 +1,4 @@
---^ title: Maki Syntax
+--^ title: maki 문법 레퍼런스
 --^ created: [2026-06-24]
 --^ updated: [2026-09-14]
 --^ status: stable
@@ -6,16 +6,69 @@
 
 = 개요
 
-Maki는 line-first lightweight markup language이다.
-
-이 문서는 Maki 언어의 stable 문법과 문법적 해석 규칙을 정의하는 Source of Truth이다.
+이 문서는 Maki 언어의 stable 문법과 문법적 해석 규칙을 정의하는 레퍼런스로, Single Source of Truth이다.
 구현과 충돌이 있는 경우 구현을 이 문서에 맞춘다.
 
 이 문서에 정의한 문법과 해석 규칙은 stable syntax다.
+여기서 stable은 현재 정의된 문법을 뜻하며, 버전 간 호환성을 보장하지 않는다.
 문서에 없는 marker나 container kind에는 별도의 의미를 부여하지 않는다.
 
-이 문서는 parser 자료 구조, source range, index API, renderer 표현, LSP protocol을 정의하지 않는다.
-그 구현 계약은 [[core-analysis]], [[lsp]] 등 별도 문서에서 다룬다.
+이 문서는 parser 자료 구조, source range, index API, renderer 표현, LSP protocol, HTML 렌더링 스펙을 정의하지 않는다.
+다만 표현 계층에서 준수하면 좋을 것을 정의한다.
+
+= 원칙
+
+문법을 설계·수정할 때 아래의 주요 원칙을 준수해야한다.
+
+*사람이 읽기 쉬워야한다.*
+- 줄단위로 둘러싸는 문법(fence)을 지양한다.
+- 인라인 토큰은 최대한 짧아야한다.
+- 사람이 읽지 않을 부분을 떨여뜨려놓을 방법이 있어야한다.
+- 시작과 끝이 명확해야한다.
+- 문법을 몰라도 본문의 내용을 유추할 수 있어야한다.
+- tree-sitter등 보조 도구의 사용 또한 고려한다.
+- 같은 문법 요소가 위치에 따라 의미가 달라지는 경우 그 조건이 명확해야한다.
+
+*사람이 쓰기 쉬워야한다.*
+- 자주 쓰는 표현일수록 적은 노력으로 입력할 수 있어야한다.
+- 줄단위로 둘러싸는 문법(fence)을 지양한다.
+- LSP, formatter 등 보조 도구의 사용 또한 고려한다.
+
+*기계가 해석하기 쉬워야한다.*
+- 문맥에서 추측하는 게 아니라, 문법으로 식별할 수 있어야 한다.
+- 시작과 끝이 명확해야한다.
+- 문법 해석에 맥락이 적으면 적을 수록 좋다.
+- 같은 문법 요소가 위치에 따라 의미가 달라지는 경우 그 조건이 명확해야한다.
+- 오류가 있어도 가능한 범위에서 나머지 문서를 해석할 수 있어야한다.
+
+*의미와 경계의 명확성을 우선한다.*
+- 토큰을 줄이기 위해 문맥 의존이나 예외 규칙을 늘리지 않는다.
+
+== 세부 원칙
+
+주요 원칙을 준수하기 위해서 아래 세부 원칙을 고려해야한다.
+
+의미를 시각적·관습적으로 유추할 수 있는 토큰을 사용해야한다.
+- `--^`는 위쪽의 블록에 속성을 더한다. `--v`는 아래쪽의 블록에 속성을 더한다.
+- `*...*`는 내용을 굵게 강조한다.
+- `/.../`는 내용을 기울여 강조한다.
+
+줄단위로 둘러싸는 문법(fence)을 지양해야한다.
+- fence 문법(`---`)은 최소화한다.
+- inline prefix를 우선한다.
+
+주요 의미는 의미를 보존하고, 기계가 해석할 수 있도록 해야한다
+- 사건에 대한 날짜와 시간 정보: `[yyyy-mm-dd]`
+- 사건에 대한 날짜와 시간 정보: `<yyyy-mm-dd>`
+- 문서 간 연결: `[[link]]`
+
+사람이 읽지 않을 부분을 떨여뜨려 놓을 방법이 있어야한다.
+- 본문 내 긴 하이퍼링크(`[title]<very-long-http-uri...>`)는 가독성을 떨어뜨린다.
+- 별도의 영역에 레퍼런스로 정의하고, 이를 참조토록하여 본문의 plain text 가독성을 높인다.
+
+시작과 끝이 명확해야한다.
+- `sup`을 `^` 대신 `^{...}`으로
+- URL을 그냥 해석하지 말고 `<...>`로 둘러싸기
 
 = Notation
 
@@ -32,7 +85,7 @@ Maki는 line-first lightweight markup language이다.
 
 = Document Model
 
-한 maki 파일을 해석하기 위한 기본적인 구성 요소를 소개한다.
+maki 파일을 해석하기 위한 기본적인 구성 요소를 정의한다.
 
 == Source
 
@@ -79,24 +132,11 @@ Property는 Document 또는 Block에 붙는 key-value metadata이다.
 
 = Mental Model
 
-maki 문법의 지배적인 멘탈 모델에 대해 소개한다.
-
-현재의 문법과 추가적인 maki 문법은 이 멘탈 모델을 준수하여야한다.
-
-- 쓰기 편해야한다.
-  단, 아무 도구도 없이 키보드로 모두 치는 상황은 고려하지 않는다.
-  Vim, Helix, Emacs 같은 multi-line editing과 LSP 문법 보조를 사용할 수 있다.
-- 읽기 편해야한다.
-  - 렌더링 결과 뿐 아니라 코드 그 자체도 읽기 편해야한다.
-- 의미를 담기 편해야 한다.
-  - semantic할 필요가 있는 정보를 쉽게 분리할 수 있어야 한다.
-  - 파싱의 쉬움을 의미하지 않는다.
-
-위 목표를 준수하기 위해 아래와 같은 멘탈 모델을 채택한다:
+원칙을 준수하기 위해 아래와 같은 멘탈 모델을 채택한다:
 
 == Line prefix first
 
-읽기 편하고 쓰기 편하기 위해,  대부분의 요소들은 line prefix로 의미를 표현할 수 있어야 한다. 그리고 line prefix로 표현된 각 line은 단일로, 때로는 모여서 Block을 형성한다. 예를 들어 아래와 같다:
+읽기 편하고 쓰기 편하기 위해, 대부분의 요소들은 line prefix로 의미를 표현할 수 있어야 한다. 그리고 line prefix로 표현된 각 line은 각각 단일로, 혹은 여럿이 모여서 Block을 형성한다:
 
 : : code
 : > quote
@@ -105,7 +145,7 @@ maki 문법의 지배적인 멘탈 모델에 대해 소개한다.
 : = level 1 header
 : [title]: [[target]]
 
-container는 그럴 수 없는 경우에 한정적으로 사용한다.
+container는 line prefix로 의미를 표현하기 어렵거나 불편한 경우에 한정적으로 사용한다:
 
 1. Quote, Code 등 복사-붙여넣기 작업이 중요할 때
 2. 외부 확장을 사용할 때
@@ -114,32 +154,38 @@ container는 그럴 수 없는 경우에 한정적으로 사용한다.
 : copy-paste가 편리한 영역
 : ---
 
-== Data Model
+== Semantic Data
 
-의미를 담기 현하기 위해 아래를 준수해야한다:
+아래의 주요 데이터는 semantic하게 표현할 수 있어야한다. 이를 통해 해석 계층에서 연결성,
+관계성 등의 의미를 보존할 수 있어야한다.
 
-1. 중요한 의미를 갖는 inline text는 semantic하게 표현해야한다.
-   - Date를 `<2026-06-02>`, `[2026-06-02]` 등으로 표현하여 의미를 갖게 한다.
-   - Note Link를 `[[link]]` 문법으로 외부 링크와 구분한다.
-2. 부가적 의미를 갖는 block의 속성은 property로 표현해야한다.
-   - 예를 들어 Code에 언어를 지정한다면 `lang` property를 사용한다.
-   - 일반적이고 공통적인 property의 의미는 본 문서에 기술한다.
+- 일시 표현
+  - 참조를 위한 표현: `[yyyy-mm-dd]`
+  - 예정을 위한 표현: `<yyyy-mm-dd>`
+  - 범위 표현: `<yyyy-mm-dd>--<yyyy-mm-dd>`
+- 연결 표현
+  - maki로의 연결: `[[...]]`
+  - 외부 URL으로의 연결: `<...>`
+- 진행 표현
+  - 예정 `- [ ]`
+  - 완료 `- [x]`
 
-== Artifact Model
+property로 부가적인 데이터를 표기할 수 있어야한다.
 
-1. Source는 입력이자 동시에 version control에 보존하는 결과여야한다.
-2. 사용자가 소유한 authored 영역과 transform이 소유한 generated 영역은 property로 명시적으로 구분해야 한다.
-3. Generated artifact는 위치가 아니라 project-global producer identity의 역참조로 연결해야 한다.
-4. 같은 선언, declared input과 실행 환경에서는 materialized source가 의미적 fixed point에 도달해야 한다.
+- 어떤 property는 예약되어있다.
+  - 예를 들어 Code에 언어를 지정한다면 `lang` property를 사용한다.
+  - 일반적이고 공통적인 property의 의미는 본 문서에 기술한다.
+- 그 외에는 사용자가 자유롭게 추가하여 쓸 수 있다.
 
-공통 ownership, freshness, effect와 update plan 계약은 [[materialization]]이 정의한다.
-현재 parser는 materialization property를 일반 property로 보존하며 아직 그 의미를 해석하거나 evaluator를 실행하지 않는다.
+== Token
+
+토큰은 ASCII 문자로 한정할 필요 없다. Lean, APL의 선례를 참조하여 의미적으로 필요하다면 non-ASCII 문자를 적극 채용하자.
 
 = Block
 
 [[#Paragraph]], [[#Heading]], [[#Code Block]], [[#Quote]], [[#List]], [[#Table]], [[#Container]], [[#Reference Definition]] 등이 있다.
 
-각 타입은 아래와 같은 특징이 있다.
+각 Block에는 아래와 같은 성질이 있다:
 
 1. Parsing
    Body(prefix를 제외한 block의 내용)를 아래 방법 중 하나로 해석한다.
@@ -187,16 +233,9 @@ Escape 뒤의 line이 실제 block start로 해석될 때만 `\`를 제거한다
 
 Heading은 문서 안의 section heading을 나타낸다. Atomic하며 body는 Inline으로 해석한다.
 
-`=` 개수가 heading level이다. stable syntax의 heading level은 1부터 6까지만 인정한다.
+`=` 개수가 heading level이다.
+
 Heading marker 뒤의 space는 필수이며 heading text는 비어 있을 수 있다.
-
-- property
-  - `id`: heading의 document-local explicit ID와 stable anchor를 지정한다.
-
-Heading anchor는 비어 있지 않은 `id` property가 있으면 그 값을, 없으면 raw heading text를 사용한다.
-`id`가 없는 Heading의 같은 anchor가 한 Document 안에 여러 번 나올 수는 있지만 해당 anchor를 가리키는 Heading Link는 ambiguous이다.
-Heading의 explicit `id`는 다른 addressable block의 explicit `id`와 같은 document-local namespace를 사용하며 중복될 수 없다.
-Explicit ID는 다른 Heading의 effective anchor와도 같을 수 없다. 둘은 HTML의 같은 `#fragment` namespace를 쓰기 때문이다.
 
 예:
 
@@ -255,7 +294,7 @@ Quote는 인용문을 나타낸다.
 
 == Container
 
-: <hyphen>{3,}[<whitespace>*<kind>[<whitespace>+<arg>]*]
+: <hyphen>{3}[<whitespace>*<kind>[<whitespace>+<arg>]*]
 : <raw line>*
 : <opening fence와 같은 길이의 hyphen run>
 
@@ -264,23 +303,14 @@ Quote는 인용문을 나타낸다.
 
 Container는 긴 body를 prefix 없이 입력하기 위한 block form이다.
 
-Opening fence는 root block의 physical column 0에서 시작하는 ASCII hyphen의 최대 연속 run이며 길이는 3 이상이다.
-List Item child에서는 required indent를 제거한 뒤의 logical column 0을 같은 기준으로 사용한다.
-최대 run 전체가 kind보다 먼저 fence에 속한다. 따라서 `----code`는 4-hyphen fence와 `code` kind이고, 3-hyphen fence에서 `-code` kind를 쓰려면 `--- -code`처럼 space로 경계를 표시한다.
+Kind는 비어 있거나 ASCII `[A-Za-z0-9_-]+`여야 한다.
 
-Kind는 비어 있거나 ASCII `[A-Za-z0-9_-]+`여야 한다. Kind 앞에는 whitespace를 0개 이상 둘 수 있다.
-Argument가 있으면 kind 뒤에 whitespace를 하나 이상 두어 구분하며, 기존처럼 whitespace-delimited token으로 보존한다.
-Canonical source는 위 grammar form의 ASCII space를 사용한다. Parser는 기존 source 호환성을 위해 header 주변과 token 사이의 다른 whitespace도 받아들인다.
-
-Closing fence는 opening fence와 정확히 같은 길이의 bare hyphen run이어야 한다.
-더 짧거나 더 긴 hyphen-only line, 같은 길이여도 space나 다른 content가 뒤따르는 line은 closing fence가 아니라 raw body다.
-Opening header가 이 문법에 맞지 않으면 Container를 시작하지 않고 해당 line을 Paragraph의 Text로 보존한다.
-유효한 opening fence 뒤에서 EOF까지 closing fence를 찾지 못하면 남은 line을 Container raw body로 보존하고, root와 List Item child 모두 `unclosed container block` warning을 낸다.
+Arg는 `<key>:<whitespace>*<value>` 형태이다.
 
 - `code [lang]`: body를 raw code로 보존한다.
 - `quote`: body를 Maki block으로 해석한다.
 - `text` 또는 `pre`: body를 raw text로 보존한다.
-- 그 밖의 kind: Unknown Container로 보존한다. Maki는 해당 kind에 별도 의미를 부여하거나 외부 command를 실행하지 않는다.
+- 그 밖의 kind: Unknown Container로 보존한다.
 
 === Code Container
 
@@ -300,17 +330,6 @@ Spaced form도 같은 kind와 argument를 만든다.
 : ---   code  maki
 : = This is also *maki*.
 : ---
-
-최대 fence run과 exact closer의 예:
-
---v lang: maki
-: ----code
-: ---
-: -----
-: ---- content가 있으므로 body
-: ----
-
-위 Container의 fence 길이는 4이며, body는 `---`, `-----`, `---- content가 있으므로 body` 세 line이다.
 
 Hyphen으로 시작하는 kind는 space로 fence와 분리한다.
 
@@ -466,22 +485,23 @@ Table은 header와 data row를 가진 tabular block을 의미한다.
 - parsing: custom
 - clustering: continuous
 
-Property는 document 또는 block에 붙는 key-value metadata이며 visible content가 아니다.
+Property는 document 또는 block에 붙는 key-value metadata이다.
 
 - key와 value는 trim 후 사용한다.
 - key는 case-insensitive이다.
-
-비어 있지 않은 `id` property가 visible block에 붙으면 그 block의 document-local explicit ID를 정의한다.
-Document property와 visible output이 없는 Reference Definition의 `id`는 addressable block ID를 정의하지 않는다.
-Explicit ID 값은 case-sensitive이며 같은 Document의 addressable block 사이에서 정확히 같아서는 안 된다.
-같은 ID를 서로 다른 Document에서 재사용할 수 있고, 같은 Document의 중복 ID는 diagnostic 대상이다.
-다른 Heading의 effective anchor와 충돌한 ID도 diagnostic 대상이며 해당 `#`와 `@` selector는 ambiguous이다.
 
 Property에는 Property를 붙일 수 없다. 따라서 아래와 같은 건 warning과 함께 무시된다.
 
 --v lang: maki
 : --v key: value
 : --^ key: value
+
+=== Reserved Property
+
+- document.publish: all
+  - all인 경우만 publish
+- document.title: text
+- document.created: date marker
 
 === Previous Property
 
@@ -517,7 +537,7 @@ Property Key는 property owner 안에서 metadata slot을 식별하는 이름이
 
 첫 `:` 앞의 문자열을 trim한 값으로, case-insensitive하게 다룬다.
 
-== Property Value
+=== Property Value
 
 Property Value는 property key에 대응하는 scalar metadata value이다.
 
@@ -534,68 +554,6 @@ Property Value는 property key에 대응하는 scalar metadata value이다.
 : --v deadline: <2026-09-01>
 : = Task
 
-== Publish Property
-
-`publish` document property는 publish runtime이 외부에 공개할 Document를 명시적으로 선택한다.
-
-공개 opt-in form은 아래와 같다.
-
---v lang: maki
-: --^ publish: all
-:
-: = Public Note
-
-`--^ publish: all`이 첫 non-property block보다 앞에 있어 document property가 되고, trim한 value가 정확히 lowercase ASCII `all`일 때만 해당 Document가 public이다.
-Property key는 일반 Property Key와 마찬가지로 case-insensitive하지만 `all` token은 case-sensitive하다.
-
-다음 Document는 모두 private이다.
-
-- `publish` property가 없는 Document
-- value가 비었거나 `all` 이외의 값인 Document. `All`과 `ALL`도 포함한다.
-- `publish`가 Heading, Paragraph, List Item 등 block property인 Document
-- nested Maki body 안에만 `publish`가 있는 Document
-- source를 읽거나 parse하여 이 선언을 확인할 수 없는 Document
-
-Canonical path의 parent 또는 ancestor Document에 `publish: all`이 있어도 child와 descendant Document는 이를 상속하지 않는다.
-각 `.maki` 파일이 자신의 root document property로 별도 opt-in해야 한다.
-
-Private development runtime, build, check와 LSP는 이 property로 Project 분석 대상을 줄이지 않는다.
-Public runtime에서의 route, link와 project-wide index 표현 규칙은 [[web#Runtime Access Policy]]를 따른다.
-
-== Materialization Property Vocabulary
-
-Materializer가 공유하는 다음 property key를 예약한다.
-Key는 다른 property와 마찬가지로 case-insensitive하고 value source는 그대로 보존된다.
-나열한 value token, producer identity와 fingerprint 비교는 case-sensitive하다.
-
-- `producer-id`: Document path, source span과 document-local `id`와 독립적인 project-global durable producer identity. 1에서 128 ASCII byte이고 첫 문자는 영문자나 숫자, 나머지는 영문자, 숫자, `-`, `_`, `.`만 허용한다.
-- `result-policy`: `replace`, `append`, `frozen`, `manual`, `volatile`, `cache` 중 하나.
-- `materialize-input`: 반복 가능한 declared input이며 `kind:value` 형식. Kind는 `producer`, `block`, `table`, `config`, `file` 중 하나고 value는 trim된 non-empty scalar다.
-- `effect`: `pure-document`, `pure-project`, `filesystem-read`, `process`, `network`, `clock/random/secrets` 중 하나.
-- `output-kind`: built-in `text`, `maki`, `table`, `file` 또는 materializer가 정의한 `namespace/name` custom token. Custom token은 최대 64 byte이고 slash 하나로 나눈 non-empty lowercase ASCII segment 두 개이며 각 segment 첫 문자는 영문자나 숫자, 나머지는 영문자, 숫자, `-`, `_`만 허용한다.
-- `generated-from`: generated artifact가 역참조하는 producer identity.
-- `generated-input`: 마지막 성공의 input fingerprint.
-- `generated-output`: 마지막 성공의 output fingerprint.
-- `generated-transform`: 마지막 성공의 transform kind.
-- `generated-version`: 마지막 성공의 transform version.
-- `generated-executor`: 마지막 성공의 executor identity.
-- `generated-executor-config`: 마지막 성공의 executor config fingerprint.
-- `generated-effect`: 마지막 성공에 사용한 effect class.
-- `generated-status`: 마지막 성공 provenance를 나타내는 정확한 값 `success`.
-
-`generated-input`, `generated-output`과 `generated-executor-config` fingerprint는 `sha256:`와 lowercase hex 64자로 쓴다.
-
-`producer-id`를 유지한 block은 이동 뒤에도 같은 producer를 나타낼 수 있다.
-복사해 같은 identity가 둘 이상 생기면 association은 ambiguous하며 복제한 producer에 새 identity가 필요하다.
-Generated artifact는 `generated-from` property를 가진 block이며 producer 바로 다음에 있다는 이유만으로 generated가 되지 않는다.
-
-Raw authored `effect` value는 transform이 요구하는 능력을 선언할 뿐 process, network, filesystem, clock, random 또는 secret 접근 권한을 부여하지 않는다.
-실패한 실행은 성공 provenance를 실패 상태로 덮어쓰지 않는다.
-
-이 revision에는 이 vocabulary를 AST에서 producer나 artifact로 수집하는 기능, value validation, concrete materializer와 실행 command가 없다.
-따라서 parser는 잘못된 예약 value도 다른 unknown custom property value처럼 문자열로 보존하며 어떤 block도 실행하지 않는다.
-현재 지원 경계와 상태 의미는 [[materialization]]을 따른다.
-
 == Reference Definition
 
 : [<key>]:<whitespace>*<value>
@@ -606,31 +564,13 @@ Reference Definition은 key와 value로 이루어진 Document-local reference da
 - clustering: continuous
 - line prefix: `[`
 
-Root-level line의 첫 non-whitespace character가 `[`이고, line이 Reference Definition 문법에 맞으면 Reference Definition block을 시작한다.
-Reference Definition 자체는 visible content가 아니며 연관된 Inline의 의미를 제공한다.
-Reference Definition은 같은 Document 전체에서 유효하다.
-
-`mode: block` Quote와 `quote` container처럼 body를 nested Maki로 파싱할 때는 바깥 Document의 Reference Definition을 상속한다.
-Nested body 안의 local definition이 같은 identifier의 바깥 definition보다 우선하며, local definition은 바깥 body에는 적용되지 않는다.
-`mode: pre`와 `mode: text` body는 Maki로 파싱하지 않으므로 Reference Definition을 상속하거나 정의하지 않는다.
-
-Definition 자체에는 Link나 Footnote 종류가 없다.
-Reference Use와 Footnote marker가 같은 definition을 서로 다른 방식으로 표현한다.
-
-Key는 bracket body의 양끝 whitespace를 trim한 case-sensitive identifier다.
-Definition과 모든 use는 같은 방식으로 key를 trim하여 lookup하며 내부 whitespace와 case는 보존한다.
-Opening `[` 뒤의 첫 `]`가 identifier를 닫으며, 그 바로 뒤에 `:`가 와야한다.
-Key에는 `[`, `]`, newline이 들어갈 수 없다.
-Key는 비어 있을 수 없고 `^`로 시작할 수 없다.
-
-`:` 뒤의 leading whitespace는 definition value에 포함하지 않는다.
-Value는 양끝 whitespace를 trim한 뒤 비어 있을 수 없다.
-Active value는 Inline 구조를 보존하며, trimmed value 전체가 아래 Inline 하나와 정확히 일치하면 그 target kind를 사용한다.
+value는 아래의 내용들이 들어갈 수 있다.
 
 - Hyper Link (`<https://example.com>`)
 - Note Link (`[[/document]]`, `[[+child]]`, `[[#Heading]]`, `[[@id]]`)
 - Date Marker (`[2026-09-01]`)
 - Date Range (`[2026-09-01]--[2026-09-03]`)
+- Text (Inline)
 
 그 밖의 value는 Prose다.
 따라서 URL은 angle-bracket Hyper Link, local document path는 Note Link로 명시해야 한다.

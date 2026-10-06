@@ -1,28 +1,22 @@
---^ title: Getting Started
+--^ title: 시작하기
+--^ created: [2026-08-28]
 --^ publish: all
 
 = 준비
 
-`maki` binary가 `PATH`에 있어야 한다.
-저장소 checkout에서는 Nix로 바로 실행할 수 있다.
+프로젝트를 로컬에서 컴파일하여 바이너리를 사용하거나, nix를 이용할 수 있습니다.
 
 --v lang: bash
-: nix run .#maki -- serve .
-
-기본 주소는 <http://127.0.0.1:4000>이다.
+: maki serve .
+: # 혹은
+: nix run github:nyeong/maki -- serve .
 
 = 프로젝트 만들기
 
-Maki project는 `maki.toml`과 `.maki` source directory로 구성한다.
+Maki 프로젝트는 `maki.toml`과 `.maki` 파일들로 구성됩니다.
 
---v lang: text
-: my-notes/
-:   maki.toml
-:   docs/
-:     index.maki
-:     notes/today.maki
-
-`maki.toml`:
+`maki.toml`에는 프로젝트 정보를 선언합니다. 프로젝트 정보는 웹서버 등에서 사용합니다.
+없을 경우 기본값으로 동작합니다. [[maki-toml]] 문서를 참고하세요.
 
 --v lang: toml
 : [project]
@@ -30,7 +24,7 @@ Maki project는 `maki.toml`과 `.maki` source directory로 구성한다.
 : source = "docs"
 : home = "index"
 
-`docs/index.maki`:
+maki 문법에 따라 문서를 작성합니다. UTF-8 plain text로 작성합니다. 문법은 [[maki-syntax]] 문서를 참고하세요.
 
 --v lang: maki
 : --^ title: Home
@@ -39,109 +33,36 @@ Maki project는 `maki.toml`과 `.maki` source directory로 구성한다.
 :
 : 오늘 기록은 [[notes/today]]에서 확인한다.
 
-`docs/notes/today.maki`:
-
---v lang: maki
-: --^ title: Today
-:
-: = Today
-:
-: - [ ] Maki project 시작하기
-
-= 웹으로 보기
-
-Project root에서 실행한다.
+= 보기
 
 --v lang: bash
 : maki serve .
 
-Maki는 현재 경로에서 상위로 올라가며 가장 가까운 `maki.toml`을 찾는다.
-입력 경로가 project root 또는 configured source root 안에 있으면 source root 전체를 serve한다.
+`maki serve` 명령어로 간단한 웹서버를 실행할 수 있습니다. 웹서버는 간단한 검색을 지원하며, `http://localhost:4000/@/`에서 오류, 프로젝트 인덱스 등 메타 정보를 볼 수 있습니다.
 
-Source가 바뀌면 project를 reload하고 열린 page에 live reload event를 보낸다.
-검색, sitemap, 날짜와 diagnostics page는 [[web]]에서 설명한다.
+자세한 내용은 [[web]] 문서를 참고하세요.
 
-= 단일 HTML 만들기
+`maki build`를 통해 단일 문서를 html 문서로 만들 수 있습니다.
 
 --v lang: bash
 : maki build docs/index.maki > index.html
 
-입력 파일이 configured source root 안에 있으면 project의 note/link resolution을 사용한다.
-Project 밖의 파일이거나 `maki.toml`이 없으면 standalone HTML로 render한다.
-기본 build는 filesystem source와 IO 없는 parser/project diagnostics만 사용하며 network request를 만들지 않는다.
-외부 HTTP(S) link까지 검사하려면 실행할 때 명시적으로 opt-in한다.
+= 검증, 포맷
 
---v lang: bash
-: maki build docs/index.maki --check-external-links > index.html
-
-외부 link 검사 결과는 기존 project warning과 함께 stderr에 출력하고 HTML은 계속 stdout에 출력한다.
-이 선택은 CLI 실행에만 적용하며 `maki.toml`에서 network 검사를 켤 수 없다.
-
-= 문서 검증하기
-
-Editor를 열지 않고 disk의 Maki 문서를 검증하려면 `maki check`를 실행한다.
+check, fmt와 같은 서브 커맨드를 지원합니다.
 
 --v lang: bash
 : maki check .
-
-경로를 생략하면 현재 디렉토리에서 project를 찾는다.
-Project root 또는 configured source 안의 디렉토리는 source root 전체를 검사하고, standalone 디렉토리는 그 아래의 모든 `.maki` 파일을 함께 검사한다.
-Project source 안의 단일 파일은 project 전체를 link resolution context로 사용하지만 그 파일 소유의 finding만 출력한다.
-Project 밖의 단일 파일은 parser와 file-local validation만 실행한다.
-
-기본 text report의 각 줄은 `path:line:column: severity[code]: message` 형식이다.
-자동화에서는 versioned JSON report를 사용할 수 있다.
-
---v lang: bash
 : maki check . --format json
-
-Report만 stdout에 기록하고 read 또는 project load 같은 operational error는 stderr에 기록한다.
-정상 실행에서 finding이 없으면 status 0, finding이 있으면 status 1, usage 또는 operational error가 있으면 status 2다.
-일부 source만 읽지 못하면 읽을 수 있는 source의 finding을 유지하고 JSON의 `complete`를 `false`로 표시한 뒤 status 2로 종료한다.
-검사는 source를 바꾸거나 network, 외부 process, key 또는 prompt를 사용하지 않는다.
-
-`maki lsp`는 열린 editor buffer를 같은 Core diagnostics로 즉시 검사한다.
-`maki fmt --check`는 semantic finding이 아니라 canonical formatting 차이만 검사하고, `maki check`는 disk snapshot의 parser·semantic finding을 batch와 CI에서 검사한다.
-
-= 문서 포맷하기
-
-Project 전체의 구조적 공백과 들여쓰기를 정규화한다.
-
---v lang: bash
 : maki fmt .
-
-경로를 생략하면 현재 디렉토리에서 project를 찾는다.
-단일 `.maki` 파일을 넘기면 그 파일만 바꾸고, project root 또는 configured source root 안의 디렉토리를 넘기면 configured source 전체를 처리한다.
-문단 줄바꿈과 raw container body는 그대로 보존하며, 문법 오류를 추측해 고치지 않는다.
-
-CI에서는 파일을 쓰지 않는 check mode를 사용할 수 있다.
-
---v lang: bash
 : maki fmt --check
-
-바뀔 파일이 있으면 경로를 stderr에 쓰고 status 1로 종료한다.
-stdin/stdout filter로 사용할 때는 경로 대신 `-`를 넘긴다.
-
---v lang: bash
 : maki fmt - < draft.maki > formatted.maki
 
 = Editor 연결
 
-Language server는 stdio로 실행한다.
+stdio 연결을 통한 LSP 서버를 지원합니다.
 
 --v lang: bash
 : maki lsp
 
-지원하는 diagnostics, completion과 navigation은 [[lsp]]에서 확인한다.
-Maki 문법 전체는 [[maki-syntax]], manifest 설정은 [[maki-toml]]을 참고한다.
-
-= 명령 요약
-
-- `maki --version`: 사람이 읽는 version 출력
-- `maki --version --json`: machine-readable version 출력
-- `maki serve [path]`: local project 또는 note directory serve
-- `maki serve --git <url>`: Git branch를 주기적으로 갱신하며 serve
-- `maki build <file> [--check-external-links]`: 기본 offline으로 HTML을 stdout에 출력하고, 선택하면 외부 HTTP(S) link도 검사
-- `maki check [path] [--format text|json]`: 기본 경로는 `.`, finding은 status 1, usage·read·load error는 status 2
-- `maki fmt [--check] [path|-]`: 기본 경로는 `.`, `--check`는 파일을 쓰지 않고 차이가 있으면 status 1
-- `maki lsp`: stdio language server 실행
+지원하는 diagnostics, completion과 navigation 등은 [[lsp]] 문서를 확인하세요.

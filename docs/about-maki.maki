@@ -1,49 +1,68 @@
---^ title: Maki에 대해
+--^ title: Maki에 대하여
+--^ created: [2026-08-25]
 --^ publish: all
 
-Maki는 metadata를 가진 plain text note를 project 단위로 연결하고 HTML로 build·serve하는 line-first lightweight markup language다.
+Maki는 마크업 언어이자 도구 모음입니다. 읽기 쉽고, 쓰기 쉽고, 해석하기 쉬운 마크업 언어를 지향합니다.
 
-= 왜 Maki인가
+= 해결하고자 하는 문제
 
-Markdown은 단순하고 널리 쓰이지만 project metadata와 구조화된 occurrence를 표현하는 방식이 제한적이다.
-Org mode는 풍부하지만 작성·처리 환경의 선택이 더 강하게 결합된다.
-Maki는 읽기 쉬운 source, line prefix 중심의 block과 자유로운 property를 사용한다.
+markdown은 단순하고 널리 쓰이고 읽기 쉽지만 쓰기 어렵고, 해석하기 어려우며, 확장성이 낮습니다.
 
-= 문서 모델
+Org mode는 여러 기능이 많고 확장성이 뛰어나지만, Emacs에 강하게 의존적입니다.
 
-- `.maki` 파일은 UTF-8 plain text source다.
-- Line이 모여 block을 만들고, 일부 block body에는 inline이 있다.
-- Heading, paragraph, list와 property는 line prefix를 중심으로 표현한다.
-- Code, quote와 raw text처럼 여러 줄 body가 필요한 경우 container를 사용할 수 있다.
-- Note Link는 source root 안의 다른 document와 heading을 연결한다.
-- Project는 `maki.toml`과 configured source root로 정의한다.
-- Source는 authored declaration과 명시적으로 source에 고정한 generated result를 함께 보존할 수 있다.
+Maki는 읽기 쉽고, 쓰기 쉽고, 해석하기 쉬운 마크업 언어를 지향합니다.
 
-Authored 영역은 사용자의 입력이고 generated 영역은 durable producer identity와 provenance로 소유권을 구분한다.
-위치상 바로 이웃한 block이라는 이유만으로 generated result가 되지 않는다.
-현재 revision은 이 구분을 표현하는 Core 계약만 제공하며 concrete materializer나 실행 command는 제공하지 않는다.
-정확한 문법은 [[maki-syntax]], materialization model은 [[materialization]], project 설정은 [[maki-toml]]에서 설명한다.
+= 목표
 
-= Source readability
+- 읽기 쉽고, 쓰기 쉽고, 해석하기 쉬운 문법
+- 쉬운 읽기, 쓰기, 해석을 돕는 도구
+- 프로젝트 단위 컴파일을 통한 문서 관계 분석
+- CLI 인터페이스
+- 간단한 웹서버
+- 개인적 만족, 개인적 편리함
+- 의미와 의도를 보존하는 문서
 
-Maki source는 renderer 없이 읽을 때도 문서의 의미가 드러나는 것을 우선한다.
+== 목표가 아닌 것
 
-- Heading level은 `=` 개수로 보인다.
-- List와 quote marker는 line의 역할을 직접 표시한다.
-- `[[note]]`, `[title][[note]]`, `[reference][]`, `[title]<URL>`, `[date]`, `<date>`는 서로 다른 의미를 source에 보존한다.
-- Property는 연결된 document 또는 block 가까이에 둔다.
-- Reference Definition은 본문 display와 긴 target을 분리한다.
+- 특정 마크업 언어와 문법 호환
+- 특정 마크업 언어나 프로그램 완전 대체
+- 문서 조판
+- 자체적인 플러그인 시스템
+- 특정 편집기에 의존하는 기능이나 문법
+- 고성능 서버
+- 세계 정복
+- fancy하고 이쁜 문서
 
-= Project runtime
+= 세부 목표
 
-`maki build`는 한 note를 HTML로 출력한다.
-`maki serve`는 note route, raw source, search, sitemap, date page, diagnostics와 JSON index를 제공한다.
-`maki lsp`는 editor buffer와 project snapshot을 사용해 diagnostics, completion, symbol과 link navigation을 제공한다.
+- 사람이 읽기 쉽게 하기 위해
+  - 짧고 간결한 토큰을 사용해야합니다.
+  - 기존 마크업 언어와 동떨어지지 않는 토큰을 사용해야합니다.
+  - 별도의 렌더링 없어도 plain text만으로도 의미를 파악할 수 있어야 합니다.
+  - tree-sitter를 이용한 하이라이팅을 지원해야합니다.
+- 사람이 쓰기 쉽게 하기 위해
+  - 간결한 규칙을 폭넓게 사용해야합니다.
+  - LSP를 통해 goToSymbol 등 편의 기능을 제공해야합니다.
+- 기계가 해석하기 쉽게 하기 위해
+  - 날짜, 링크 등의 데이터를 위한 시맨틱을 제공해야합니다.
+  - JSON export를 제공해야합니다.
 
-실행 방법은 [[getting-started]], HTTP surface는 [[web]], editor 기능은 [[lsp]]에서 확인한다.
+= 참고
 
-= 영향을 받은 형식과 도구
+Maki의 문법과 사용 모델은 아래를 참고하였습니다.
 
-Maki의 문법과 사용 모델은 Markdown, Org mode, AsciiDoc, reStructuredText, Gemtext, Typst, Obsidian, Logseq, MFM, [Djot][]과 불렛저널의 영향을 받았다.
+- Markdown
+- Org mode
+- AsciiDoc
+- reStructuredText
+- Gemtext
+- Typst
+- Obsidian
+- Logseq
+- MFM
+- [Djot]
+- 불렛저널
+- Lean
+- Rust, Elixir doc syntax
 
 [Djot]: <https://github.com/jgm/djot>
