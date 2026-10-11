@@ -55,3 +55,5 @@ See the [doc](./docs/about-maki.maki) for more details (Korean only).
 ## Developments
 
 This project uses nix. All dependencies should be written in [flake.nix](./flake.nix). Read it to see the dependencies.
+
+See the [release contract](RELEASES.md) for release requirements, the [changelog](CHANGELOG.md) for changes, and the [MIT License](LICENSE) for licensing terms.

@@ -19,6 +19,10 @@ members = [
     "crates/maki-serve",
 ]
 
+[workspace.lints.clippy]
+# Keep required state changes outside debug-only checks (issue #116).
+debug_assert_with_mut_call = "deny"
+
 [workspace.package]
 version = "0.1.0"
 authors = ["An Nyeong <me@annyeong.me>"]
@@ -27,6 +31,9 @@ license = "MIT"
 repository = "https://git.eska.nyeong.me/nyeong/maki"
 homepage = "https://git.eska.nyeong.me/nyeong/maki"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 maki-core = { version = "0.1.0", path = "crates/maki-core" }

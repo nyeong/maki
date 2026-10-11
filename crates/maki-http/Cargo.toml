@@ -8,3 +8,6 @@ repository.workspace = true
 homepage.workspace = true
 publish.workspace = true
 description = "HTTP transport primitives for Maki"
+
+[lints]
+workspace = true

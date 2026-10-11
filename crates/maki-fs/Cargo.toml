@@ -9,5 +9,8 @@ homepage.workspace = true
 publish.workspace = true
 description = "Filesystem adapter for Maki projects"
 
+[lints]
+workspace = true
+
 [dependencies]
 maki-core = { version = "0.1.0", path = "../maki-core" }
