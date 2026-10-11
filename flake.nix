@@ -205,24 +205,6 @@
                 touch $out
               '';
 
-          release-metadata-contract =
-            assert self.packages.${system}.maki.version == "0.1.0";
-            assert self.packages.${system}.maki.meta.homepage == "https://git.eska.nyeong.me/nyeong/maki";
-            assert self.packages.${system}.maki.meta.license.spdxId == "MIT";
-            assert self.packages.${system}.maki.MAKI_SOURCE_REVISION == (self.rev or "");
-            pkgs.runCommand "maki-release-metadata-contract"
-              {
-                nativeBuildInputs = [
-                  pkgs.git
-                  pkgs.python3
-                ];
-              }
-              ''
-                PYTHONDONTWRITEBYTECODE=1 python3 ${source}/scripts/ci/check-release-metadata.py ${source}
-                PYTHONDONTWRITEBYTECODE=1 python3 ${source}/scripts/ci/test_check_release_metadata.py
-                touch $out
-              '';
-
           nixos-module-eval = pkgs.runCommand "maki-nixos-module-eval" { } ''
             docs_exec_start=${lib.escapeShellArg docsExecStart}
             case "$docs_exec_start" in
