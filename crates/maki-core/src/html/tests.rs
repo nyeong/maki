@@ -262,11 +262,36 @@ fn render_table_with_inline_cells_and_numeric_alignment() {
 }
 
 #[test]
-fn inline_should_not_contains_start_token() {
-    let parsed = parser::parse(r#"/italic/"#);
+fn render_formatting_consumes_delimiters() {
+    // Regression for #112: these assertions must also run with debug assertions disabled.
+    for (source, expected) in [
+        ("/italic/", "<p><em>italic</em></p>"),
+        ("*strong*", "<p><strong>strong</strong></p>"),
+        ("::highlight::", "<p><mark>highlight</mark></p>"),
+        (
+            "/outer *inner* tail/",
+            "<p><em>outer <strong>inner</strong> tail</em></p>",
+        ),
+    ] {
+        let parsed = parser::parse(source);
+        let html = render_document(&parsed.document);
+        assert!(html.contains(expected), "source: {source}\nhtml: {html}");
+    }
+}
+
+#[test]
+fn render_formatting_consumes_delimiters_in_list_items() {
+    let parsed = parser::parse(
+        "=== 행사 일정\n\n- It will be held on /date/ at /place/.\n- It begins at /time/.\n- /The speaker/ will speak on /subject/ at /time/.",
+    );
     let html = render_document(&parsed.document);
-    assert!(!html.contains("<p>/<em>"));
-    assert!(html.contains("<em>italic</em>"));
+    for expected in [
+        "<li>It will be held on <em>date</em> at <em>place</em>.</li>",
+        "<li>It begins at <em>time</em>.</li>",
+        "<li><em>The speaker</em> will speak on <em>subject</em> at <em>time</em>.</li>",
+    ] {
+        assert!(html.contains(expected), "missing: {expected}\nhtml: {html}");
+    }
 }
 
 #[test]

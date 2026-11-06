@@ -135,6 +135,7 @@
                 enable = true;
                 settings = {
                   allFeatures = true;
+                  extraArgs = "--workspace --all-targets --locked";
                   denyWarnings = true;
                 };
               };
@@ -143,7 +144,19 @@
               cargo-test = {
                 enable = true;
                 name = "cargo test";
-                entry = "cargo test";
+                entry = "cargo test --workspace --locked";
+                language = "system";
+                pass_filenames = false;
+                stages = [
+                  "pre-commit"
+                  "pre-push"
+                ];
+                always_run = true;
+              };
+              cargo-test-release = {
+                enable = true;
+                name = "cargo test (release)";
+                entry = "cargo test --workspace --release --locked";
                 language = "system";
                 pass_filenames = false;
                 stages = [

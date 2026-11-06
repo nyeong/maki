@@ -1,0 +1,4 @@
+--^ title: Maki Syntax
+
+--v lang: rust
+: fn main() {}

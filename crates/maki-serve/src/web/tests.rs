@@ -175,9 +175,9 @@ fn test_rendered_note_includes_live_reload_script() {
 
 #[test]
 fn test_rendered_code_note_loads_code_block_assets_once_in_dependency_order() {
-    let maki = load_project(&repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("tests/fixtures/web-regression")).unwrap();
     let state = AppState::new(maki);
-    let response = handle_request(&state, &http::Request::get("/use-cases")).unwrap();
+    let response = handle_request(&state, &http::Request::get("/maki-syntax")).unwrap();
     let body = String::from_utf8(response.body().to_vec()).unwrap();
     let highlight = "<script src=\"/.maki/assets/vendor/highlight.js/highlight.min.js\"></script>";
     let controller = "<script src=\"/.maki/assets/maki-code-blocks.js\"></script>";
@@ -471,7 +471,7 @@ fn test_public_home_redirect_requires_an_available_target() {
 
 #[test]
 fn test_search_index_returns_project_entries() {
-    let maki = load_project(&repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("tests/fixtures/web-regression")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/.maki/search-index.json");
 
@@ -526,7 +526,7 @@ body
 
 #[test]
 fn test_search_page_returns_matching_titles() {
-    let maki = load_project(&repo_path("docs")).unwrap();
+    let maki = load_project(&repo_path("tests/fixtures/web-regression")).unwrap();
     let state = AppState::new(maki);
     let request = http::Request::get("/.maki/search?q=syntax");
 
